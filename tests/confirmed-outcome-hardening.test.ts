@@ -431,6 +431,17 @@ describe('(G) the kernel receipt indexer writes the content key', () => {
     expect(st.upserts[0]).not.toHaveProperty('consumed_at'); // a re-index must never clear a spend
   });
 
+  it('writes created_at FROM the signed header, so the column the gate compares is the signed time (XC1 re-attack of #1378)', async () => {
+    const rcpt = {
+      header: { receipt_id: 'k-2', receipt_hash: H(2), created_at: '2026-10-14T09:30:00.000Z' },
+      subject: { agent: { agent_id: AGENT, agent_name: 'TESTAGENT' } },
+      request: { args_hash: H(43) },
+      verification: { settled_by: 'holdout', verdict_label: 'SETTLED', status: 'FAILED', is_simulated: false },
+    } as unknown as KernelReceipt;
+    await indexKernelReceiptToDb(rcpt);
+    expect(st.upserts[st.upserts.length - 1]).toMatchObject({ receipt_id: 'k-2', created_at: '2026-10-14T09:30:00.000Z' });
+  });
+
   it('signs what it indexes at seal time: a DETACHED engine signature that verifies; the receipt itself is untouched', async () => {
     const { verifyReceiptSignature } = require('../src/services/receipt-signer');
     const rcpt = (await sealedRow('k-2', AGENT, { verification_status: 'FAILED', args_hash: H(43) }))['receipt'] as KernelReceipt;

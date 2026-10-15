@@ -33,6 +33,8 @@ export interface SealOptions {
   settledBy?: 'holdout' | 'known_answer' | 'person' | null;
   argsHash?: string;
   simulated?: boolean;
+  /** Seal at this instant (header.created_at). Default: the kernel fixtures' fixed clock. */
+  atMs?: number;
 }
 
 export async function sealGateReceipt(o: SealOptions): Promise<KernelReceipt> {
@@ -40,6 +42,7 @@ export async function sealGateReceipt(o: SealOptions): Promise<KernelReceipt> {
   const h = harness({
     env: { ...DEFAULT_ENV, is_simulated: o.simulated ?? false },
     newId: () => o.receiptId,
+    ...(o.atMs !== undefined ? { now: () => o.atMs as number } : {}),
     halCheck: async () => ({
       verdict: pass ? 'PASS' : 'FLAG',
       method: 'fact-check',
@@ -67,12 +70,14 @@ export async function sealGateReceipt(o: SealOptions): Promise<KernelReceipt> {
 
 /**
  * The row indexKernelReceiptToDb would write for this receipt, plus index-time columns, including the
- * engine's DETACHED signature made with the same signer the indexer uses (null if it refuses).
+ * engine's DETACHED signature made with the same signer the indexer uses (null if it refuses), and
+ * created_at = the SIGNED header time, as the indexer writes it.
  */
 export async function rowFor(r: KernelReceipt, extra: Row = {}): Promise<Row> {
   const v = r.verification;
   const signed = await signReceipt(r);
   return {
+    created_at: r.header.created_at,
     receipt_id: r.header.receipt_id,
     subject_agent_id: r.subject.agent.agent_id,
     settled_by: v.settled_by,
@@ -88,9 +93,17 @@ export async function rowFor(r: KernelReceipt, extra: Row = {}): Promise<Row> {
   };
 }
 
-/** Seal through the gate from the column values a test asks for, then let `over` tamper anything. */
+/**
+ * Seal through the gate from the column values a test asks for, then let `over` tamper anything.
+ * The receipt is SEALED at the time asked for (over.created_at when it is a string, else `createdAt`,
+ * else a minute ago), so its signed header time and its created_at column agree, as the indexer writes
+ * them. A test that wants the two to disagree edits the row after this returns.
+ */
 export async function sealedRow(id: string, agentId: string, over: Row = {}, createdAt?: string): Promise<Row> {
+  const asked = over['created_at'];
+  const at = typeof asked === 'string' && Number.isFinite(Date.parse(asked)) ? asked : createdAt ?? new Date(Date.now() - 60_000).toISOString();
   const r = await sealGateReceipt({
+    atMs: Date.parse(at),
     receiptId: id,
     agentId: typeof over['subject_agent_id'] === 'string' ? over['subject_agent_id'] : agentId,
     status: over['verification_status'] === 'FAILED' ? 'FAILED' : 'VERIFIED',
@@ -100,5 +113,5 @@ export async function sealedRow(id: string, agentId: string, over: Row = {}, cre
     argsHash: typeof over['args_hash'] === 'string' && /^0x[0-9a-fA-F]{64}$/.test(over['args_hash']) ? over['args_hash'] : undefined,
     simulated: over['is_simulated'] === true,
   });
-  return await rowFor(r, { created_at: createdAt ?? new Date(Date.now() - 60_000).toISOString(), ...over });
+  return await rowFor(r, over);
 }

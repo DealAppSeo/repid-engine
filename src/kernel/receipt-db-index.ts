@@ -30,7 +30,17 @@ export interface KernelReceiptIndexRow {
   receipt?: unknown;
   /** The engine's DETACHED signature over the sealed receipt (see indexKernelReceiptToDb). */
   engine_signature?: unknown;
+  /** Written by the indexer FROM the signed header.created_at; the gate refuses a row where they differ. */
+  created_at?: unknown;
 }
+
+/**
+ * How far the created_at COLUMN may sit from the SIGNED header.created_at. The indexer writes the column
+ * from the header, so a genuine row differs by 0; the slack only absorbs timestamp representation.
+ * TTL, the settler's grace window and its scan order all read that column (the settler's from a query
+ * that runs before any signature is checked), so an edited column is an edited receipt: refused.
+ */
+export const CREATED_AT_SKEW_MS = 5_000;
 
 /**
  * WAS THIS ROW WRITTEN BY THE KERNEL GATE'S OWN RUN? Returns null when yes, else the reason it was not.
@@ -78,6 +88,12 @@ export function gateReceiptProblem(row: KernelReceiptIndexRow): string | null {
   const sig = verifyReceiptSignature(r, (row.engine_signature ?? null) as ReceiptSignature | null);
   if (sig.status === 'NOT_CHECKED') return 'signature_not_checked';
   if (sig.status !== 'VERIFIED') return 'signature_failed';
+  // THE ROW'S TIME IS THE SIGNED TIME (XC1 re-attack of #1378). The signature covers header.created_at,
+  // not the column; a re-stamped column could make an expired wrong look fresh, or a fresh one look old.
+  const colMs = typeof row.created_at === 'string' ? Date.parse(row.created_at) : NaN;
+  if (!Number.isFinite(colMs) || Math.abs(colMs - Date.parse(r.header.created_at)) > CREATED_AT_SKEW_MS) {
+    return 'created_at_mismatch';
+  }
   if (r.decision.does_not_attest.includes(DRY_PREVIEW_DOES_NOT_ATTEST)) return 'dry_preview';
   if (r.subject.agent.agent_id !== row.subject_agent_id) return 'subject_mismatch';
   if (r.request.args_hash !== row.args_hash) return 'args_hash_mismatch';
@@ -133,6 +149,9 @@ export async function indexKernelReceiptToDb(receipt: KernelReceipt): Promise<vo
         args_hash: receipt.request.args_hash,
         // Needs migrations/2026-10-14-kernel-receipts-engine-signature.sql; same fail-closed shape.
         engine_signature: signed.ok ? signed.signature : null,
+        // The SIGNED time, on every upsert: the outcome row (written after the tool ran) moves it to the
+        // outcome's header time, so the column always equals the signed body the gate checks it against.
+        created_at: receipt.header.created_at,
         receipt,
       },
       { onConflict: 'receipt_id' },

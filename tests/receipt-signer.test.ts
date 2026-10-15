@@ -267,6 +267,63 @@ describe('receipt-signer service — sign / verify', () => {
       void _dropped;
       expect(verifyReceiptSignature(receipt, legacy as ReceiptSignature)).toEqual({ status: 'VERIFIED', signer: ENGINE_ADDR, retired: false });
     });
+
+    it('the ZERO address in the previous list voids the whole list, loudly (XC1 re-attack of #1378)', async () => {
+      const receipt = sampleReceipt();
+      const sig = await signedThenRotated(receipt);
+      const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      process.env.RECEIPT_SIGNING_PREVIOUS_ADDRESSES = `${OLD.address},0x${'0'.repeat(40)}`;
+      expect(verifyReceiptSignature(receipt, sig).status).toBe('FAILED');
+      expect(err.mock.calls.some((c) => /PREVIOUS_ADDRESSES has a malformed entry/.test(String(c[0])))).toBe(true);
+      err.mockRestore();
+    });
+  });
+
+  describe('SIGNATURE SHAPE, checked before recovery (XC1 re-attack of #1378)', () => {
+    const N = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
+    async function signedSample(): Promise<{ receipt: Record<string, unknown>; sig: ReceiptSignature }> {
+      setKey();
+      const receipt = sampleReceipt();
+      return { receipt, sig: ((await signReceipt(receipt)) as { ok: true; signature: ReceiptSignature }).signature };
+    }
+    const reasonOf = (v: ReturnType<typeof verifyReceiptSignature>) => (v as { reason?: string }).reason ?? '';
+
+    it('a SHORT signature is refused as not 65 bytes', async () => {
+      const { receipt, sig } = await signedSample();
+      const v = verifyReceiptSignature(receipt, { ...sig, signature: sig.signature.slice(0, 120) });
+      expect(v.status).toBe('FAILED');
+      expect(reasonOf(v)).toMatch(/not 65 bytes/);
+    });
+
+    it('a GARBAGE (non-hex) signature is refused as not 65 bytes', async () => {
+      const { receipt, sig } = await signedSample();
+      const v = verifyReceiptSignature(receipt, { ...sig, signature: `0x${'zz'.repeat(65)}` });
+      expect(v.status).toBe('FAILED');
+      expect(reasonOf(v)).toMatch(/not 65 bytes/);
+    });
+
+    it('a HIGH-s signature (the same signature malleated, s -> n - s, v flipped) is refused as EIP-2', async () => {
+      const { receipt, sig } = await signedSample();
+      const r = sig.signature.slice(2, 66);
+      const s = BigInt(`0x${sig.signature.slice(66, 130)}`);
+      const v = parseInt(sig.signature.slice(130, 132), 16);
+      const malleated = `0x${r}${(N - s).toString(16).padStart(64, '0')}${(v === 27 ? 28 : 27).toString(16)}`;
+      const out = verifyReceiptSignature(receipt, { ...sig, signature: malleated });
+      expect(out.status).toBe('FAILED');
+      expect(reasonOf(out)).toMatch(/high \(EIP-2/);
+    });
+
+    it('a v that is not 27 or 28 is refused', async () => {
+      const { receipt, sig } = await signedSample();
+      const v = verifyReceiptSignature(receipt, { ...sig, signature: `${sig.signature.slice(0, 130)}00` });
+      expect(v.status).toBe('FAILED');
+      expect(reasonOf(v)).toMatch(/v is not 27 or 28/);
+    });
+
+    it('the canonical signature still verifies (control)', async () => {
+      const { receipt, sig } = await signedSample();
+      expect(verifyReceiptSignature(receipt, sig).status).toBe('VERIFIED');
+    });
   });
 
   it('key UNSET: signReceipt FAILS CLOSED (ok:false no_signing_key, never throws); verify → NOT_CHECKED', async () => {

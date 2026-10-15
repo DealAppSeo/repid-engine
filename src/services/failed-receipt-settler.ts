@@ -70,8 +70,11 @@ export const SETTLE_EVENT_TYPE: RepIdEventType = 'CHALLENGE_LOSS';
 const INTERVAL_MS = 15 * 60 * 1000;
 /**
  * Rows read per run = SCAN_FACTOR × MAX_PER_RUN, so refused rows in front cannot starve a signed wrong.
- * ponytail: one bounded read, not pagination. A window holding more refused rows than this is logged
- * LOUDLY every run (scan_ceiling); page by (created_at, receipt_id) if that ever fires for real.
+ * Unsigned rows are filtered out in the query; only rows carrying SOME signature can occupy the scan.
+ * ponytail: one bounded read, not pagination. Any finite scan can be flooded by a service-role writer
+ * with garbage-signed rows (Postgres cannot check the signature), and paging only moves the ceiling, so
+ * the answer is detection: a window holding more refused rows than this is logged LOUDLY every run
+ * (scan_ceiling). Page by (created_at, receipt_id) if that ever fires for a reason other than an attack.
  */
 const SCAN_FACTOR = 20;
 
@@ -153,6 +156,14 @@ export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
       .eq('is_simulated', false)
       .is('consumed_at', null)
       .in('settled_by', ['holdout', 'known_answer'])
+      // UNSIGNED ROWS NEVER ENTER THE SCAN (XC1 re-attack of #1378): they can never confirm, so letting
+      // them in only lets them be stamped oldest to fill it. A row with a garbage (non-null) signature
+      // still enters: Postgres cannot check secp256k1. Those are refused by the verifier and count
+      // against SCAN_FACTOR only, with SCAN CEILING logged loudly if they fill it.
+      .not('engine_signature', 'is', null)
+      // The window and the order read the created_at COLUMN. For any row that can be applied it IS the
+      // signed time: the gate refuses a column more than CREATED_AT_SKEW_MS from header.created_at, and
+      // the verifier's TTL reads the signed header itself.
       .lt('created_at', new Date(now - graceMs).toISOString())
       .gt('created_at', new Date(now - ttlMs).toISOString())
       .order('created_at', { ascending: true })
