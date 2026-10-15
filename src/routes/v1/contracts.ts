@@ -3,6 +3,7 @@ import { db } from '../../db';
 import { applyServiceFulfilledDeltas, applyServiceOutcomeDeltas, type ServiceOutcomeRating } from '../../services/validation-repid-delta';
 import { x402Facilitator, X402_VERSION } from '../../services/x402-facilitator';
 import { isPayableAddress } from '../../services/payee-guard';
+import { isSoundDeliverable } from '../../services/verdict';
 import {
   isSettleOnDeliveryEnabled,
   recordAuthorization,
@@ -939,8 +940,11 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
       });
     }
 
+    // Pays for a CONFIDENT answer either way (PASS, or a FAIL that carries `confident: true`):
+    // since 2026-10-15 `verdict` states the claim's truth, and a correct "false" is delivered work.
+    // UNDETERMINED never pays. Rule: src/services/verdict.ts.
     const verdict = String((pre.result as any)?.verdict ?? '').toUpperCase();
-    const passed = verdict === 'PASS' && derived.score > 0;
+    const passed = isSoundDeliverable(pre.result as any) && derived.score > 0;
 
     if (!passed) {
       const voided = await voidAuthorization(

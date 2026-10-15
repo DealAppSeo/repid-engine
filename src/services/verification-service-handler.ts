@@ -117,44 +117,33 @@ export class VerificationServiceHandler extends ServiceHandlerBase {
       );
     }
 
-    // WHAT "PASS" MEANS HERE, because it is not "the claim is true". `confidence` is the mean of
-    // each validator's confidence IN ITS OWN ASSESSMENT, in either direction; `score` is the
-    // confidence-weighted validity. So PASS = "the validators were sure", and a claim they were
-    // sure is FALSE also gets PASS. Measured in prod 2026-10-15 (P-001 results dated 05-23..08-01): 18 PASS
-    // verdicts carry score < 0.5, among them "The chemical symbol for gold is Pb." at score 0,
-    // confidence 1. The verdict is the settlement gate (PASS pays, FAIL disputes), not a truth value.
-    const voteVerdict = pcpResult.confidence >= 0.5 ? 'PASS' : 'FAIL';
-
-    // THE CLAIM'S TRUTH, stated, with what it rests on.
+    // THE CLAIM'S TRUTH, stated, with what it rests on. `confidence` is the mean of each
+    // validator's confidence IN ITS OWN ASSESSMENT, in either direction; `score` is the
+    // confidence-weighted validity. Until 2026-10-15 `verdict` was `confidence >= 0.5 ? PASS : FAIL`,
+    // so a claim the validators were sure is FALSE also got PASS ("The chemical symbol for gold is
+    // Pb." at score 0, confidence 1 [V prod]). Now `verdict` says what the claim IS, and the old
+    // meaning lives in `confident`. Full vocabulary and the settlement rules: src/services/verdict.ts.
     //   Base Sepolia chain-id claim → an eth_chainId read decides it. The vote is still recorded
     //     (score/confidence/validators) but does not decide a fact the chain can answer.
-    //       read returned the claimed id → TRUE,  verdict PASS
-    //       read returned another id     → FALSE, verdict PASS (a correct "false" is a sound
-    //                                       deliverable, the same as the vote path's PASS on a
-    //                                       confidently-false claim)
-    //       read failed                  → UNDETERMINED, verdict UNDETERMINED. Not PASS: nothing
-    //                                       was verified, so the satisfy gate must not pay (it
-    //                                       pays only on PASS). Not FAIL: FAIL disputes the
-    //                                       provider, and an unreachable RPC is not the
-    //                                       provider's fault (the 2026-08 lesson). processOne
-    //                                       still files it as delivered (fulfilled + the
-    //                                       SERVICE_FULFILLED RepID delta); the buyer's money
-    //                                       does not move.
+    //       read returned the claimed id → TRUE          PASS
+    //       read returned another id     → FALSE         FAIL (confident: a delivered answer, paid)
+    //       read failed                  → UNDETERMINED  UNDETERMINED. /satisfy does not pay for it;
+    //                                       it is not disputed either, because an unreachable RPC
+    //                                       is not the provider's fault (the 2026-08 lesson).
     //   Any other claim → the vote, nothing read: verified_against is null. This is opinion, not a
     //   check: the same prod sample scored the TRUE "The chemical symbol for gold is Au." at 0.
-    //       FAIL (validators unsure)     → UNDETERMINED
-    //       PASS and score >= 0.5        → TRUE
-    //       PASS and score <  0.5        → FALSE
+    //       confidence <  0.5            → UNDETERMINED  UNDETERMINED
+    //       confident, score >= 0.5      → TRUE          PASS
+    //       confident, score <  0.5      → FALSE         FAIL
     const chainClaim = BASE_SEPOLIA_CHAIN_ID_CLAIM.exec(String(payload.content ?? ''));
-    let verdict: string = voteVerdict;
-    let claimIs: ClaimIs = voteVerdict === 'FAIL' ? 'UNDETERMINED' : pcpResult.score >= 0.5 ? 'TRUE' : 'FALSE';
+    let claimIs: ClaimIs = pcpResult.confidence < 0.5 ? 'UNDETERMINED' : pcpResult.score >= 0.5 ? 'TRUE' : 'FALSE';
     let verifiedAgainst: VerifiedAgainst | null = null;
     if (chainClaim) {
       const checked = await checkChainIdClaim(Number(chainClaim[1]));
       claimIs = checked.claim_is;
       verifiedAgainst = checked.verified_against;
-      verdict = claimIs === 'UNDETERMINED' ? 'UNDETERMINED' : 'PASS';
     }
+    const verdict = claimIs === 'TRUE' ? 'PASS' : claimIs === 'FALSE' ? 'FAIL' : 'UNDETERMINED';
 
     return {
       // WHAT WAS VERIFIED. A verdict that does not name its subject cannot be reproduced: "PASS"
@@ -167,6 +156,9 @@ export class VerificationServiceHandler extends ServiceHandlerBase {
       claim_is: claimIs,
       verified_against: verifiedAgainst,
       verdict,
+      // What `verdict` used to mean: a confident answer was reached, either way. Settlement reads
+      // this (verdict.ts), so a correct "the claim is false" is still delivered and paid.
+      confident: claimIs !== 'UNDETERMINED',
       score: pcpResult.score,
       confidence: pcpResult.confidence,
       validators: pcpResult.validators, // string[] of agent names
