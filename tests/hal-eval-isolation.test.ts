@@ -93,3 +93,68 @@ describe('a HAL measurement run is isolated from production by default', () => {
     expect(src).toContain('console.log(isolationBanner(ISOLATION));');
   });
 });
+
+/**
+ * The RUNNER itself, spawned, under a TCP-level probe (XC1 on #1389). Watching `fetch` cannot see
+ * Redis or Postgres. tests/fixtures/net-probe.cjs patches net.Socket#connect in the runner and in
+ * every child it spawns, records each attempt and blocks it. The env names a fake production
+ * Supabase, Redis, Postgres and Telegram, and no provider keys, so every row takes the extractor
+ * fallback: the path that pages the operator.
+ */
+describe('the runner, spawned, opens no TCP connection by default', () => {
+  const { mkdtempSync, existsSync: exists } = require('node:fs') as typeof import('node:fs');
+  const { tmpdir } = require('node:os') as typeof import('node:os');
+  const PROBE = join(ROOT, 'tests', 'fixtures', 'net-probe.cjs');
+  const RUNNER = join(ROOT, 'scripts', 'hal-eval', 'run-frozen-corpus-local.ts');
+  const NO_KEYS = [
+    'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'MISTRAL_API_KEY', 'QWEN_API_KEY',
+    'DASHSCOPE_API_KEY', 'OPENROUTER_API_KEY', 'ZAI_API_KEY', 'FIREWORKS_API_KEY', 'TOGETHER_API_KEY', 'GLOO_API_KEY',
+    'NIM_API_KEY', 'NVIDIA_NIM_API_KEY', 'ANTHROPIC_API_KEY', 'XAI_API_KEY', 'GROK_API_KEY', 'OPENAI_API_KEY', 'LOCAL_LLM_BASE_URL',
+  ];
+
+  function run(extra: string[]): { status: number | null; stdout: string; lines: string[] } {
+    const dir = mkdtempSync(join(tmpdir(), 'hal-iso-'));
+    const probeOut = join(dir, 'net.txt');
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      NET_PROBE_OUT: probeOut,
+      NODE_OPTIONS: `--require ${JSON.stringify(PROBE)}`,
+      TS_NODE_TRANSPILE_ONLY: 'true',
+      ENV_MASTER_PATH: join(dir, 'no-key-file'),
+      HAL_EVAL_OUT_DIR: dir,
+      HAL_EVAL_LOCAL_STORE: ':memory:',
+      SUPABASE_URL: `https://${PROD_DB_HOST}`,
+      SUPABASE_SERVICE_KEY: 'test-not-a-key',
+      REDIS_URL: 'rediss://prod-cache.invalid:6379',
+      DATABASE_URL: 'postgres://user:pass@prod-db.invalid:5432/postgres',
+      SUPABASE_DB_URL: 'postgres://user:pass@prod-db.invalid:5432/postgres',
+      TELEGRAM_BOT_TOKEN: 'test-not-a-token',
+      TELEGRAM_OWNER_CHAT_ID: '1',
+      LOCAL_MODE: '',
+    };
+    for (const k of NO_KEYS) env[k] = '';
+    const out = spawnSync(
+      process.execPath,
+      ['--require', 'ts-node/register', RUNNER, '--corpus', 'hal-v1-frozen', '--split', 'all', '--limit', '2', ...extra],
+      { cwd: ROOT, encoding: 'utf8', timeout: 240_000, env },
+    );
+    const lines = exists(probeOut) ? readFileSync(probeOut, 'utf8').split('\n').filter(Boolean) : [];
+    return { status: out.status, stdout: `${out.stdout}\n${out.stderr}`, lines };
+  }
+
+  it('default: the runner and its child process load the probe, and not one connection is attempted', () => {
+    const r = run([]);
+    expect(r.stdout).toContain('ISOLATION  : LOCAL (default)');
+    expect(r.lines.filter((l) => l.startsWith('LOADED')).length).toBeGreaterThanOrEqual(2); // runner + hash child
+    expect(r.lines.filter((l) => l.startsWith('CONNECT'))).toEqual([]);
+    expect(r.status).toBe(0);
+  }, 300_000);
+
+  it('--write-prod (positive control): the same probe catches the attempts to the prod DB and Telegram', () => {
+    const r = run(['--write-prod']);
+    expect(r.stdout).toContain('ISOLATION  : PROD (--write-prod)');
+    const hosts = r.lines.filter((l) => l.startsWith('CONNECT')).join('\n');
+    expect(hosts).toContain(PROD_DB_HOST);
+    expect(hosts).toContain('api.telegram.org');
+  }, 300_000);
+});

@@ -42,8 +42,9 @@
  * NOT_CHECKED (scoring v2-no-agreement-is-not-checked, 2026-10-15). An abstain, an extractor
  * fallback, an error, or a VETO NO CHECKER VOTED FALSE FOR is HAL not judging the row. The smoke on
  * 2026-10-15 scored a TP from two UNCERTAIN votes at halScore 0.5; under v1 that read as a catch.
- * The legacy F1 (kept for comparison with pre-2026-10-14 runs) scores an abstain as a pass. Every
- * output names its `scoring`, and numbers on different scorings are never compared.
+ * Every headline number in the output is v2, checked rows only. The old all-scored-rows numbers
+ * (abstain counted as a pass) sit under `legacy_all_scored` with their own scoring name. Numbers
+ * on different scorings are never compared.
  *
  * ISOLATION (2026-10-15). By default nothing reaches production: see measure-isolation.ts, imported
  * first. --write-prod restores the live write paths, for when a run is MEANT to be production traffic.
@@ -290,17 +291,28 @@ interface Scored {
   const notCheckedN = results.filter(isNotCheckedV2).length;
   const noAgreementVetoes = results.filter((r) => !r.error && isNoAgreementVeto(r)).length;
   const notCheckedRate = attempted ? notCheckedN / attempted : 0;
-  const checkedConfusion = confusionMatrix(scored.filter((r) => !isNotCheckedV2(r)));
-  const checked = { confusion: checkedConfusion, ...prf1(checkedConfusion), per_class: perClass(checkedConfusion) };
+  // ONE RULER PER ARTEFACT (XC1 on #1389). Every headline number below (confusion, precision,
+  // recall, F1, accuracy, AUC, per class) is scoring v2: checked rows only. The old all-scored-rows
+  // numbers are a different ruler and live under `legacy_all_scored`, named so they cannot be
+  // read as the headline.
+  const checkedRows = scored.filter((r) => !isNotCheckedV2(r));
+  const checkedConfusion = confusionMatrix(checkedRows);
+  const perClassScores = perClass(checkedConfusion);
   const budget = { max_calls: maxCalls || null, provider_calls: calls, costliest_row_calls: concurrency === 1 ? costliestRow : null, not_run: rows.length - attempted };
 
-  const { tp, fp, tn, fn } = confusionMatrix(scored);
-  const { precision, recall, f1, accuracy } = prf1({ tp, fp, tn, fn });
+  const { tp, fp, tn, fn } = checkedConfusion;
+  const { precision, recall, f1, accuracy } = prf1(checkedConfusion);
+  const legacyConfusion = confusionMatrix(scored);
+  const legacy = {
+    scoring: 'v0-all-scored-rows (abstain, fallback and no-agreement veto counted as answers)',
+    confusion: legacyConfusion,
+    ...prf1(legacyConfusion),
+  };
   // Over rows attempted: a budget stop is not a transport failure (it is reported as not_run).
   const coverage = attempted ? scored.length / attempted : 0;
 
   // ROC AUC over the continuous halScore (rows with a numeric score only).
-  const aucPoints = scored
+  const aucPoints = checkedRows
     .filter((r) => typeof r.halScore === 'number' && Number.isFinite(r.halScore))
     .map((r) => ({ score: r.halScore as number, positive: isHallucination(r.truth) }));
   const auc = rocAuc(aucPoints);
@@ -326,7 +338,7 @@ interface Scored {
   const checkerPair = familiesRecord(Object.keys(familyParticipation), runId, measuredAt);
   if (incompleteItems > 0) checkerPair.status = 'incomplete';
 
-  console.log('=== confusion matrix (positive = hallucination) ===');
+  console.log(`=== confusion matrix (positive = hallucination), scoring ${SCORING}: checked rows only ===`);
   console.log(`  TP ${tp}   FP ${fp}`);
   console.log(`  FN ${fn}   TN ${tn}`);
   console.log('');
@@ -349,7 +361,8 @@ interface Scored {
   console.log(`  checker families: ${checkerPair.status}${incompleteItems ? ` — ${incompleteItems} item(s) answered by fewer than two families` : ''}`);
   console.log('');
 
-  const outDir = path.join(ROOT, 'reports', 'hal-eval');
+  // HAL_EVAL_OUT_DIR lets a test keep its output out of the checkout.
+  const outDir = process.env.HAL_EVAL_OUT_DIR?.trim() || path.join(ROOT, 'reports', 'hal-eval');
   fs.mkdirSync(outDir, { recursive: true });
 
   console.log('======================================================================');
@@ -366,13 +379,13 @@ interface Scored {
     process.exit(3);
   }
 
-  const pc = checked.per_class;
+  const pc = perClassScores;
   const cls = (n: string, c: typeof pc.hallucination) =>
     `${n} P ${c.precision.toFixed(4)} R ${c.recall.toFixed(4)} F1 ${c.f1.toFixed(4)} (n=${c.support})`;
-  console.log(`  F1 = ${checked.f1.toFixed(4)} on ${RULER}${sample} [${split}] at ${Object.keys(familyParticipation).length} families, strictness 2, scoring ${SCORING} — checked rows only`);
+  console.log(`  F1 = ${f1.toFixed(4)} on ${RULER}${sample} [${split}] at ${Object.keys(familyParticipation).length} families, strictness 2, scoring ${SCORING} — checked rows only`);
   console.log(`  NOT_CHECKED ${notCheckedN}/${attempted} (${(notCheckedRate * 100).toFixed(1)}%): errors, abstains, extractor fallbacks and ${noAgreementVetoes} veto(es) no checker voted FALSE for — left out of the F1 above`);
   console.log(`  per class: ${cls('hallucination', pc.hallucination)} | ${cls('supported', pc.supported)}`);
-  console.log(`  legacy F1 (abstain/fallback scored as a pass, as in earlier runs) = ${f1.toFixed(4)}`);
+  console.log(`  legacy_all_scored F1 = ${legacy.f1.toFixed(4)} (a different ruler: ${legacy.scoring}; never compare it with the line above)`);
   if (!isPrivate) console.log(`  ${retiredLine(`${stem} [${split}]`)}`);
   else console.log(`  PRIVATE HOLDOUT. checker families [${checkerPair.families.join(', ')}]: ${checkerPair.status}`);
   console.log(`  precision ${precision.toFixed(4)}  recall ${recall.toFixed(4)}  AUC ${auc == null ? 'n/a' : auc.toFixed(4)}`);
@@ -393,7 +406,6 @@ interface Scored {
         budget,
         providers_configured: providersConfigured,
         not_checked: { count: notCheckedN, rate: notCheckedRate, no_agreement_vetoes: noAgreementVetoes },
-        checked,
         split,
         ...(isPrivate ? { holdout: 'private' } : retiredStamp()),
         checker_pair: checkerPair,
@@ -411,6 +423,8 @@ interface Scored {
         f1,
         accuracy,
         auc,
+        per_class: perClassScores,
+        legacy_all_scored: legacy,
         verdicts,
         provider_set: {
           fact_check_rows: factCheckRows,

@@ -20,6 +20,8 @@
  *                        Windows, and a failure to open must not send writes anywhere else.
  *   REDIS_URL=''         Dragonfly is a no-op (src/cache/dragonfly.ts cacheEnabled)
  *   TELEGRAM_*=''        the pager is not armed and cannot push
+ *   DATABASE_URL='', SUPABASE_DB_URL=''
+ *                        no direct Postgres connection string survives from the shell (XC1 on #1389)
  * dotenv never overrides a variable that is already set, so the key file loaded afterwards cannot
  * undo any of this.
  *
@@ -38,6 +40,8 @@ export interface Isolation {
   /** Where `db` writes go in local mode. */
   store: string | null;
   redis: 'off' | 'from-env';
+  /** Direct Postgres connection strings (DATABASE_URL, SUPABASE_DB_URL). */
+  pg: 'off' | 'from-env';
   telegram: 'off' | 'from-env';
   /** What the ground-truth gate can see. Part of the ruler. */
   ground_truth: 'local-store (empty)' | 'production';
@@ -46,7 +50,7 @@ export interface Isolation {
 /** Applies the isolation to `env` (process.env by default) and says what it did. */
 export function applyIsolation(argv: readonly string[] = process.argv.slice(2), env: NodeJS.ProcessEnv = process.env): Isolation {
   if (argv.includes(WRITE_PROD_FLAG)) {
-    return { mode: 'prod', store: null, redis: 'from-env', telegram: 'from-env', ground_truth: 'production' };
+    return { mode: 'prod', store: null, redis: 'from-env', pg: 'from-env', telegram: 'from-env', ground_truth: 'production' };
   }
   const store = env.HAL_EVAL_LOCAL_STORE?.trim() || path.join(os.tmpdir(), 'hal-eval-local', 'store.db');
   env.LOCAL_MODE = 'true';
@@ -54,14 +58,16 @@ export function applyIsolation(argv: readonly string[] = process.argv.slice(2), 
   env.REDIS_URL = '';
   env.TELEGRAM_BOT_TOKEN = '';
   env.TELEGRAM_OWNER_CHAT_ID = '';
-  return { mode: 'local', store, redis: 'off', telegram: 'off', ground_truth: 'local-store (empty)' };
+  env.DATABASE_URL = '';
+  env.SUPABASE_DB_URL = '';
+  return { mode: 'local', store, redis: 'off', pg: 'off', telegram: 'off', ground_truth: 'local-store (empty)' };
 }
 
 /** The one line printed at the top of every run, so the mode is never a guess. */
 export function isolationBanner(i: Isolation): string {
   return i.mode === 'local'
     ? `ISOLATION  : LOCAL (default). DB writes (llm_call_log, ops_alerts, audit) -> ${i.store} on this machine. ` +
-        `Dragonfly counters OFF. Telegram pages OFF. Ground-truth gate sees an empty local store. ` +
+        `Dragonfly counters OFF. Direct Postgres URLs cleared. Telegram pages OFF. Ground-truth gate sees an empty local store. ` +
         `Pass ${WRITE_PROD_FLAG} to write to production.`
     : `ISOLATION  : PROD (${WRITE_PROD_FLAG}). llm_call_log, ops_alerts, provider-health counters and Telegram pages ` +
         `go to PRODUCTION exactly as live HAL traffic does.`;
