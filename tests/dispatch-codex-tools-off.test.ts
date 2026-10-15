@@ -19,7 +19,7 @@
  * Nothing here reaches OpenAI: the `codex` on PATH is a fake driven by files in CODEX_HOME.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -41,19 +41,29 @@ describe('1. codex runs only when nothing outside the allowlist is on, on a vers
     call(`({codexToolsRefusal}) => codexToolsRefusal(${JSON.stringify(agent)}, ${JSON.stringify(version)}, ${JSON.stringify(features)})`);
   // The shape `codex features list` prints [V codex-cli 0.162.1]: name, stage (one or two words), state.
   const row = (f: string, stage: string, on: boolean) => `${f.padEnd(40)} ${stage.padEnd(18)} ${on}`;
-  const OK = [
-    row('code_mode_host', 'stable', false),
-    row('shell_tool', 'stable', false),
-    row('unified_exec', 'stable', true),
-    row('item_ids', 'removed', true),
-    row('memories', 'under development', false),
-  ].join('\n');
+  const NAMED: [string, string, boolean][] = [
+    ['code_mode_host', 'stable', false],
+    ['shell_tool', 'stable', false],
+    ['unified_exec', 'stable', true],
+    ['item_ids', 'removed', true],
+    ['memories', 'under development', false],
+  ];
+  // 0.162.1 lists 167 features; the gate refuses a list of any other length. Fillers make up the rest.
+  const COUNT: number = call(`({CODEX_FEATURE_COUNT}) => CODEX_FEATURE_COUNT['0.162.1']`);
+  /** A table of exactly `length` distinct features; `swap` overrides a listed one or takes a filler's place. */
+  const table = (swap: [string, string, boolean][] = [], length = COUNT) => {
+    const rows = new Map(NAMED.map(([f, st, on]) => [f, [st, on] as [string, boolean]]));
+    for (const [f, st, on] of swap) rows.set(f, [st, on]);
+    for (let i = 0; rows.size < length; i += 1) rows.set(`filler_feature_${i}`, ['stable', false]);
+    return [...rows].slice(0, length).map(([f, [st, on]]) => row(f, st, on)).join('\n');
+  };
+  const OK = table();
   const V = 'codex-cli 0.162.1';
 
   it("reads the binary's own table, two-word stages included", () => {
-    expect(call(`({parseCodexFeatures}) => Object.fromEntries(parseCodexFeatures(${JSON.stringify(OK)}))`)).toEqual({
-      code_mode_host: false, shell_tool: false, unified_exec: true, item_ids: true, memories: false,
-    });
+    const parsed = call(`({parseCodexFeatures}) => Object.fromEntries(parseCodexFeatures(${JSON.stringify(OK)}))`);
+    expect(Object.keys(parsed)).toHaveLength(COUNT);
+    expect(parsed).toMatchObject({ code_mode_host: false, shell_tool: false, unified_exec: true, item_ids: true, memories: false });
   });
 
   it('passes when only allowlisted features are on', () => {
@@ -62,7 +72,7 @@ describe('1. codex runs only when nothing outside the allowlist is on, on a vers
 
   it('refuses any other feature still on, including one this file has never heard of', () => {
     for (const f of ['shell_tool', 'worktrees', 'sleep_tool', 'a_feature_codex_adds_next_month']) {
-      expect(refusal('codex', V, `${OK}\n${row(f, 'stable', true)}`)).toMatch(new RegExp(`still reports ${f} enabled`));
+      expect(refusal('codex', V, table([[f, 'stable', true]]))).toMatch(new RegExp(`still reports ${f} enabled`));
     }
   });
 
@@ -71,6 +81,12 @@ describe('1. codex runs only when nothing outside the allowlist is on, on a vers
     for (const f of ['code_mode_host', 'shell_tool', 'view_image', 'apps', 'plugins', 'multi_agent', 'browser_use', 'computer_use', 'hooks', 'worktrees']) {
       expect(ALLOWED).not.toContain(f);
     }
+  });
+
+  it('refuses a list that is not the recorded length for that version: cut short, or changed (XC1 on #1390)', () => {
+    expect(COUNT).toBe(167);
+    expect(refusal('codex', V, table([], COUNT - 1))).toMatch(new RegExp(`listed ${COUNT - 1} feature\\(s\\), not the ${COUNT} recorded`));
+    expect(refusal('codex', V, table([], COUNT + 1))).toMatch(/a short or changed list proves nothing/);
   });
 
   it('refuses a feature list it cannot read', () => {
@@ -95,6 +111,8 @@ describe('1. codex runs only when nothing outside the allowlist is on, on a vers
     const a: string[] = call(`({codexArgs}) => codexArgs('C:/tmp/codex-run-x', ['shell_tool', 'worktrees'])`);
     expect(a.filter((_x, i) => a[i - 1] === '--disable')).toEqual(['shell_tool', 'worktrees']);
     expect(a[a.indexOf('-C') + 1]).toBe('C:/tmp/codex-run-x');
+    // Hosted web search is config, not a feature, and on by default: switched off by -c.
+    expect(a[a.indexOf('web_search=disabled') - 1]).toBe('-c');
   });
 
   it('a tool event in codex output is reported, so main() can void the run', () => {
@@ -172,27 +190,35 @@ let envMaster: string;
 let PATH: string;
 
 /**
- * A fake `codex` driven by files in CODEX_HOME. `features list` mimics 0.162.1: honours --disable,
- * except unified_exec and item_ids, which stay on as they do in the real binary, and whatever
- * feature `stuck.txt` names. An exec whose prompt starts with the canary mark is the preflight: it
- * records itself to canary.json and answers CANNOT_READ, or with the planted file's contents when
- * `leak-canary` exists. Any other exec is the task: prompt.txt, run.json, then `reply.txt` /
- * `events.jsonl` if present.
+ * A fake `codex` driven by files in its control dir (bin/ctl, cleared per dispatch; not CODEX_HOME,
+ * which the gate points at an empty dir for `features list`).
+ *   features list: 0.162.1's shape and length (167 rows: six named, the rest fillers). Honours
+ *     --disable, except unified_exec and item_ids, which stay on as in the real binary, and whatever
+ *     feature `stuck.txt` names. `features-fail` exits 3; `features-short` lists 100 rows.
+ *   exec, canary prompt: records canary.json; on stderr, the router refusal the real binary prints
+ *     when a tool call is refused, unless `no-refusal`; answers CANNOT_READ, or the planted file's
+ *     contents with `leak-canary`. `swap-during-canary` rewrites its own launcher mid-canary.
+ *   exec, task: prompt.txt, run.json, then `reply.txt` / `events.jsonl` if present.
  */
 function writeFakeCodex(version: string) {
   writeFileSync(
     path.join(fakeBin, 'fake-codex.mjs'),
     [
-      "import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';",
-      "import { join } from 'node:path';",
+      "import { readFileSync, writeFileSync, existsSync, readdirSync, appendFileSync } from 'node:fs';",
+      "import { join, dirname } from 'node:path';",
+      "import { fileURLToPath } from 'node:url';",
       'const args = process.argv.slice(2);',
-      'const home = process.env.CODEX_HOME;',
-      'const has = (f) => Boolean(home) && existsSync(join(home, f));',
+      'const here = dirname(fileURLToPath(import.meta.url));',
+      "const ctl = join(here, 'ctl');",
+      'const has = (f) => existsSync(join(ctl, f));',
       `if (args.includes('--version')) { process.stdout.write('codex-cli ${version}\\n'); process.exit(0); }`,
       "if (args[0] === 'features' && args[1] === 'list') {",
+      "  if (has('features-fail')) { process.stderr.write('boom\\n'); process.exit(3); }",
       "  const off = new Set(args.flatMap((a, i) => (a === '--disable' ? [args[i + 1]] : [])));",
-      "  const stuck = has('stuck.txt') ? readFileSync(join(home, 'stuck.txt'), 'utf8').trim() : '';",
+      "  const stuck = has('stuck.txt') ? readFileSync(join(ctl, 'stuck.txt'), 'utf8').trim() : '';",
       "  const all = ['code_mode_host', 'shell_tool', 'unified_exec', 'worktrees', 'item_ids', 'memories', ...(stuck ? [stuck] : [])];",
+      "  const length = has('features-short') ? 100 : 167;",
+      "  for (let i = 0; all.length < length; i += 1) all.push('filler_feature_' + i);",
       "  const forced = new Set(['unified_exec', 'item_ids', stuck]);",
       "  for (const f of all) process.stdout.write(f.padEnd(40) + ' stable             ' + (f !== 'memories' && (forced.has(f) || !off.has(f))) + '\\n');",
       '  process.exit(0);',
@@ -201,21 +227,30 @@ function writeFakeCodex(version: string) {
       "process.stdin.setEncoding('utf8');",
       "process.stdin.on('data', (d) => { input += d; }).on('end', () => {",
       "  const dir = args[args.indexOf('-C') + 1];",
-      '  const seen = { argv: args, dir, files: readdirSync(dir) };',
+      '  const seen = { argv: args, dir, files: readdirSync(dir).sort() };',
       "  const say = (text) => process.stdout.write(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } }) + '\\n');",
       `  if (input.startsWith(${JSON.stringify(CANARY_MARK)})) {`,
-      "    writeFileSync(join(home, 'canary.json'), JSON.stringify(seen));",
-      "    const m = /file at (\\S+) and reply/.exec(input);",
+      "    writeFileSync(join(ctl, 'canary.json'), JSON.stringify(seen));",
+      "    if (!has('no-refusal')) process.stderr.write('2026-10-15T00:00:00Z ERROR codex_core::tools::router: error=code-mode host is disabled\\n');",
+      "    if (has('swap-during-canary')) appendFileSync(join(here, process.platform === 'win32' ? 'codex.cmd' : 'codex'), process.platform === 'win32' ? 'REM swapped\\r\\n' : '# swapped\\n');",
+      "    const m = /MUST open (\\S+) with a tool/.exec(input);",
       "    say(has('leak-canary') && m ? readFileSync(m[1], 'utf8') : 'CANNOT_READ');",
       '    return;',
       '  }',
-      "  writeFileSync(join(home, 'prompt.txt'), input);",
-      "  writeFileSync(join(home, 'run.json'), JSON.stringify(seen));",
-      "  if (has('events.jsonl')) process.stdout.write(readFileSync(join(home, 'events.jsonl'), 'utf8'));",
-      "  say(has('reply.txt') ? readFileSync(join(home, 'reply.txt'), 'utf8') : 'FINAL: reviewed [R]');",
+      "  writeFileSync(join(ctl, 'prompt.txt'), input);",
+      "  writeFileSync(join(ctl, 'run.json'), JSON.stringify(seen));",
+      "  if (has('events.jsonl')) process.stdout.write(readFileSync(join(ctl, 'events.jsonl'), 'utf8'));",
+      "  say(has('reply.txt') ? readFileSync(join(ctl, 'reply.txt'), 'utf8') : 'FINAL: reviewed [R]');",
       '});',
     ].join('\n'),
   );
+}
+
+/** The launchers `codex` resolves to. Rewritten after the swap test, which edits one mid-run. */
+function writeLaunchers() {
+  writeFileSync(path.join(fakeBin, 'codex.cmd'), `@"${process.execPath}" "%~dp0fake-codex.mjs" %*\r\n`);
+  writeFileSync(path.join(fakeBin, 'codex'), `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/fake-codex.mjs" "$@"\n`);
+  chmodSync(path.join(fakeBin, 'codex'), 0o755);
 }
 
 beforeAll(() => {
@@ -229,9 +264,7 @@ beforeAll(() => {
   writeFileSync(envMaster, `OPENAI_API_KEY=${OPENAI_FAKE}\nSOME_OTHER_SECRET=${INVENTORY_SECRET}\n`);
 
   writeFakeCodex('0.162.1');
-  writeFileSync(path.join(fakeBin, 'codex.cmd'), `@"${process.execPath}" "%~dp0fake-codex.mjs" %*\r\n`);
-  writeFileSync(path.join(fakeBin, 'codex'), `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/fake-codex.mjs" "$@"\n`);
-  chmodSync(path.join(fakeBin, 'codex'), 0o755);
+  writeLaunchers();
 
   // A PATH with the fake first and nothing else that could resolve `codex`.
   if (process.platform === 'win32') {
@@ -276,9 +309,12 @@ const WIN_ESSENTIALS: Record<string, string> = Object.fromEntries(
   ['SystemRoot', 'PATHEXT', 'ComSpec'].flatMap((k) => (process.env[k] ? [[k, process.env[k]!]] : [])),
 );
 
-function dispatch(agent: string, extra: string[] = [], setup: (home: string) => void = () => {}) {
+function dispatch(agent: string, extra: string[] = [], setup: (ctl: string) => void = () => {}) {
   const home = mkdtempSync(path.join(tmpdir(), 'codex-home-'));
-  setup(home);
+  const ctl = path.join(fakeBin, 'ctl');
+  rmSync(ctl, { recursive: true, force: true });
+  mkdirSync(ctl);
+  setup(ctl);
   const env: Record<string, string> = {
     PATH,
     TRUSTKEYS_ENV_MASTER: envMaster,
@@ -295,7 +331,7 @@ function dispatch(agent: string, extra: string[] = [], setup: (home: string) => 
       '--evidence-pack', 'base-branch...feature', ...extra],
     { cwd: repo, encoding: 'utf8', env, timeout: 120_000 },
   );
-  const read = (f: string) => (existsSync(path.join(home, f)) ? readFileSync(path.join(home, f), 'utf8') : null);
+  const read = (f: string) => (existsSync(path.join(ctl, f)) ? readFileSync(path.join(ctl, f), 'utf8') : null);
   const json = (f: string) => (read(f) === null ? null : JSON.parse(read(f)!));
   return { ...r, prompt: read('prompt.txt'), run: json('run.json'), canary: json('canary.json') };
 }
@@ -319,21 +355,24 @@ describe('end to end: what the fake codex receives', () => {
     expect(p).toMatch(/data\.txt — not inlined \(not a source, test or doc file\)/);
     // codex was launched with every feature its feature list named disabled, bar the allowlist
     const disabled = (argv: string[]) => argv.filter((_x, i) => argv[i - 1] === '--disable').sort();
-    expect(disabled(r.run.argv)).toEqual(['code_mode_host', 'memories', 'shell_tool', 'worktrees']);
+    expect(disabled(r.run.argv)).toHaveLength(165); // 167 listed, minus unified_exec and item_ids
+    expect(disabled(r.run.argv)).toEqual(expect.arrayContaining(['code_mode_host', 'memories', 'shell_tool', 'worktrees']));
+    expect(disabled(r.run.argv)).not.toEqual(expect.arrayContaining(['unified_exec']));
+    expect(r.run.argv).toContain('web_search=disabled');
     // in an empty temp dir holding only the pack, not the repo
     expect(r.run.files).toEqual(['EVIDENCE_PACK.md']);
     expect(path.resolve(r.run.dir)).not.toBe(path.resolve(repo));
-    // after a canary with the same flags, in a workspace holding the hostile config
-    expect(disabled(r.canary.argv)).toEqual(disabled(r.run.argv));
-    expect(r.canary.files).toEqual(['.codex']);
-    expect(r.stdout).toMatch(/codex canary passed/);
+    // after a canary in the run's own shape: same flags, a dir holding a pack (and the hostile config)
+    expect(r.canary.argv).toEqual(r.run.argv.map((a: string) => (a === r.run.dir ? r.canary.dir : a)));
+    expect(r.canary.files).toEqual(['.codex', 'EVIDENCE_PACK.md']);
+    expect(r.stdout).toMatch(/codex canary passed: tool attempted and refused/);
   }, 120_000);
 
   it('5. a citation past what the truncated file showed is UNSUPPORTED; one inside it is not', () => {
-    const past = dispatch('codex', [], (home) => writeFileSync(path.join(home, 'reply.txt'), 'The bug is at tests/big.test.ts:1900. [R]'));
+    const past = dispatch('codex', [], (ctl) => writeFileSync(path.join(ctl, 'reply.txt'), 'The bug is at tests/big.test.ts:1900. [R]'));
     expect(past.status).toBe(0);
     expect(past.stderr).toMatch(/UNSUPPORTED EXECUTION CLAIM/);
-    const inside = dispatch('codex', [], (home) => writeFileSync(path.join(home, 'reply.txt'), 'The bug is at tests/big.test.ts:5. [R]'));
+    const inside = dispatch('codex', [], (ctl) => writeFileSync(path.join(ctl, 'reply.txt'), 'The bug is at tests/big.test.ts:5. [R]'));
     expect(inside.status).toBe(0);
     expect(inside.stderr).not.toMatch(/UNSUPPORTED EXECUTION CLAIM/);
   }, 120_000);
@@ -351,15 +390,46 @@ describe('end to end: what the fake codex receives', () => {
   }, 120_000);
 
   it('1. a feature the binary will not switch off, and nobody allowlisted, is refused (exit 67) before any model call', () => {
-    const r = dispatch('codex', [], (home) => writeFileSync(path.join(home, 'stuck.txt'), 'sleep_tool'));
+    const r = dispatch('codex', [], (ctl) => writeFileSync(path.join(ctl, 'stuck.txt'), 'sleep_tool'));
     expect(r.status).toBe(67);
     expect(r.stderr).toMatch(/still reports sleep_tool enabled/);
     expect(r.canary).toBeNull();
     expect(r.prompt).toBeNull();
   }, 120_000);
 
+  it('1. a features list that fails, or comes back short, refuses the lane (exit 67) before any model call', () => {
+    const failed = dispatch('codex', [], (ctl) => writeFileSync(path.join(ctl, 'features-fail'), ''));
+    expect(failed.status).toBe(67);
+    expect(failed.stderr).toMatch(/codex features list failed \(exit 3\)/);
+    expect(failed.canary).toBeNull();
+    expect(failed.prompt).toBeNull();
+    const short = dispatch('codex', [], (ctl) => writeFileSync(path.join(ctl, 'features-short'), ''));
+    expect(short.status).toBe(67);
+    expect(short.stderr).toMatch(/listed 100 feature\(s\), not the 167 recorded/);
+    expect(short.prompt).toBeNull();
+  }, 120_000);
+
+  it('2. a canary answer with no refused tool attempt proves nothing: refused (exit 67), task never sent', () => {
+    const r = dispatch('codex', [], (ctl) => writeFileSync(path.join(ctl, 'no-refusal'), ''));
+    expect(r.status).toBe(67);
+    expect(r.stderr).toMatch(/canary: codex answered without attempting a tool/);
+    expect(r.canary).not.toBeNull();
+    expect(r.prompt).toBeNull();
+  }, 120_000);
+
+  it('4. a codex install that changes while the canary runs is refused (exit 67) before the task', () => {
+    try {
+      const r = dispatch('codex', [], (ctl) => writeFileSync(path.join(ctl, 'swap-during-canary'), ''));
+      expect(r.status).toBe(67);
+      expect(r.stderr).toMatch(/the codex install behind .* changed after the canary ran/);
+      expect(r.prompt).toBeNull();
+    } finally {
+      writeLaunchers();
+    }
+  }, 120_000);
+
   it('2. a canary that reads its token refuses the lane (exit 67), and the task is never sent', () => {
-    const r = dispatch('codex', [], (home) => writeFileSync(path.join(home, 'leak-canary'), ''));
+    const r = dispatch('codex', [], (ctl) => writeFileSync(path.join(ctl, 'leak-canary'), ''));
     expect(r.status).toBe(67);
     expect(r.stderr).toMatch(/canary: the canary token came back/);
     expect(r.canary).not.toBeNull();
@@ -378,8 +448,8 @@ describe('end to end: what the fake codex receives', () => {
   }, 120_000);
 
   it('1. a tool event in the output voids the run (exit 1, NO REVIEW)', () => {
-    const r = dispatch('codex', [], (home) =>
-      writeFileSync(path.join(home, 'events.jsonl'), JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'cat .env.master' } }) + '\n'),
+    const r = dispatch('codex', [], (ctl) =>
+      writeFileSync(path.join(ctl, 'events.jsonl'), JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'cat .env.master' } }) + '\n'),
     );
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/NO REVIEW — codex used a tool \(command_execution\)/);
@@ -410,6 +480,7 @@ describe('end to end: what the fake codex receives', () => {
     expect(main.match(/resolveBin\(/g)).toHaveLength(1);
     expect(main).toMatch(/codexGate\(agentKey, bin,/);
     expect(main).toMatch(/codexCanary\(bin,/);
+    expect(main.match(/hashCodexInstall\(bin\)/g)).toHaveLength(2); // before the canary, and again before the task
     expect(main).toMatch(/spawnSync\(bin\.cmd, argv,/);
   });
 });
