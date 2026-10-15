@@ -46,7 +46,6 @@ export interface HalProductionEvent {
   wasCaught?: boolean;
   falsePositive?: boolean;
   easAttestationId?: string;
-  hashkeyTxHash?: string;
 }
 
 // Non-blocking insert into hal_production_events. Never throws.
@@ -89,7 +88,6 @@ export async function logHalProductionEvent(
       was_caught: event.wasCaught ?? null,
       false_positive: event.falsePositive ?? null,
       eas_attestation_id: event.easAttestationId ?? null,
-      hashkey_tx_hash: event.hashkeyTxHash ?? null,
     };
     const { data: inserted, error } = await db
       .from('hal_production_events')

@@ -51,7 +51,7 @@
         $('svc').textContent = up ? 'operational' : 'DOWN';
         $('svc-dot').style.background = up ? 'var(--ok)' : 'var(--bad)';
         $('svc').className = up ? 'ok' : 'bad';
-        $('svc-detail').textContent = up ? `supabase=${h.body.supabaseConnected} · hashkey=${h.body.hashkeyConnected}` : `HTTP ${h.status}`;
+        $('svc-detail').textContent = up ? `supabase=${h.body.supabaseConnected}` : `HTTP ${h.status}`;
       } catch(e){ $('svc').textContent='UNREACHABLE'; $('svc').className='bad'; $('svc-dot').style.background='var(--bad)'; }
 
       try {

@@ -22,7 +22,7 @@
  *                             carries its receipt ref (auditable).
  *
  * REUSE, not rebuild: the receipt reference is the same keccak256 hash-chain the
- * behavioral-integrity module and hashkey-chain.ts already produce; the RepID at
+ * behavioral-integrity module already produces; the RepID at
  * the raters is the same score the repid-update engine maintains. The rating graph
  * IS the harness, pointed at participants.
  *
@@ -128,8 +128,8 @@ export interface RatingEdge {
   /** L2 — how the engagement was verified (drives weight). */
   verificationStrength: VerificationStrength;
   /**
-   * L1 — reference to the VERIFIED engagement receipt (a hashkey-chain /
-   * behavioral-integrity receipt hash, an on-chain tx, or a canary-run id + row).
+   * L1 — reference to the VERIFIED engagement receipt (a behavioral-integrity
+   * receipt hash, an on-chain tx, or a canary-run id + row).
    * REQUIRED: an edge with no receipt ref is rejected. This is the earned-gate.
    */
   engagementReceiptRef: string;

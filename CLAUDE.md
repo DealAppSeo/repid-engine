@@ -277,7 +277,7 @@ describing it.*
 ### Layers vs engine vs routes
 
 - `src/layers/` — pure-ish scoring math (decay, prediction, challenge, ecosystem-need, constitutional-audit). Most are stubs awaiting Sprint 3.
-- `src/engine/` — orchestration (`repid-update`, `badges`, `mcp`, `score-monitor`, `production-logger`, `hashkey-chain`).
+- `src/engine/` — orchestration (`repid-update`, `badges`, `mcp`, `score-monitor`, `production-logger`).
 - `src/routes/` — Express routers, mounted in `src/index.ts`. **Order matters**: `challengeRouter` is mounted before `scoreRouter` because of conflicting `/challenge` paths.
 - `src/zkp/` — **this line was wrong in both halves, and it misled a session on 2026-09-08.**
   It read *"`plonky3-stub.ts` (always-on) and `plonky3-real.ts` (Sprint 3 wiring)"*. MEASURED:
@@ -401,13 +401,7 @@ false again.
 
 ### On-chain integration
 
-`src/engine/hashkey-chain.ts` and `src/routes/hashkey.ts` use `ethers` against the HashKey testnet (RPC `https://testnet.hsk.xyz`, contract `0xE3b55a00445dEE1e330f81d113da2E4F28131B69`). `DEPLOYER_PRIVATE_KEY` is optional — read paths work without it; writes require it.
-
-**The chain id was documented here as `133` and the chain answers `177` [MEASURED 2026-09-04].** `/health` reads it live from `provider.getNetwork()` and reported 177 while three places in this repo published 133 — `config.ts`'s default, a hardcoded literal in `HASHKEY_CONFIG`, and `challenge.ts` through it. The one that mattered is `GET /hashkey/config`, whose own comment calls it metadata "for judges and clients": a wallet configured from it signs under EIP-155 for a chain the RPC is not on, and the transaction is rejected.
-
-Two defects, and conflating them is how it survived. There were **two sources of truth that could disagree** — now one, `config.hashkeyChainId` (env `HSK_CHAIN_ID`), which every surface reads. And **nothing compared either against the chain** — unifying two wrong numbers into one wrong number is not a fix, so `chainIdAgreesWithRpc()` compares what we publish against what the RPC reports and `/health` surfaces `hashkeyChainIdAgrees` (`null` = RPC unreachable, which is NOT agreement).
-
-**The DEFAULT is still `133` and that is deliberate, not an oversight.** Whether 177 is HashKey's permanent testnet id or a temporary state of that endpoint is unverified, and silently changing a default that decides which chain a transaction is signed for is a decision, not a cleanup. ~~Production already overrides it.~~ **It does not [MEASURED 2026-10-04]:** production `/health` reports `hashkeyChainIdConfigured: 133`, `hashkeyChainId: 177`, `hashkeyChainIdAgrees: false`, so `HSK_CHAIN_ID` is not set on the service and every surface publishes 133. Setting it is a Railway variable, so it is Sean's. Read `hashkeyChainIdAgrees` rather than trusting either number.
+**HashKey was removed 2026-10-15.** `src/engine/hashkey-chain.ts`, `src/routes/hashkey.ts` and the `/health` HashKey fields are gone. Measured before removal: the router was imported and never mounted (production answered `/hashkey*` with the same 401 as any unmounted path); the contract `0xE3b55a00445dEE1e330f81d113da2E4F28131B69` has no code on HashKey testnet OR mainnet (`eth_getCode` = `0x` on both); all 12 anchors ever recorded were stubs, the last 2026-04-17; and the RPC env pointed at mainnet with a deployer key configured, so the next challenge would have signed a real mainnet transaction to a codeless address. Historical rows (`repid_score_events.metadata.hashkey*`, `hal_production_events.hashkey_tx_hash`) are kept; nothing writes them now. Its four Railway env variables are unread and can be deleted; the removal PR names them.
 
 ## Deploy
 

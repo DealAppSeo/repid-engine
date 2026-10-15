@@ -60,7 +60,6 @@ read-mostly warm standby these can be omitted until the loop is activated post-C
 | `BASE_SEPOLIA_RPC_URL` | no | RPC endpoint (config, not secret). |
 | `EAS_ATTESTER_PRIVATE_KEY` | **SECRET** | EAS attester (must derive to the funded attester address). |
 | `HYPERDAG_ATTESTOR_PRIVATE_KEY` | **SECRET** | funded attester (per STATE_OF_THE_SYSTEM EAS note). |
-| `HASHKEY_RPC_URL` / `HSK_CHAIN_ID` / `HSK_CONTRACT_ADDRESS` | no | HashKey testnet config (have defaults). |
 
 ## 6) LLM PROVIDER KEYS (active-path — HAL quorum calls providers DIRECT, not via LiteLLM, per memory)
 All **SECRET**. Set the ones the deployed HAL/ANFIS code actually calls; the full Railway superset is ~99

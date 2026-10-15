@@ -116,9 +116,9 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * module graph (harmless in production — src/index.ts already imports the same
  * worker to start it — but it does make this test file load HAL). The
  * alternative, a five-line re-parse, would create two definitions of how this
- * mode resolves. This repo has already paid for that shape once: the HashKey
- * chain id had two sources of truth that could disagree, and unifying them was
- * the fix. A flag endpoint whose answer can drift from the code it describes is
+ * mode resolves. This repo has already paid for that shape once: the (since
+ * removed) HashKey chain id had two sources of truth that could disagree, and
+ * unifying them was the fix. A flag endpoint whose answer can drift from the code it describes is
  * worse than useless, because it is trusted.
  *
  * The unrecognised value itself is deliberately NOT echoed. Nothing here ever

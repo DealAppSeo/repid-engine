@@ -1,8 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { config } from '../config';
-import { testHashKeyConnection } from '../engine/hashkey-chain';
-import { chainIdAgreesWithRpc } from './hashkey';
 import { pagerStatus } from '../services/operator-pager';
 import { directPgHealth } from '../db/direct-pg';
 import { lastVestingCheck } from '../services/vesting-monitor';
@@ -35,12 +33,6 @@ router.get('/health', async (req: Request, res: Response) => {
     supabaseConnected = !error;
   } catch {}
 
-  const hashkey = await Promise.race([
-    testHashKeyConnection(),
-    new Promise<{ connected: boolean; error: string }>(r =>
-      setTimeout(() => r({ connected: false, error: 'timeout' }), 3000)
-    ),
-  ]).catch(() => ({ connected: false, error: 'error' }));
 
   const timeoutMs = 15 * 60 * 1000;
   
@@ -114,16 +106,6 @@ router.get('/health', async (req: Request, res: Response) => {
     // Reads process state only — no query is issued, so a monitor polling /health
     // adds no load to an upstream that may already be sick.
     direct_postgres: directPgHealth(),
-    hashkeyConnected: (hashkey as any).connected,
-    hashkeyBlockNumber: (hashkey as any).blockNumber,
-    // The chain id the RPC ITSELF reports, not the one we configured.
-    hashkeyChainId: (hashkey as any).chainId,
-    // Does what we PUBLISH to clients match what the chain says? Measured
-    // 2026-09-04: it did not — we served 133 while the RPC answered 177, and
-    // nothing anywhere compared the two. `null` means the RPC was unreachable
-    // so nothing was compared, which is not agreement.
-    hashkeyChainIdAgrees: chainIdAgreesWithRpc(config.hashkeyChainId, (hashkey as any).chainId),
-    hashkeyChainIdConfigured: config.hashkeyChainId,
     deployerConfigured: !!config.deployerPrivateKey,
     // Is anything actually watching this process? An unconfigured pager is a monitoring system
     // that is silently not monitoring — the same defect it exists to catch, one level up. Public
