@@ -19,6 +19,7 @@ jest.mock('../src/db', () => ({
   },
 }));
 jest.mock('../src/auth/api-keys', () => ({
+  ...jest.requireActual('../src/auth/api-keys'),
   validateAgentApiKey: jest.fn().mockImplementation(async (key: string) => (key === 'bound-key' ? { agent_id: BOUND } : null)),
 }));
 jest.mock('../src/engine/agent-log', () => ({ logAgentEvent: jest.fn().mockResolvedValue(undefined) }));

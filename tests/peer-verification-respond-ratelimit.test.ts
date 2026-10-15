@@ -13,7 +13,7 @@ jest.mock('../src/db/direct-pg', () => ({ pgQuery: jest.fn(async () => []), pgPi
 jest.mock('../src/services/peer-verify-score', () => ({ emitPeerVerifyScoreEvents: jest.fn(async () => ({ emitted: false })) }));
 jest.mock('../src/db', () => ({ db: { from: () => ({ select: () => ({}) }), rpc: async () => ({ data: null, error: null }) } }));
 // authMiddleware's own collaborators: the DB key store (no DB keys here) and its audit logger.
-jest.mock('../src/auth/api-keys', () => ({ validateAgentApiKey: jest.fn(async () => null) }));
+jest.mock('../src/auth/api-keys', () => ({ ...jest.requireActual('../src/auth/api-keys'), validateAgentApiKey: jest.fn(async () => null) }));
 jest.mock('../src/engine/agent-log', () => ({ logAgentEvent: jest.fn(async () => undefined) }));
 
 import request from 'supertest';

@@ -2,23 +2,34 @@ import crypto from 'crypto';
 import { db } from '../db';
 
 /**
+ * r32: THE secret compare. Every operator / admin key check routes through here, never `===`.
+ * Both sides are sha256'd first, so timingSafeEqual always sees two 32-byte digests: no early
+ * exit on a length mismatch, and the secret's length does not leak. A non-string or empty input
+ * is false, never a throw (a repeated header arrives as string[]).
+ */
+export function secretEquals(a: unknown, b: unknown): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
+  const digest = (s: string) => crypto.createHash('sha256').update(s).digest();
+  return crypto.timingSafeEqual(digest(a), digest(b));
+}
+
+/**
  * Is this one of the operator keys in the REPID_API_KEYS env allowlist?
  *
  * The allowlist format is `key:tier` pairs, comma separated, where `:tier` is
  * optional (`secret123:pro,corp_key:enterprise,plainkey`). Returns the resolved
- * tier on a match, or null.
+ * tier and the matched entry's index (a non-secret handle for per-key state), or null.
  *
- * middleware/auth.ts parses the same env var inline. This is the reusable
- * definition for callers that need the check OUTSIDE the global middleware —
+ * The one REPID_API_KEYS check for auth: middleware/auth.ts, routes/route.ts and the
  * routes on the auth bypass list that do their own, stricter authorization
- * (see services/stake-authorization.ts).
+ * (see services/stake-authorization.ts) all call this.
  */
-export function matchEnvOperatorKey(key: string): { tier: string } | null {
+export function matchEnvOperatorKey(key: string): { tier: string; index: number } | null {
   if (!key) return null;
   const rawKeys = process.env.REPID_API_KEYS || '';
-  for (const entry of rawKeys.split(',').map((s) => s.trim()).filter(Boolean)) {
+  for (const [index, entry] of rawKeys.split(',').map((s) => s.trim()).filter(Boolean).entries()) {
     const [candidate, keyTier] = entry.split(':');
-    if (candidate === key) return { tier: keyTier || 'free' };
+    if (secretEquals(candidate, key)) return { tier: keyTier || 'free', index };
   }
   return null;
 }

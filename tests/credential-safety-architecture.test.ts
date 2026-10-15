@@ -42,11 +42,6 @@ const RULES: Record<string, Rule> = {
 /** `snippet` omitted = the whole rule is allowed in that file. Keep entries exact; debt is paid by deleting them. */
 const ALLOW: Array<{ file: string; rule: string; snippet?: string; why: string }> = [
   { file: 'src/routes/agents.ts', rule: 'privateId', why: 'POST /agents/human generates it, stores only privateId_sha256, returns it once' },
-  // DEBT (r32 wants one constant-time verifier): operator / admin keys compared with ===. Follow-up PR.
-  { file: 'src/middleware/auth.ts', rule: 'secret-equality', snippet: 'key === apiKey', why: 'DEBT: REPID_API_KEYS parsed inline' },
-  { file: 'src/routes/route.ts', rule: 'secret-equality', snippet: 'key === token', why: 'DEBT: REPID_API_KEYS parsed inline' },
-  { file: 'src/routes/admin-caps.ts', rule: 'secret-equality', snippet: 'reqKey !== adminKey', why: 'DEBT: x-admin-key compare' },
-  { file: 'src/routes/admin-flags.ts', rule: 'secret-equality', snippet: 'reqKey !== adminKey', why: 'DEBT: x-admin-key compare' },
   // Not credentials: the names only look like it.
   { file: 'src/routes/belts.ts', rule: 'secret-equality', snippet: 'row.name === key', why: 'a belt row name' },
   { file: 'src/services/peer-verify-consensus.ts', rule: 'secret-equality', snippet: 'now.closure_reason === token', why: 'a closure-reason marker' },
@@ -108,7 +103,18 @@ describe('credential safety: one verifier (D-108, r32)', () => {
   });
 
   it('the allowlist is per snippet: a NEW secret compare in an allowlisted file is still caught', () => {
-    expect(scan('src/middleware/auth.ts', 'if (header === secret) next();').filter((h) => !allowedBy(h))).toHaveLength(1);
+    expect(scan('src/routes/belts.ts', 'if (header === secret) next();').filter((h) => !allowedBy(h))).toHaveLength(1);
+  });
+
+  // The r32 debt #1408 allowlisted is paid: these four compares now go through secretEquals in the
+  // verifier. Re-adding any one of them, verbatim, in its old file fails the build.
+  it.each([
+    ['src/middleware/auth.ts', '    if (key === apiKey) {'],
+    ['src/routes/route.ts', '        if (key === token) {'],
+    ['src/routes/admin-caps.ts', '  if (reqKey !== adminKey) {'],
+    ['src/routes/admin-flags.ts', '  if (reqKey !== adminKey) {'],
+  ])('paid debt stays paid: a direct compare re-added in %s is caught', (file, planted) => {
+    expect(scan(file, planted).filter((h) => !allowedBy(h)).map((h) => h.rule)).toEqual(['secret-equality']);
   });
 
   it('the retired legacy token is banned in the verifier too', () => {

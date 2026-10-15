@@ -109,6 +109,7 @@ jest.mock('../src/scoring/pipeline', () => ({
 }));
 
 jest.mock('../src/auth/api-keys', () => ({
+  ...jest.requireActual('../src/auth/api-keys'),
   validateAgentApiKey: jest.fn(),
 }));
 

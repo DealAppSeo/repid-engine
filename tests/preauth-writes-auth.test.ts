@@ -51,6 +51,7 @@ jest.mock('../src/db', () => ({
   },
 }));
 jest.mock('../src/auth/api-keys', () => ({
+  ...jest.requireActual('../src/auth/api-keys'),
   validateAgentApiKey: jest.fn(async (key: string) =>
     key === 'bound-key' ? { agent_id: BOUND } : key === 'bound-key-2' ? { agent_id: BOUND_2 } : null),
 }));
