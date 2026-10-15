@@ -11,8 +11,10 @@
  * Pinned by tests/human-bind-staging-passthrough.test.ts.
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { db } from '../db';
 import { authMiddleware, isOperatorKey } from '../middleware/auth';
+import { trustedClientIp } from '../middleware/client-ip';
 
 const router = Router();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -22,7 +24,25 @@ function text(body: Record<string, unknown>, key: string): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-router.post('/human/bind', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+function isStagingShape(body: unknown): boolean {
+  return !!body && typeof body === 'object' && !Array.isArray(body) && !!text(body as Record<string, unknown>, 'wallet');
+}
+
+// The staging shape runs authMiddleware below, ahead of the global one, so nothing is known about the
+// caller yet: the client IP is the only key (trustedClientIp, as /bounties does). CodeQL
+// js/missing-rate-limiting. The signed bind (no wallet) is skipped: it falls through untouched.
+export const STAGING_BIND_LIMIT_PER_MIN = 30;
+const stagingLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: STAGING_BIND_LIMIT_PER_MIN,
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
+  skip: (req) => !isStagingShape(req.body),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'too_many_requests' },
+});
+
+router.post('/human/bind', stagingLimiter, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   const body = req.body;
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     next();

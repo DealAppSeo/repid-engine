@@ -61,7 +61,7 @@ jest.mock('../src/services/hal-tester', () => ({ runTier1Benchmark: () => runTie
 import halTestRouter, { BENCHMARK_RUNS_PER_HOUR } from '../src/routes/hal-test';
 import marketplaceRouter from '../src/routes/v1/marketplace';
 import federationRouter from '../src/routes/v1/federation';
-import humanBindStagingRouter from '../src/routes/human-bind-staging';
+import humanBindStagingRouter, { STAGING_BIND_LIMIT_PER_MIN } from '../src/routes/human-bind-staging';
 
 function app() {
   const a = express();
@@ -216,4 +216,16 @@ test(`hal-benchmark/run: run ${BENCHMARK_RUNS_PER_HOUR + 1} in an hour from one 
 
   const other = await request(a).post('/api/v1/hal-benchmark/run').set('Authorization', 'Bearer bound-key-2').send({});
   expect(other.status).toBe(200);
+});
+
+// LAST in the file on purpose: the limiter is module-level, so this exhausts the bucket for this IP.
+test(`staging bind: ${STAGING_BIND_LIMIT_PER_MIN + 1} staging requests from one IP in a minute → 429; the signed bind is never counted`, async () => {
+  const a = app();
+  for (let i = 0; i < STAGING_BIND_LIMIT_PER_MIN; i++) {
+    await request(a).post('/api/v1/human/bind').send({ wallet: '0xabc', agent_id: BOUND });
+  }
+  const limited = await request(a).post('/api/v1/human/bind').send({ wallet: '0xabc', agent_id: BOUND });
+  expect(limited.status).toBe(429);
+  const signed = await request(a).post('/api/v1/human/bind').send({ agent_id: BOUND, signature: '0xsig', scope: 'ownership' });
+  expect(signed.status).toBe(299);
 });
