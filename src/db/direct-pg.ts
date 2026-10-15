@@ -251,8 +251,14 @@ export function isReadOnlyStatement(sql: string): boolean {
   const s = statements[0]!.replace(/\bFOR\s+(?:NO\s+KEY\s+|KEY\s+)?(?:UPDATE|SHARE)\b/gi, ' ').trim();
   if (!/^\(*\s*(?:SELECT|WITH)\b/i.test(s)) return false;
   if (/\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|INTO|CALL|COPY|CREATE|DROP|ALTER|GRANT|REVOKE|LOCK|NOTIFY|REFRESH|DO|EXECUTE|PREPARE|VACUUM)\b/i.test(s)) return false;
-  for (const m of s.matchAll(/(::\s*)?\b([A-Za-z_][\w$.]*)\s*\(/g)) {
+  // A qualified name may carry whitespace or a comment around its dot (`evil . now()`,
+  // `evil/**/.now()`, `"evil" . now()`): the lexer turned the comment into a space and the quoted
+  // name into quoted_ident, so join them back before reading the name, or the bare `now(` passes the
+  // allowlist (XC1 on #1387). A call still preceded by a dot after that is qualified too: a write.
+  const calls = s.replace(/\s*\.\s*/g, '.');
+  for (const m of calls.matchAll(/(::\s*)?\b([A-Za-z_][\w$.]*)\s*\(/g)) {
     if (m[1]) continue; // ::numeric(10,2) is a type, not a call
+    if (calls[m.index! - 1] === '.') return false;
     const name = m[2]!.toLowerCase();
     if (!NOT_CALLS.has(name) && !READ_FUNCTIONS.has(name)) return false;
   }

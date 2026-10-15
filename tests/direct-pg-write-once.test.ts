@@ -83,6 +83,10 @@ describe('pgQuery write semantics', () => {
     ['a set-returning function that writes', 'SELECT * FROM claim_next_job($1)'],
     ['a sequence advance', "SELECT nextval('repid_seq')"],
     ['a schema-qualified call', 'SELECT public.count_and_mark($1)'],
+    // XC1 on #1387: whitespace or a comment around the dot used to leave a bare, allowlisted `now(`.
+    ['a qualified call with spaces around the dot', 'SELECT evil . now()'],
+    ['a qualified call with a comment before the dot', 'SELECT evil/**/.now()'],
+    ['a quoted schema with spaces around the dot', 'SELECT "evil" . now()'],
     ['an unterminated literal', "SELECT 'abc"],
   ])('not provably read-only → write: %s', (_why, sql) => {
     expect(mod.isWriteStatement(sql)).toBe(true);
