@@ -300,6 +300,17 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
       const closeToken = newPanelCloseToken();
       const outcome = await closePanelWithToken(queue_id, closeToken);
 
+      if (outcome === 'unknown') {
+        // The close threw and the row still read open: it may yet commit. Nothing was scored, and
+        // scoring needs a won close, so a retry cannot double-score. If the close does land late,
+        // the row is panel_resolved with 0 score events under this token: reconcile by token.
+        console.error(
+          `[peer-verify/respond] PANEL close outcome UNKNOWN for queue ${queue_id} under ${closeToken}: nothing scored; ` +
+            'if the close lands late the row is panel_resolved with 0 events under that token',
+        );
+        return res.status(503).json({ error: 'panel close outcome unknown; nothing was scored', outcome: 'unknown', retryable: true });
+      }
+
       if (outcome === 'lost') {
         // Another vote already finalized + scored this claim. Report the verdict,
         // do NOT re-score.
@@ -335,11 +346,11 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
         }
         if (written === 0) {
           // Nothing was scored: reopen THIS request's close only, so a retry starts clean.
-          let reopened: 'reopened' | 'not-ours' | 'failed' = 'failed';
+          let reopened: 'reopened' | 'not-ours' | 'unknown' = 'unknown';
           try {
             reopened = await reopenOwnPanelClose(queue_id, closeToken);
           } catch (reopenErr: any) {
-            console.error(`[peer-verify/respond] PANEL reopen failed for queue ${queue_id}: ${reopenErr?.message ?? reopenErr}`);
+            console.error(`[peer-verify/respond] PANEL reopen threw for queue ${queue_id}: ${reopenErr?.message ?? reopenErr}`);
           }
           if (reopened === 'reopened') {
             console.error(
@@ -347,6 +358,15 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
                 `REOPENED (in_review, unscored, retryable): ${e?.message ?? e}`
             );
             return res.status(503).json({ error: 'panel scoring failed; queue row reopened for retry', retryable: true });
+          }
+          if (reopened === 'unknown') {
+            // The reopen may still commit after our re-read: never report it as not having happened.
+            // 0 events were written, so a retry cannot double-score.
+            console.error(
+              `[peer-verify/respond] PANEL scoring failed before any event was written and the reopen outcome is UNKNOWN — ` +
+                `queue ${queue_id} under ${closeToken}: ${e?.message ?? e}`
+            );
+            return res.status(503).json({ error: 'panel scoring failed; reopen outcome unknown', outcome: 'unknown', retryable: true });
           }
           console.error(
             `[peer-verify/respond] PANEL scoring failed and the reopen did not land (${reopened}) — queue ${queue_id} ` +

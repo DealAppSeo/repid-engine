@@ -138,16 +138,136 @@ function timeoutReject<T>(ms: number, label: string): Promise<T> {
 }
 
 /**
- * Does this statement write? INSERT / UPDATE / DELETE / MERGE anywhere in it (a CTE that writes
- * counts), ignoring comments and `FOR UPDATE` row locks. Errs toward "write": a read misclassified
- * as a write only loses its retries, while a write misclassified as a read can be applied twice.
+ * The statement's CODE, lexed left to right the way Postgres does: string literals ('…' with ''
+ * escapes; E'…' with backslash escapes too), dollar-quoted bodies ($tag$…$tag$), quoted
+ * identifiers ("…") and comments (-- and nested /* *\/) are each consumed whole, so text inside
+ * one can never open or hide another (XC1: `SELECT 'a --'` used to swallow the rest of the line).
+ * Literals become '' and identifiers quoted_ident; comments become a space. null = unterminated,
+ * which is not provable.
  */
+function sqlCode(sql: string): string | null {
+  let out = '';
+  let i = 0;
+  const n = sql.length;
+  const wordBefore = (k: number) => k > 0 && /[\w$]/.test(sql[k - 1]!);
+  while (i < n) {
+    const c = sql[i]!;
+    const next = sql[i + 1];
+    if (c === '-' && next === '-') {
+      const nl = sql.indexOf('\n', i);
+      i = nl === -1 ? n : nl;
+      out += ' ';
+    } else if (c === '/' && next === '*') {
+      let depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        if (sql[i] === '/' && sql[i + 1] === '*') { depth++; i += 2; }
+        else if (sql[i] === '*' && sql[i + 1] === '/') { depth--; i += 2; }
+        else i++;
+      }
+      if (depth > 0) return null;
+      out += ' ';
+    } else if (c === "'" || ((c === 'E' || c === 'e') && next === "'" && !wordBefore(i))) {
+      const backslash = c !== "'";
+      i += backslash ? 2 : 1;
+      for (;;) {
+        if (i >= n) return null;
+        const ch = sql[i];
+        if (backslash && ch === '\\') { i += 2; continue; }
+        if (ch === "'") {
+          if (sql[i + 1] === "'") { i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      out += "''";
+    } else if (c === '"') {
+      i++;
+      for (;;) {
+        if (i >= n) return null;
+        if (sql[i] === '"') {
+          if (sql[i + 1] === '"') { i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      out += 'quoted_ident';
+    } else if (c === '$' && !wordBefore(i)) {
+      const tag = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i))?.[0];
+      if (!tag) { out += c; i++; continue; } // $1, a parameter
+      const end = sql.indexOf(tag, i + tag.length);
+      if (end === -1) return null;
+      i = end + tag.length;
+      out += "''";
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+// Words that may stand before '(' without being a function call.
+const NOT_CALLS = new Set([
+  'as', 'in', 'exists', 'any', 'all', 'some', 'filter', 'over', 'from', 'join', 'on', 'where', 'and', 'or', 'not',
+  'select', 'lateral', 'using', 'values', 'array', 'row', 'case', 'when', 'then', 'else', 'by', 'having', 'union',
+  'intersect', 'except', 'with', 'recursive', 'is', 'like', 'ilike', 'between', 'distinct', 'limit', 'offset', 'of',
+  'materialized', 'within', 'group', 'partition', 'cast', 'ordinality', 'nulls',
+]);
+// Built-ins that only read. Any other call (`SELECT claim_job()`, nextval, set_config, a schema-
+// qualified name) makes the statement not provably read-only: it gets one attempt.
+const READ_FUNCTIONS = new Set([
+  'count', 'sum', 'avg', 'min', 'max', 'coalesce', 'nullif', 'greatest', 'least', 'now', 'round', 'floor', 'ceil',
+  'ceiling', 'abs', 'sign', 'sqrt', 'power', 'mod', 'ln', 'log', 'exp', 'stddev', 'stddev_pop', 'stddev_samp',
+  'variance', 'var_pop', 'var_samp', 'array_agg', 'string_agg', 'json_agg', 'jsonb_agg', 'jsonb_object_agg',
+  'json_build_object', 'jsonb_build_object', 'json_build_array', 'jsonb_build_array', 'to_json', 'to_jsonb',
+  'jsonb_array_length', 'jsonb_typeof', 'jsonb_extract_path_text', 'row_number', 'rank', 'dense_rank', 'lag',
+  'lead', 'first_value', 'last_value', 'ntile', 'percentile_cont', 'percentile_disc', 'bool_and', 'bool_or',
+  'every', 'date_trunc', 'date_part', 'extract', 'to_char', 'to_timestamp', 'to_date', 'to_number',
+  'make_interval', 'age', 'clock_timestamp', 'statement_timestamp', 'lower', 'upper', 'trim', 'btrim', 'ltrim',
+  'rtrim', 'length', 'char_length', 'octet_length', 'substring', 'substr', 'position', 'split_part', 'replace',
+  'concat', 'concat_ws', 'format', 'left', 'right', 'lpad', 'rpad', 'starts_with', 'regexp_replace',
+  'regexp_match', 'md5', 'encode', 'decode', 'digest', 'sha256', 'array_length', 'array_position',
+  'array_to_string', 'string_to_array', 'cardinality', 'unnest', 'generate_series',
+  // type names, as in CAST(x AS numeric(10,2))
+  'numeric', 'decimal', 'varchar', 'char', 'character', 'timestamp', 'timestamptz', 'time', 'interval', 'bit', 'float',
+]);
+
+/**
+ * Is this statement PROVABLY read-only? Fail safe: when in doubt, it is a write (one attempt).
+ * Proven means: it lexes cleanly; it is ONE statement; it starts with SELECT or WITH; outside
+ * literals and comments it holds no data-changing keyword (a WITH whose CTE writes is a write, so
+ * is SELECT … INTO); and every function it calls is a known read-only built-in. `FOR UPDATE` /
+ * `FOR SHARE` row locks are reads. A read misclassified as a write only loses its retries; a
+ * write misclassified as a read can be applied twice.
+ */
+export function isReadOnlyStatement(sql: string): boolean {
+  const code = sqlCode(sql);
+  if (code === null) return false;
+  const statements = code.split(';').filter((s) => s.trim() !== '');
+  if (statements.length !== 1) return false;
+  const s = statements[0]!.replace(/\bFOR\s+(?:NO\s+KEY\s+|KEY\s+)?(?:UPDATE|SHARE)\b/gi, ' ').trim();
+  if (!/^\(*\s*(?:SELECT|WITH)\b/i.test(s)) return false;
+  if (/\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|INTO|CALL|COPY|CREATE|DROP|ALTER|GRANT|REVOKE|LOCK|NOTIFY|REFRESH|DO|EXECUTE|PREPARE|VACUUM)\b/i.test(s)) return false;
+  // A qualified name may carry whitespace or a comment around its dot (`evil . now()`,
+  // `evil/**/.now()`, `"evil" . now()`): the lexer turned the comment into a space and the quoted
+  // name into quoted_ident, so join them back before reading the name, or the bare `now(` passes the
+  // allowlist (XC1 on #1387). A call still preceded by a dot after that is qualified too: a write.
+  const calls = s.replace(/\s*\.\s*/g, '.');
+  for (const m of calls.matchAll(/(::\s*)?\b([A-Za-z_][\w$.]*)\s*\(/g)) {
+    if (m[1]) continue; // ::numeric(10,2) is a type, not a call
+    if (calls[m.index! - 1] === '.') return false;
+    const name = m[2]!.toLowerCase();
+    if (!NOT_CALLS.has(name) && !READ_FUNCTIONS.has(name)) return false;
+  }
+  return true;
+}
+
+/** The complement, kept for callers that ask the question the other way round. */
 export function isWriteStatement(sql: string): boolean {
-  const stripped = sql
-    .replace(/--[^\n]*/g, ' ')
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/\bFOR\s+(NO\s+KEY\s+)?UPDATE\b/gi, ' ');
-  return /\b(INSERT\s+INTO|UPDATE\s+[\w."]+\s+(AS\s+\w+\s+)?SET|UPDATE\s+[\w."]+\s+\w+\s+SET|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(stripped);
+  return !isReadOnlyStatement(sql);
 }
 
 /**
@@ -164,8 +284,10 @@ export function isWriteStatement(sql: string): boolean {
  * statement, and on the transaction pooler a statement that finishes commits. So a write that
  * "timed out" may have committed, and retrying it applies it again — a conditional UPDATE then
  * returns 0 rows and the caller reads its own success as someone else's (XC1, PR #1375 review).
- * A statement isWriteStatement() recognises therefore runs once unless the caller passes
- * `idempotent: true` (running it twice has the same effect as once) or an explicit `retries`.
+ * Only a statement isReadOnlyStatement() proves read-only gets the default retries. Anything
+ * else runs once unless the caller passes `idempotent: true` (running it twice has the same
+ * effect AND the same result as once). `retries > 1` on a non-read without `idempotent: true`
+ * throws before touching the database: an explicit retry count is not a way around this rule.
  * A caller that needs to know what happened after a write throws must re-read the row.
  */
 export async function pgQuery<T extends QueryResultRow = any>(
@@ -178,10 +300,16 @@ export async function pgQuery<T extends QueryResultRow = any>(
   }
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
-  const write = isWriteStatement(text);
+  const write = !isReadOnlyStatement(text);
+  const label = opts.label ?? text.slice(0, 48).replace(/\s+/g, ' ');
+  if (write && !opts.idempotent && (opts.retries ?? 1) > 1) {
+    throw new Error(
+      `[direct-pg] ${label}: retries=${opts.retries} on a statement that is not provably read-only. ` +
+        'Pass idempotent: true only if running it twice has the same effect and result as once; otherwise drop retries.',
+    );
+  }
   const defaultAttempts = write && !opts.idempotent ? 1 : BACKOFF_SCHEDULE_MS.length;
   const maxAttempts = Math.max(1, opts.retries ?? defaultAttempts);
-  const label = opts.label ?? text.slice(0, 48).replace(/\s+/g, ' ');
   const callStart = Date.now();
 
   // 2026-07-31 — CONFIG ERRORS ARE NOT TRANSIENT, and retrying one is fatal in a

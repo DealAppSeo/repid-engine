@@ -32,13 +32,20 @@ jest.mock('../src/db', () => ({
           update: (payload: any) => ({
             eq: () => {
               (global as any).__avUpdateCalls.push(payload);
-              return Promise.resolve({ data: null, error: null });
+              return Promise.resolve({ data: null, error: (global as any).__avAgentUpdateError ?? null });
             },
           }),
         };
       }
       if (tableName === 'repid_score_events') {
         return {
+          update: (payload: any) => ({
+            eq: (_col: string, id: unknown) => {
+              if ((global as any).__avMarkerThrows) throw new Error('socket hang up');
+              (global as any).__avEventUpdates.push({ payload, id });
+              return Promise.resolve({ data: null, error: null });
+            },
+          }),
           // shouldTriggerProof count chain (only hit when |delta| < 5)
           select: (_cols?: string, opts?: any) => ({
             eq: () => ({
@@ -90,6 +97,9 @@ beforeEach(() => {
   (global as any).__avInsertCalls = [];
   (global as any).__avUpdateCalls = [];
   (global as any).__avAnchorCalls = [];
+  (global as any).__avEventUpdates = [];
+  (global as any).__avAgentUpdateError = null;
+  (global as any).__avMarkerThrows = false;
 });
 
 describe('applyValidationEvent — halOverride', () => {
@@ -146,5 +156,35 @@ describe('applyValidationEvent — halOverride', () => {
   test('5. non-SERVICE_FULFILLED event does NOT anchor (gate preserved)', async () => {
     await applyValidationEvent(AGENT_ID, 'VALIDATION_PASSED', 10, {}, { hal_score: 0.1, hal_decision: 'clean' });
     expect((global as any).__avAnchorCalls.length).toBe(0);
+  });
+
+  test('6. the repid_agents update fails → loud, and the event row is marked direct_apply_failed (not silent)', async () => {
+    // The event row carries repid_delta_applied, so the DB trigger skips it: this update is the
+    // only applier, and ignoring its error left "applied" in the ledger with the score unmoved.
+    (global as any).__avAgentUpdateError = { message: 'canceling statement due to statement timeout' };
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await applyValidationEvent(AGENT_ID, 'VALIDATOR_REWARD', 10, { role: 'validator' });
+      expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/DIRECT-APPLY FAILED score_event=4242 .*repid_agents NOT updated/));
+      const marks = (global as any).__avEventUpdates;
+      expect(marks).toHaveLength(1);
+      expect(marks[0].id).toBe(4242);
+      expect(marks[0].payload.metadata.direct_apply_failed).toMatchObject({ error: 'canceling statement due to statement timeout' });
+      expect(marks[0].payload.metadata.role).toBe('validator'); // the original metadata is kept
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  test('7. a marker write that THROWS is loud, and the persisted event does not become a thrown call', async () => {
+    (global as any).__avAgentUpdateError = { message: 'canceling statement due to statement timeout' };
+    (global as any).__avMarkerThrows = true;
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(applyValidationEvent(AGENT_ID, 'VALIDATOR_REWARD', 10, { role: 'validator' })).resolves.toBeDefined();
+      expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/marker write ALSO failed \(threw\) for score_event=4242: socket hang up/));
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });

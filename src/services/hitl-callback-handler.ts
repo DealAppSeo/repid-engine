@@ -221,6 +221,15 @@ export async function handleHitlCallback(req: Request, res: Response): Promise<v
     }
 
     // 6. decision audit row — match the existing UPPERCASE convention on .decision
+    //
+    // KNOWN GAP (documented, not fixed; XC1 on #1381): this row is written only on the path where
+    // step 5's UPDATE *returned* its row. If that UPDATE commits but pgQuery throws (a timeout is
+    // a Promise.race, so the statement can still commit), the handler lands in the outer catch
+    // and says "Internal error"; Sean re-taps, step 5 matches 0 rows, he sees "Already approved",
+    // and no trinity_hitl_decisions row is ever written for a decision that took effect. The
+    // insert's own error is also unchecked. A re-read cannot fix it here: a genuine double tap
+    // looks identical to commit-then-timeout, so writing the row on re-read would duplicate it.
+    // The fix is to write the audit row in the same statement as the transition (one CTE).
     let agentRepidText = 'unknown';
     try {
       const ag = await pgQuery<{ r: string }>(

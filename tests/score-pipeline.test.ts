@@ -30,13 +30,20 @@ jest.mock('../src/db', () => ({
           update: (payload: any) => ({
             eq: (_col: string, _val: string) => {
               (global as any).__pipUpdateCalls.push(payload);
-              return Promise.resolve({ data: null, error: null });
+              return Promise.resolve({ data: null, error: (global as any).__pipAgentUpdateError ?? null });
             },
           }),
         };
       }
       if (tableName === 'repid_score_events') {
         return {
+          update: (payload: any) => ({
+            eq: (_col: string, id: unknown) => {
+              if ((global as any).__pipMarkerThrows) throw new Error('socket hang up');
+              (global as any).__pipEventUpdates.push({ payload, id });
+              return Promise.resolve({ data: null, error: (global as any).__pipMarkerError ?? null });
+            },
+          }),
           select: (_cols?: string, opts?: any) => {
             const isHead = !!(opts && opts.head);
             return {
@@ -102,6 +109,52 @@ beforeEach(() => {
   (global as any).__pipUpdateCalls = [];
   (global as any).__pipProofQueueCalls = [];
   (global as any).__pipForceInsertError = null;
+  (global as any).__pipAgentUpdateError = null;
+  (global as any).__pipEventUpdates = [];
+  (global as any).__pipMarkerError = null;
+  (global as any).__pipMarkerThrows = false;
+});
+
+describe('runScoreEvent — the repid_agents update can fail (XC1 on #1387)', () => {
+  const run = () =>
+    runScoreEvent({
+      agent_id: AGENT_ID,
+      prompt: 'What is 2+2?',
+      answer: 'Approximately 4',
+      provider_used: 'groq',
+      tier_used: '0a',
+      model_used: 'llama-3.1-8b-instant',
+      llm_call_id: '33333333-3333-4333-8333-333333333333',
+    });
+  let errSpy: jest.SpyInstance;
+  beforeEach(() => {
+    (global as any).__pipAgentRow = { id: AGENT_ID, current_repid: 1000, tier: 'ESTABLISHED', vesting_cliff_ends_at: null };
+    (global as any).__pipAgentUpdateError = { message: 'canceling statement due to statement timeout' };
+    errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+  afterEach(() => errSpy.mockRestore());
+
+  test('loud, and the event row is marked direct_apply_failed (the trigger skipped it; this update was the only applier)', async () => {
+    const result = await run();
+    expect(result.score_event_id).toBe(12345);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/\[runScoreEvent\] DIRECT-APPLY FAILED score_event=12345 .*repid_agents NOT updated/));
+    const marks = (global as any).__pipEventUpdates;
+    expect(marks).toHaveLength(1);
+    expect(marks[0].id).toBe(12345);
+    expect(marks[0].payload.metadata.direct_apply_failed).toMatchObject({ error: 'canceling statement due to statement timeout' });
+  });
+
+  test('a marker write that errors is loud too', async () => {
+    (global as any).__pipMarkerError = { message: 'permission denied' };
+    await run();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/\[runScoreEvent\] marker write ALSO failed for score_event=12345: permission denied/));
+  });
+
+  test('a marker write that THROWS is loud, and does not turn a persisted event into a thrown call', async () => {
+    (global as any).__pipMarkerThrows = true;
+    await expect(run()).resolves.toMatchObject({ score_event_id: 12345 });
+    expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/\[runScoreEvent\] marker write ALSO failed \(threw\) for score_event=12345: socket hang up/));
+  });
 });
 
 describe('runScoreEvent', () => {

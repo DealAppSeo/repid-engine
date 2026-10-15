@@ -529,9 +529,11 @@ async function closureReasonOf(queueId: number | string): Promise<{ status: stri
 /**
  * Close the row as panel_resolved, stamped with `token`. 'won' = this request closed it; 'lost' =
  * someone else had. If the UPDATE throws, the row is re-read: our token there means it committed.
- * If even the re-read fails, this throws — the outcome is unknown and the caller must not score.
+ * 'unknown' = the re-read still shows the row open (or the re-read itself failed). That is NOT
+ * "the close did not happen": a timed-out statement is still in flight and can commit after the
+ * re-read. The caller must not score, and must say the outcome is unknown.
  */
-export async function closePanelWithToken(queueId: number | string, token: string): Promise<'won' | 'lost'> {
+export async function closePanelWithToken(queueId: number | string, token: string): Promise<'won' | 'lost' | 'unknown'> {
   try {
     const rows = await pgQuery<{ id: number | string }>(
       `UPDATE peer_verification_queue
@@ -546,10 +548,16 @@ export async function closePanelWithToken(queueId: number | string, token: strin
     );
     return rows.length > 0 ? 'won' : 'lost';
   } catch (e) {
-    const now = await closureReasonOf(queueId);
+    let now: Awaited<ReturnType<typeof closureReasonOf>>;
+    try {
+      now = await closureReasonOf(queueId);
+    } catch {
+      return 'unknown';
+    }
     if (now && now.closure_reason === token) return 'won';
     if (now && !['pending', 'in_review'].includes(now.status)) return 'lost';
-    throw e; // still open and not ours: the close did not happen; surface the error
+    console.error(`[peer-verify/panel] close of queue ${queueId} threw and the row still reads open: outcome unknown (${(e as Error)?.message ?? e})`);
+    return 'unknown';
   }
 }
 
@@ -568,9 +576,10 @@ export async function panelScoreEventsWritten(contractId: string, token: string)
 
 /**
  * Reopen ONLY the close this request made (its token), back to in_review. One attempt; if it
- * throws, re-read. 'reopened' | 'not-ours' (the row no longer carries our token).
+ * throws, re-read. 'reopened' | 'not-ours' (the row no longer carries our token) | 'unknown' (the
+ * re-read still shows our token, or failed: the reopen may yet commit after the re-read).
  */
-export async function reopenOwnPanelClose(queueId: number | string, token: string): Promise<'reopened' | 'not-ours'> {
+export async function reopenOwnPanelClose(queueId: number | string, token: string): Promise<'reopened' | 'not-ours' | 'unknown'> {
   try {
     const rows = await pgQuery<{ id: number | string }>(
       `UPDATE peer_verification_queue
@@ -587,9 +596,18 @@ export async function reopenOwnPanelClose(queueId: number | string, token: strin
     return rows.length > 0 ? 'reopened' : 'not-ours';
   } catch (e) {
     // Ambiguous: the reopen may have committed. Only this request ever clears its own token,
-    // so the token gone + the row back in_review means it did.
-    const now = await closureReasonOf(queueId);
-    if (now && now.closure_reason === token) throw e;
+    // so the token gone + the row back in_review means it did. Our token still there means it
+    // has not committed YET, which is not the same as never.
+    let now: Awaited<ReturnType<typeof closureReasonOf>>;
+    try {
+      now = await closureReasonOf(queueId);
+    } catch {
+      return 'unknown';
+    }
+    if (now && now.closure_reason === token) {
+      console.error(`[peer-verify/panel] reopen of queue ${queueId} threw and our token is still there: outcome unknown (${(e as Error)?.message ?? e})`);
+      return 'unknown';
+    }
     return now && now.status === 'in_review' && now.closure_reason === null ? 'reopened' : 'not-ours';
   }
 }

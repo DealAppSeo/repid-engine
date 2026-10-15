@@ -216,19 +216,23 @@ export class EasAnchorWorker {
    * the batch (by id). This is the liveness signal system_liveness_v reads.
    */
   async writebackUid(ids: number[], uid: string): Promise<number[]> {
+    // IDEMPOTENT, so the retry is safe: `OR eas_attestation_uid = $1` makes a replay after a
+    // committed-then-timed-out attempt return the same rows the first one stamped. With only
+    // `IS NULL` the replay returned 0 rows (agents never told), and with no retry at all a blip
+    // here leaves the rows unanchored, so the next batch attests them on-chain a second time.
     const updated = await this.writeback<{ id: number }>(
       `UPDATE repid_zkp_proofs
           SET eas_attestation_uid = $1, eas_schema = $2
         WHERE id = ANY($3::bigint[])
-          AND eas_attestation_uid IS NULL
+          AND (eas_attestation_uid IS NULL OR eas_attestation_uid = $1)
         RETURNING id`,
       [uid, EAS_ANCHOR_SCHEMA_LABEL, ids],
-      { retries: 2, label: 'eas-anchor-writeback-uid' },
+      { retries: 2, idempotent: true, label: 'eas-anchor-writeback-uid' },
     );
-    // The IDS, not the count. `AND eas_attestation_uid IS NULL` means a concurrent anchor can
-    // claim some rows first, so this is the authoritative set of proofs THIS batch anchored —
-    // and therefore exactly the set whose agents should be told. Notifying from the selected
-    // batch instead would announce an anchor we did not perform.
+    // The IDS, not the count. A concurrent anchor (a different uid) can claim some rows first,
+    // and the predicate excludes those, so this is the authoritative set of proofs THIS uid
+    // anchored, and therefore exactly the set whose agents should be told. Notifying from the
+    // selected batch instead would announce an anchor we did not perform.
     return updated.map((r) => r.id);
   }
 

@@ -130,7 +130,10 @@ async function insertScoreEventLegacy(params: InsertParams): Promise<ScoreEventR
       JSON.stringify(params.metadata),
       params.certaintyAtClaim ?? null,
     ],
-    { label: 'peer-verify-score-insert', idempotent: true } // ON CONFLICT (idempotency_key) DO NOTHING
+    // NOT labelled idempotent, though ON CONFLICT DO NOTHING reads that way: this statement never
+    // gets as far as the conflict clause (42P10 and 23514, top of file), so the label only bought
+    // five backed-off attempts at a deterministic error. Write-once fails it fast.
+    { label: 'peer-verify-score-insert' }
   );
   return rows[0] ?? null;
 }
