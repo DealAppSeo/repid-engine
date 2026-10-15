@@ -86,9 +86,33 @@ function tokenize(input: string): string[] | null {
   return tokens;
 }
 
-class Parser {
+/**
+ * How deep either parser will recurse: parentheses, unary signs and `^` chains each add a level.
+ * Past it the result is NOT_CHECKED under a stable name, instead of whatever a stack overflow says.
+ * Each level costs ~6 stack frames, so the overflow itself sits near 1,800 levels; a real claim
+ * nests a handful. Anything here is reachable from the public /hal/evaluate route.
+ */
+export const MAX_NESTING_DEPTH = 100;
+export const NESTING_TOO_DEEP = `NOT_CHECKED: nesting deeper than ${MAX_NESTING_DEPTH} levels`;
+
+abstract class NestingGuard {
+  private depth = 0;
+  protected nest<T>(parse: () => T): T {
+    if (this.depth >= MAX_NESTING_DEPTH) throw new Error(NESTING_TOO_DEEP);
+    this.depth++;
+    try {
+      return parse();
+    } finally {
+      this.depth--;
+    }
+  }
+}
+
+class Parser extends NestingGuard {
   private pos = 0;
-  constructor(private readonly tokens: string[]) {}
+  constructor(private readonly tokens: string[]) {
+    super();
+  }
 
   private peek(): string | undefined {
     return this.tokens[this.pos];
@@ -136,7 +160,7 @@ class Parser {
     const base = this.parseUnary();
     if (this.peek() === '^') {
       this.next();
-      const exp = this.parseFactor();
+      const exp = this.nest(() => this.parseFactor());
       return Math.pow(base, exp);
     }
     return base;
@@ -145,11 +169,11 @@ class Parser {
   private parseUnary(): number {
     if (this.peek() === '+') {
       this.next();
-      return this.parseUnary();
+      return this.nest(() => this.parseUnary());
     }
     if (this.peek() === '-') {
       this.next();
-      return -this.parseUnary();
+      return -this.nest(() => this.parseUnary());
     }
     return this.parsePostfix();
   }
@@ -167,7 +191,7 @@ class Parser {
     const t = this.peek();
     if (t === '(') {
       this.next();
-      const v = this.parseExpr();
+      const v = this.nest(() => this.parseExpr());
       if (this.next() !== ')') throw new Error('missing closing parenthesis');
       return v;
     }
@@ -280,9 +304,11 @@ function rational(num: bigint, den: bigint): ExactRational {
   return { num: n, den: d };
 }
 
-class ExactParser {
+class ExactParser extends NestingGuard {
   private pos = 0;
-  constructor(private readonly tokens: string[]) {}
+  constructor(private readonly tokens: string[]) {
+    super();
+  }
 
   private peek(): string | undefined {
     return this.tokens[this.pos];
@@ -327,7 +353,7 @@ class ExactParser {
     const base = this.parseUnary();
     if (this.peek() === '^') {
       this.next();
-      return this.power(base, this.parseFactor());
+      return this.power(base, this.nest(() => this.parseFactor()));
     }
     return base;
   }
@@ -352,11 +378,11 @@ class ExactParser {
   private parseUnary(): ExactRational {
     if (this.peek() === '+') {
       this.next();
-      return this.parseUnary();
+      return this.nest(() => this.parseUnary());
     }
     if (this.peek() === '-') {
       this.next();
-      const v = this.parseUnary();
+      const v = this.nest(() => this.parseUnary());
       return { num: -v.num, den: v.den };
     }
     return this.parsePostfix();
@@ -375,7 +401,7 @@ class ExactParser {
     const t = this.peek();
     if (t === '(') {
       this.next();
-      const v = this.parseExpr();
+      const v = this.nest(() => this.parseExpr());
       if (this.next() !== ')') throw new Error('missing closing parenthesis');
       return v;
     }

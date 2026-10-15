@@ -13,7 +13,12 @@ import {
   typeClaim,
   segmentClaims,
 } from '../src/hal/claim-typing';
-import { safeEvalArithmetic } from '../src/hal/safe-arithmetic';
+import {
+  safeEvalArithmetic,
+  safeEvalExact,
+  MAX_NESTING_DEPTH,
+  NESTING_TOO_DEEP,
+} from '../src/hal/safe-arithmetic';
 import {
   runExecutionFloor,
   applyExecutionFloor,
@@ -240,5 +245,37 @@ describe('runExecutionFloor over a mixed output', () => {
     const report = await runExecutionFloor(output);
     expect(report.verdicts.length).toBeGreaterThanOrEqual(3);
     expect(report.hasAuthoritativeFailure).toBe(true); // the 2+2=5 line
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nesting depth: a named NOT_CHECKED, never a stack overflow
+// ---------------------------------------------------------------------------
+describe('safe arithmetic refuses deep nesting by name', () => {
+  const parens = (n: number, inner = '1+1') => '('.repeat(n) + inner + ')'.repeat(n);
+
+  it.each([
+    ['3,996 nested parentheses (fits the 8,000-char /evaluate cap)', parens(3996)],
+    ['5,000 unary minus signs', '-'.repeat(5000) + '1'],
+    ['a 5,000-long ^ chain', '2^'.repeat(5000) + '2'],
+  ])('%s', (_name, expr) => {
+    expect(safeEvalArithmetic(expr)).toEqual({ ok: false, error: NESTING_TOO_DEEP });
+    expect(safeEvalExact(expr)).toEqual({ ok: false, error: NESTING_TOO_DEEP });
+  });
+
+  it('the limit is exact: MAX_NESTING_DEPTH levels evaluate, one more does not', () => {
+    expect(safeEvalArithmetic(parens(MAX_NESTING_DEPTH))).toEqual({ ok: true, value: 2 });
+    expect(safeEvalExact(parens(MAX_NESTING_DEPTH))).toMatchObject({ ok: true, value: { num: 2n, den: 1n } });
+    expect(safeEvalArithmetic(parens(MAX_NESTING_DEPTH + 1))).toEqual({ ok: false, error: NESTING_TOO_DEEP });
+    // Siblings are not nesting: depth is released on the way out.
+    expect(safeEvalArithmetic(Array(500).fill(parens(50)).join(' + '))).toEqual({ ok: true, value: 1000 });
+  });
+
+  it('the floor reports it as not checked, not as a pass or a fail', async () => {
+    const v = await checkClaim(typeClaim(`${parens(150)} = 2`));
+    expect(v.executed).toBe(false);
+    expect(v.passed).toBeNull();
+    expect(v.authoritative).toBe(false);
+    expect(v.result).toContain(NESTING_TOO_DEEP);
   });
 });
