@@ -67,11 +67,19 @@ Step 2 is the measurement:
   the configured list and the families that actually answered.
 - **Calls:** the free providers run in parallel first. If fewer than 3 families answer, the cheap wave
   runs, then the escalation wave. On top of that come at most 1 retry per 429, a Grok tiebreak when the
-  families are evenly split, and 1 prefilter call when JEV is enabled. Expect about 3 to 5 calls a row,
-  so 400 calls cover roughly 80 to 130 rows, of which about 1 to 2 calls a row go to Groq. `--max-calls`
+  families are evenly split, and 1 prefilter call when JEV is enabled. ~~Expect about 3 to 5 calls a
+  row, so 400 calls cover roughly 80 to 130 rows.~~ **Corrected 2026-10-15 [measured]:** the operator's
+  key file configures 7 providers. In the smoke the free wave was rate-limited, and the first row
+  cost **9** calls. So 400 calls cover about **44** rows, and the paid slots (deepseek, anthropic) are
+  called whenever the free wave fails (E:\deveports6-10-15\CC1_HAL_SMOKE_2026-10-15.md). `--max-calls`
   counts every outbound call that is not to Supabase. The overshoot is at most one row. The first row
   always runs.
+- **Isolation (2026-10-15):** a run writes nothing to production by default (`measure-isolation.ts`):
+  `llm_call_log` and `ops_alerts` go to a local SQLite file, Dragonfly and Telegram are off. Pass
+  `--write-prod` only for a run that is meant to be production traffic.
 - **Window:** Fri 2026-10-16 **00:15 UTC**, just after providers that reset at UTC midnight have reset.
+  The smoke at 01:26 UTC still met 429s from OpenRouter's shared upstream pool and from Mistral, so
+  timing does not remove rate limits.
   [reported, not verified] Gemini's free daily quota resets at midnight Pacific, which is 07:00 UTC in
   October. If gemini is in the configured set, run at **07:15 UTC** instead. Check the remaining Groq
   quota in its console first: live HAL and the T12 swarm use the same key.
@@ -80,8 +88,8 @@ Step 2 is the measurement:
 
 ## 4. How the result is reported (all of it, or it is not quoted)
 
-    F1 = <x> on hal-v1-frozen@1a3ef7ac5c37 first <k> of 284 (evalOrder) [all] at <N> families, strictness 2, checked rows only
-    NOT_CHECKED <a>/<k> (<r>%): errors, abstains and extractor fallbacks, left out of the F1 above
+    F1 = <x> on hal-v1-frozen@1a3ef7ac5c37 first <k> of 284 (evalOrder) [all] at <N> families, strictness 2, scoring v2-no-agreement-is-not-checked, checked rows only
+    NOT_CHECKED <a>/<k> (<r>%): errors, abstains, extractor fallbacks and vetoes no checker voted FALSE for, left out of the F1 above
     per class: hallucination P/R/F1 (n) | supported P/R/F1 (n)
     legacy F1 (abstain scored as a pass) = <y>; providers configured [...]; families answered [...];
     quorum-width histogram {...}; provider calls <c> of max 400; runner commit <sha>

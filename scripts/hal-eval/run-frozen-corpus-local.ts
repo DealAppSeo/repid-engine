@@ -39,20 +39,27 @@
  * are taken in evalOrder() (class-interleaved sha256(id)), and so is `--limit`, so a capped run is
  * the first k rows of a content-defined order and its ruler says "first k of N".
  *
- * NOT_CHECKED. An abstain, an extractor fallback or an error is HAL not judging the row. The legacy
- * F1 (kept for comparison with earlier runs) scores an abstain as a pass; the run also prints F1
- * over checked rows only, per class, with the NOT_CHECKED rate beside it.
+ * NOT_CHECKED (scoring v2-no-agreement-is-not-checked, 2026-10-15). An abstain, an extractor
+ * fallback, an error, or a VETO NO CHECKER VOTED FALSE FOR is HAL not judging the row. The smoke on
+ * 2026-10-15 scored a TP from two UNCERTAIN votes at halScore 0.5; under v1 that read as a catch.
+ * The legacy F1 (kept for comparison with pre-2026-10-14 runs) scores an abstain as a pass. Every
+ * output names its `scoring`, and numbers on different scorings are never compared.
+ *
+ * ISOLATION (2026-10-15). By default nothing reaches production: see measure-isolation.ts, imported
+ * first. --write-prod restores the live write paths, for when a run is MEANT to be production traffic.
  *
  * Usage:
  *   npx ts-node scripts/hal-eval/run-frozen-corpus-local.ts [--split holdout|retired-holdout|train|all]
- *        [--corpus rigorous-v1] [--limit N] [--max-calls N] [--concurrency 4]
+ *        [--corpus rigorous-v1] [--limit N] [--max-calls N] [--concurrency 4] [--write-prod]
  */
+// FIRST, before dotenv and before anything that reads config at import time: no prod writes unless --write-prod.
+import { ISOLATION, isolationBanner } from './measure-isolation';
 import 'dotenv/config';
 import * as dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { isHallucination, confusionMatrix, prf1, rocAuc, isNotChecked, perClass, evalOrder } from './metrics';
+import { isHallucination, confusionMatrix, prf1, rocAuc, perClass, evalOrder, isNotCheckedV2, isNoAgreementVeto, SCORING } from './metrics';
 import {
   exitCodeFor,
   familiesRecord,
@@ -156,6 +163,8 @@ interface Scored {
   mode?: string;
   familiesUsed?: number;
   families?: string[];
+  /** Each checker's verdict, counted (TRUE / FALSE / UNCERTAIN / ERROR). Scoring v2 reads it. */
+  votes?: Record<string, number>;
   error?: string;
 }
 
@@ -180,7 +189,9 @@ interface Scored {
   const measuredAt = new Date().toISOString();
   const runId = `local-${measuredAt}`;
 
+  console.log(isolationBanner(ISOLATION));
   console.log(`ruler      : ${RULER}`);
+  console.log(`scoring    : ${SCORING}`);
   console.log(`split      : ${split}${split === 'all' ? '  ** INCLUDES TRAIN — not a holdout number **' : ''}`);
   if (!isPrivate) console.log(`             ${retiredLine(`${stem} [${split}]`)}`);
   console.log(`rows       : ${rows.length}`);
@@ -249,6 +260,13 @@ interface Scored {
             mode: r?.mode,
             familiesUsed: typeof sig.families_used === 'number' ? (sig.families_used as number) : undefined,
             families: Array.isArray(sig.families) ? (sig.families as string[]) : undefined,
+            votes: Array.isArray(r?.provider_responses)
+              ? (r.provider_responses as Array<{ verdict?: unknown }>).reduce<Record<string, number>>((a, v) => {
+                  const k = String(v?.verdict ?? 'NONE');
+                  a[k] = (a[k] ?? 0) + 1;
+                  return a;
+                }, {})
+              : undefined,
           });
         } catch (e: any) {
           // A provider failure is NOT a wrong answer. Recorded separately and
@@ -268,9 +286,11 @@ interface Scored {
   const scored = results.filter((r) => !r.error && r.verdict);
   const attempted = results.length;
   const sample = attempted < splitRows ? ` first ${attempted} of ${splitRows} (evalOrder)` : '';
-  const notCheckedN = results.filter(isNotChecked).length;
+  // SCORING v2: an abstain, a fallback, an error, or a veto no checker voted FALSE for is NOT_CHECKED.
+  const notCheckedN = results.filter(isNotCheckedV2).length;
+  const noAgreementVetoes = results.filter((r) => !r.error && isNoAgreementVeto(r)).length;
   const notCheckedRate = attempted ? notCheckedN / attempted : 0;
-  const checkedConfusion = confusionMatrix(scored.filter((r) => !isNotChecked(r)));
+  const checkedConfusion = confusionMatrix(scored.filter((r) => !isNotCheckedV2(r)));
   const checked = { confusion: checkedConfusion, ...prf1(checkedConfusion), per_class: perClass(checkedConfusion) };
   const budget = { max_calls: maxCalls || null, provider_calls: calls, costliest_row_calls: concurrency === 1 ? costliestRow : null, not_run: rows.length - attempted };
 
@@ -341,7 +361,7 @@ interface Scored {
     console.log('======================================================================');
     fs.writeFileSync(
       path.join(outDir, `${isPrivate ? stem : `${stem}-${split}`}-${hashed.slice(0, 12)}.LOCAL.INCOMPLETE.json`),
-      JSON.stringify({ ruler: RULER, split, ...(isPrivate ? { holdout: 'private' } : retiredStamp()), coverage, scored: scored.length, rows: rows.length, attempted, errors: errors.length, error_kinds: kinds, budget, f1: null }, null, 2),
+      JSON.stringify({ ruler: RULER, scoring: SCORING, isolation: ISOLATION, split, ...(isPrivate ? { holdout: 'private' } : retiredStamp()), coverage, scored: scored.length, rows: rows.length, attempted, errors: errors.length, error_kinds: kinds, budget, f1: null }, null, 2),
     );
     process.exit(3);
   }
@@ -349,8 +369,8 @@ interface Scored {
   const pc = checked.per_class;
   const cls = (n: string, c: typeof pc.hallucination) =>
     `${n} P ${c.precision.toFixed(4)} R ${c.recall.toFixed(4)} F1 ${c.f1.toFixed(4)} (n=${c.support})`;
-  console.log(`  F1 = ${checked.f1.toFixed(4)} on ${RULER}${sample} [${split}] at ${Object.keys(familyParticipation).length} families, strictness 2 — checked rows only`);
-  console.log(`  NOT_CHECKED ${notCheckedN}/${attempted} (${(notCheckedRate * 100).toFixed(1)}%): errors, abstains and extractor fallbacks — left out of the F1 above`);
+  console.log(`  F1 = ${checked.f1.toFixed(4)} on ${RULER}${sample} [${split}] at ${Object.keys(familyParticipation).length} families, strictness 2, scoring ${SCORING} — checked rows only`);
+  console.log(`  NOT_CHECKED ${notCheckedN}/${attempted} (${(notCheckedRate * 100).toFixed(1)}%): errors, abstains, extractor fallbacks and ${noAgreementVetoes} veto(es) no checker voted FALSE for — left out of the F1 above`);
   console.log(`  per class: ${cls('hallucination', pc.hallucination)} | ${cls('supported', pc.supported)}`);
   console.log(`  legacy F1 (abstain/fallback scored as a pass, as in earlier runs) = ${f1.toFixed(4)}`);
   if (!isPrivate) console.log(`  ${retiredLine(`${stem} [${split}]`)}`);
@@ -367,10 +387,12 @@ interface Scored {
       {
         ruler: `${RULER}${sample}`,
         corpus_sha256: hashed,
+        scoring: SCORING,
+        isolation: ISOLATION,
         sample: { order: 'evalOrder: class-interleaved sha256(id)', attempted, of: splitRows },
         budget,
         providers_configured: providersConfigured,
-        not_checked: { count: notCheckedN, rate: notCheckedRate },
+        not_checked: { count: notCheckedN, rate: notCheckedRate, no_agreement_vetoes: noAgreementVetoes },
         checked,
         split,
         ...(isPrivate ? { holdout: 'private' } : retiredStamp()),
