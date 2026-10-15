@@ -25,12 +25,15 @@
  *   ENGINE_BASE_URL            — default https://repid-engine-production.up.railway.app
  *   BASE_SEPOLIA_RPC(_URL)     — default https://sepolia.base.org
  *   MINT_BUYER_AGENT           — buyer agent name (default trinity-nexus; must not be the provider)
+ *   MINT_PRICE_USDC_RAW        — optional price override in raw USDC (1000000 = $1), cap 5000000.
+ *                                Unset = the provider's listed price. Invalid = refuse (mint-price.mjs).
  *
  * Schedule (Railway cron, recommended — server-side, has all the env above):
  *   node scripts/cron/mint-attestation.mjs        # once per run; set a daily cron
  *
  * The server must have X402_REAL_RPC=true + X402_ENFORCEMENT_ENABLED=true for a real
- * settlement (already set). Cost: ~0.05-0.1 test-USDC per run from the buyer wallet.
+ * settlement (already set). Cost: the listed price (~0.05-0.1 test-USDC) per run from the buyer
+ * wallet, or MINT_PRICE_USDC_RAW when set.
  */
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
@@ -42,6 +45,7 @@ import {
   ACCEPTANCE_CRITERIA,
   CLAIM_TEXT,
 } from './rate-deliverable.mjs';
+import { resolveMintPrice } from './mint-price.mjs';
 
 const BASE = (process.env.ENGINE_BASE_URL || 'https://repid-engine-production.up.railway.app').replace(/\/+$/, '');
 const RPC = process.env.BASE_SEPOLIA_RPC || process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
@@ -124,7 +128,10 @@ async function main() {
   eligible.sort((a, b) => (lastByAgent.get(a.prov.id) || '').localeCompare(lastByAgent.get(b.prov.id) || ''));
   const svc = eligible[0].svc;
   const prov = eligible[0].prov;
-  console.log(`[mint-attestation] buyer=${buyer.agent_name} provider=${prov.agent_name} (repid ${prov.current_repid}, token ${prov.erc8004_token_id}) price=${Number(svc.base_price_usdc_raw) / 1e6} USDC`);
+  // ONE price for the contract, the work statement and the signed authorization. Resolved before any
+  // key is minted, so an invalid override refuses with nothing spent.
+  const price = resolveMintPrice(process.env.MINT_PRICE_USDC_RAW, svc.base_price_usdc_raw);
+  console.log(`[mint-attestation] buyer=${buyer.agent_name} provider=${prov.agent_name} (repid ${prov.current_repid}, token ${prov.erc8004_token_id}) price=${price.raw / 1e6} USDC (raw ${price.raw}, from ${price.source})`);
 
   const keys = [];
   try {
@@ -159,7 +166,7 @@ async function main() {
     const create = await api('POST', '/api/v1/contracts', buyerKey.raw, {
       service_id: svc.id,
       buyer_agent_id: buyer.id,
-      agreed_price_usdc_raw: Number(svc.base_price_usdc_raw),
+      agreed_price_usdc_raw: price.raw,
       payload: {
         content: claimText,
         title: `living-proof-${Date.now()}`,
@@ -167,7 +174,7 @@ async function main() {
         deliverable: `A cross-provider factual verification verdict on the claim: "${claimText}"`,
         acceptance_criteria: ACCEPTANCE_CRITERIA,
         deadline,
-        agreed_price: { amount_usdc_raw: Number(svc.base_price_usdc_raw), currency: 'USDC' },
+        agreed_price: { amount_usdc_raw: price.raw, currency: 'USDC' },
       },
     });
     if (create.status !== 201 || !create.json?.id) throw new Error('create -> ' + create.status + ' ' + JSON.stringify(create.json).slice(0, 160));
@@ -185,7 +192,7 @@ async function main() {
         'escrow so no funds are committed to a contract that cannot be delivered.'
       );
     }
-    const header = await buildX402(prov.wallet_address, String(svc.base_price_usdc_raw));
+    const header = await buildX402(prov.wallet_address, String(price.raw));
     const escrow = await api('POST', `/api/v1/contracts/${cid}/escrow`, buyerKey.raw, {}, { 'X-PAYMENT': header });
     if (escrow.status !== 200 || escrow.json?.status !== 'escrowed') throw new Error('escrow -> ' + escrow.status + ' ' + JSON.stringify(escrow.json).slice(0, 200));
     console.log(`[mint-attestation] escrowed ${cid} (real x402 USDC settled)`);
