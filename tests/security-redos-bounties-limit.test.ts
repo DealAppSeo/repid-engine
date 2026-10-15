@@ -46,13 +46,31 @@ describe('email validation rejects long input before the polynomial regex', () =
     const app = express();
     app.use(express.json({ limit: '1mb' }));
     app.use(subscribeRouter);
-    const t = Date.now();
-    const res = await request(app).post('/subscribe').send({ email: HOSTILE_EMAIL });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('invalid_email');
-    expect(Date.now() - t).toBeLessThan(1000);
+    const post = async (email: string) => {
+      const t = performance.now();
+      const res = await request(app).post('/subscribe').send({ email });
+      return { res, ms: performance.now() - t };
+    };
+    // A wall-clock budget on a full HTTP round trip flaked under parallel CI load (1,096 ms against
+    // 1,000). So: compare against a same-size CONTROL on the same route, median of 5, interleaved.
+    // Load slows both sides together; a super-linear regex slows only the hostile one. The control
+    // has no '@', so EMAIL_RE fails it in one linear pass even if the length check were gone.
+    // Measured locally: medians 17 vs 15 ms with the length check first; 5,143 vs 15 ms with the regex first.
+    const CONTROL_EMAIL = 'a'.repeat(HOSTILE_EMAIL.length);
+    const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
+    await post(CONTROL_EMAIL); // warm up the app and the JSON parser
+    const hostile: number[] = [];
+    const control: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const h = await post(HOSTILE_EMAIL);
+      expect(h.res.status).toBe(400);
+      expect(h.res.body.error).toBe('invalid_email');
+      hostile.push(h.ms);
+      control.push((await post(CONTROL_EMAIL)).ms);
+    }
+    expect(median(hostile)).toBeLessThan(5 * median(control) + 50);
     expect(fromMock).not.toHaveBeenCalled();
-  });
+  }, 60_000); // the regex-first order takes ~5 s per hostile post; fail on the ratio, not the timeout
 
   test('a normal email still passes validation', () => {
     expect(validateApiKeyRequestBody({ email: 'dev@example.com', use_case: 'a long enough use case' })).toMatchObject({ ok: true });
