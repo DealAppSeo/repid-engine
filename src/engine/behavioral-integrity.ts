@@ -14,9 +14,8 @@
  * documented, interpretable heuristics and are marked with LOWER confidence —
  * they are advisory signals, not proofs.
  *
- * Chain construction reuses the same keccak256 primitive as
- * src/engine/hashkey-chain.ts (evidenceHash), so a receipt root is anchorable
- * on-chain by the existing path with no new crypto.
+ * Chain construction uses keccak256 (the same primitive the EAS / ERC-8004
+ * paths hash with), so a receipt root is anchorable on-chain with no new crypto.
  *
  * A CONFIRMED detection (confidence >= DETECTION_CONFIRM_THRESHOLD) feeds M1's
  * DEFENDED_DECEPTION penalty event (see src/engine/repid-update.ts). This module

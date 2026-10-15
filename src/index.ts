@@ -17,7 +17,6 @@ import agentsRouter from './routes/agents';
 import scoreRouter from './routes/score';
 import referendumRouter from './routes/referendum';
 import bountiesRouter from './routes/bounties';
-import hashkeyRouter from './routes/hashkey';
 import mirrorTestRouter from './routes/mirror-test';
 import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';

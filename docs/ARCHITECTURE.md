@@ -31,7 +31,7 @@ RepID gates payment authorization. High RepID = lower friction / higher limits.
 gated OFF by `CONSTITUTIONAL_AUDIT_ENABLED=false` and influencing no score).
 
 - Detects **defended deception** by checking each interaction against a keccak256 **hash-chained
-  interaction record** (reuses `hashkey-chain.ts` `evidenceHash` — anchorable on-chain, no new crypto).
+  interaction record** (keccak256, the primitive the EAS / ERC-8004 paths hash with — anchorable on-chain, no new crypto).
 - **Record-grounded classes** (denial-of-prior-output, fabricated citation/tool/benchmark, story-change)
   fire only on a provable mismatch against the chain — precision/recall ≈ 1.0 on the grounded eval set.
   **Heuristic classes** (doubt-attack, sycophancy, threshold-dancing) are advisory-only, weaker on

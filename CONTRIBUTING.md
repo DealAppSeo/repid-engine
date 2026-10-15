@@ -53,7 +53,7 @@ npm test                                  # jest (uses --config jest.config.js -
 2. **Engine / scoring (`src/engine/`, `src/scoring/`)** — `updateRepId` / `runScoreEvent` turn `(prompt, answer) + agent state` into a HAL evaluation, a RepID delta (vesting-aware), a `repid_score_events` row, an agent update, and a ZK-proof trigger. Tier is **DB-derived** (the `trg_sync_tier` trigger overwrites app-side `tier` from `current_repid` — don't fight it).
 3. **Layers (`src/layers/`)** — pure-ish scoring math: decay, prediction, challenge, ecosystem-need, constitutional-audit. Several are intentional "Sprint 3" stubs (always-pass) — don't hardcode behavior into them.
 4. **HAL (`src/hal/`)** — the hallucination scorer. Extractor path (5 linguistic signals: harm/epistemic/evidence/scope/certainty) at strictness 1; cross-LLM fact-check (groq + cerebras + fireworks) at strictness 2. Gated by `HAL_STRICTNESS` (+ `HAL_ENRICHMENT_ENABLED`).
-5. **Attestation (`src/zkp/`, audit chain, `src/engine/hashkey-chain.ts`)** — hash-chained audit trail (`verify-chain.ts`), ZKP merkle aggregation + EAS/ERC-8004 anchoring, HashKey on-chain. Most on-chain writes are Sean/key-gated; ZKP/EAS have always-on stubs.
+5. **Attestation (`src/zkp/`, audit chain)** — hash-chained audit trail (`verify-chain.ts`), ZKP merkle aggregation + EAS/ERC-8004 anchoring. Most on-chain writes are Sean/key-gated; ZKP/EAS have always-on stubs.
 
 RLS: all 545 public tables have RLS enabled; writers use the **service-role** key or the **postgres pooler** role (both bypass RLS) — anon/authenticated are denied by default. Don't add anon write paths.
 

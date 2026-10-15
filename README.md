@@ -37,7 +37,7 @@ This section names only what the engine calls and what calls it. The whole map i
 - **The controller** at https://controller.aitrinitysymphony.com, for human-in-the-loop escalations. The engine records the escalation in Supabase and sends the operator a link to it in the controller (`src/services/escalation-router.ts`, `src/services/hitl-notification-dispatcher.ts`). `CONTROLLER_APP_URL` overrides the address. The engine does not call the controller's API.
 - **Supabase** (Postgres) — all engine state. The schema is managed outside this repo; `CLAUDE.md` lists the tables the engine uses.
 
-It also calls, and the test does not pin: the LLM providers in the HAL quorum (`src/hal/fact-check.ts`; hosts in `src/egress/provider-hosts.ts`), EAS on Base Sepolia for proof attestations (`src/services/eas-attestation-service.ts`), the HashKey testnet RPC (`src/engine/hashkey-chain.ts`), and Telegram for operator alerts (`src/routes/telegram.ts`).
+It also calls, and the test does not pin: the LLM providers in the HAL quorum (`src/hal/fact-check.ts`; hosts in `src/egress/provider-hosts.ts`), EAS on Base Sepolia for proof attestations (`src/services/eas-attestation-service.ts`), and Telegram for operator alerts (`src/routes/telegram.ts`).
 
 **Called by** (each found in that repo's own code):
 
@@ -332,7 +332,7 @@ Full API: [`docs/HAL_LIBRARY_API.md`](docs/HAL_LIBRARY_API.md). Tampering spec: 
 
 ## Behavioral integrity — defended deception (shadow mode)
 
-`src/engine/behavioral-integrity.ts` adds a behavioral-integrity layer that targets **defended deception** — the failure mode where an agent's own account of events cannot be trusted (the "I never said that" defense). Rather than asking a model to adjudicate, it checks each new interaction against a **keccak256 hash-chained interaction record** (the same primitive as `evidenceHash` in `src/engine/hashkey-chain.ts`, so a receipt root is anchorable on-chain with no new crypto). Tampering with any prior receipt breaks every hash after it.
+`src/engine/behavioral-integrity.ts` adds a behavioral-integrity layer that targets **defended deception** — the failure mode where an agent's own account of events cannot be trusted (the "I never said that" defense). Rather than asking a model to adjudicate, it checks each new interaction against a **keccak256 hash-chained interaction record** (the primitive the EAS / ERC-8004 paths hash with, so a receipt root is anchorable on-chain with no new crypto). Tampering with any prior receipt breaks every hash after it.
 
 The penalty is **asymmetric by design**: an honest wrong answer stays cheap (so agents surface it), while a *confirmed, grounded* defended-deception event is penalized several times heavier. The asymmetry is the mechanism.
 

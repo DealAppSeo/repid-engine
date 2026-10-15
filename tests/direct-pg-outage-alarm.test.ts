@@ -176,7 +176,7 @@ describe('direct-pg outage alarm', () => {
    * WIRING, ASSERTED AT THE SOURCE, AND THE REASON IT IS NOT A ROUTE TEST.
    *
    * Driving `GET /health` through supertest boots the whole app: it queries Supabase,
-   * dials the HashKey RPC and reads `validation_queue`. In a sandbox with no reachable
+   * reads `validation_queue`. In a sandbox with no reachable
    * upstream that exceeds jest's timeout, and where it DOES pass, its verdict tracks
    * network conditions rather than the wiring. This repo has paid for that before —
    * `jest.config.js` records two unit tests "making live Supabase calls on a fail-open

@@ -24,7 +24,7 @@ export const openApiSpec = {
     { name: "Reponomics & Staking", description: "Economic skin-in-the-game and betting protocols" },
     { name: "x402 Payments", description: "Agent-to-agent micropayment and tipping protocols" },
     { name: "Bounties", description: "Work coordination and verification" },
-    { name: "Audit & Hashkey", description: "Merkle-anchored audit logs and immutable hashes" },
+    { name: "Audit", description: "Merkle-anchored audit logs and immutable hashes" },
     { name: "Receipts", description: "Verifiable trust receipts and content-addressable history" }
   ],
   paths: {
@@ -307,24 +307,9 @@ export const openApiSpec = {
     },
     "/api/v1/audit/verify": {
       get: {
-        tags: ["Audit & Hashkey"],
+        tags: ["Audit"],
         summary: "Verify Merkle audit chain",
         responses: { "200": { description: "Verification results" } }
-      }
-    },
-    "/hashkey": {
-      get: {
-        tags: ["Audit & Hashkey"],
-        summary: "Get HashKey chain status",
-        responses: { "200": { description: "Status details" } }
-      }
-    },
-    "/hashkey/anchor/{agentId}": {
-      get: {
-        tags: ["Audit & Hashkey"],
-        summary: "Generate on-chain anchor",
-        parameters: [{ name: "agentId", in: "path", required: true, schema: { type: "string" } }],
-        responses: { "200": { description: "Anchor metadata" } }
       }
     },
     "/api/v1/receipts": {
@@ -351,7 +336,7 @@ export const openApiSpec = {
     },
     "/api/v1/network/status": {
       get: {
-        tags: ["Audit & Hashkey"],
+        tags: ["Audit"],
         summary: "Get global network status",
         responses: { "501": { description: "Not implemented" } }
       }
