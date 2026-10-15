@@ -67,6 +67,27 @@ function paidStep(r: TrustReceipt): string {
   return step(4, title, `<p><strong>${esc(r.price_usdc)} USDC</strong> on Base Sepolia.</p>${wallets}${tx}${sim}`);
 }
 
+/**
+ * The agreed spec, as text. Step 8 says "recompute it yourself", but the page carried only the hash;
+ * the preimage lived behind the JSON link. It is an object, so it is rendered field by field and never
+ * interpolated (that prints "[object Object]"). Each criterion shows the buyer's rating beside it.
+ */
+function workStatement(r: TrustReceipt): string {
+  const ws = r.work_statement as { deliverable?: unknown; acceptance_criteria?: unknown } | null;
+  if (!ws || typeof ws !== 'object') return '';
+  const ratings = Array.isArray(r.criterion_ratings) ? (r.criterion_ratings as Array<{ n?: unknown; met?: unknown }>) : [];
+  const met = new Map(ratings.map((x) => [Number(x?.n), x?.met]));
+  const criteria = (Array.isArray(ws.acceptance_criteria) ? ws.acceptance_criteria : []) as Array<{ n?: unknown; text?: unknown }>;
+  const items = criteria
+    .map((c) => {
+      const m = met.get(Number(c?.n));
+      const verdict = m === true ? 'met' : m === false ? 'not met' : 'not rated';
+      return `<li value="${Number(c?.n) || ''}">${esc(c?.text)} <span class="muted">— ${verdict}</span></li>`;
+    })
+    .join('');
+  return `<p><strong>Agreed deliverable:</strong> ${esc(ws.deliverable)}</p>${items ? `<ol>${items}</ol>` : ''}`;
+}
+
 function render(r: TrustReceipt): string {
 
   const negotiation = r.negotiated
@@ -101,6 +122,7 @@ function render(r: TrustReceipt): string {
   const binding = r.work_statement_hash
     ? step(8, 'This proof is bound to THIS work',
         `<p class="muted"><code>${esc(r.work_statement_hash)}</code></p>
+         ${workStatement(r)}
          <p>A commitment over this exchange's immutable facts, recorded at settlement. Recompute it yourself and it must match — so this evidence cannot be replayed for a different deliverable, and the facts cannot be edited afterwards without the hash disagreeing.</p>
          <p class="muted">It binds the proof to this work. It does <strong>not</strong> assert the work was correct.</p>`)
     : '';
