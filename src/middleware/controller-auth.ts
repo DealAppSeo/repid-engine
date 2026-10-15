@@ -84,10 +84,20 @@ export async function resolveSbt(req: Request): Promise<SbtContext | null> {
 function isMasterKey(key: string): boolean {
   const master = (process.env.CONTROLLER_MASTER_KEY || '').trim();
   if (!master) return false;
-  // Hash both sides so the compare is fixed-length: no early return that leaks the key's length.
-  const digest = (v: string) => crypto.createHash('sha256').update(v, 'utf8').digest();
-  return crypto.timingSafeEqual(digest(key), digest(master));
+  // Fixed-length compare: both sides zero-padded to MASTER_KEY_MAX_BYTES, so the time spent never
+  // depends on either length (a plain length check returns early and leaks the master's length).
+  // Not hashed: CodeQL reads a fast hash of an API key as weak password hashing. A master key
+  // longer than the bound is never accepted (fail closed); 32-64 random characters is the intent.
+  const a = Buffer.from(key, 'utf8');
+  const b = Buffer.from(master, 'utf8');
+  if (a.length > MASTER_KEY_MAX_BYTES || b.length > MASTER_KEY_MAX_BYTES) return false;
+  const pa = Buffer.alloc(MASTER_KEY_MAX_BYTES);
+  const pb = Buffer.alloc(MASTER_KEY_MAX_BYTES);
+  a.copy(pa);
+  b.copy(pb);
+  return crypto.timingSafeEqual(pa, pb) && a.length === b.length;
 }
+const MASTER_KEY_MAX_BYTES = 256;
 
 export async function resolveControllerRole(req: Request): Promise<'viewer' | 'operator' | 'admin' | null> {
   // 1. Check for scoped QR token in Authorization header, x-controller-token header, or query param

@@ -179,7 +179,7 @@ describe('[S1 follow-up] a signed token is only as good as its role allowlist an
 
   it('the master key matches exactly: a prefix or an extension of it is not master', async () => {
     process.env.CONTROLLER_MASTER_KEY = MASTER;
-    for (const k of [MASTER.slice(0, -1), `${MASTER}x`, MASTER.toUpperCase()]) {
+    for (const k of [MASTER.slice(0, -1), `${MASTER}x`, MASTER.toUpperCase(), 'x'.repeat(300)]) {
       const res = await request(app).post('/api/v1/controller/sleep/trinity-mel').set('x-api-key', k).send({});
       expect(res.status).toBe(401);
     }
