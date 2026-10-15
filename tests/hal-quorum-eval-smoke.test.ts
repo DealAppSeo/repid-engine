@@ -33,6 +33,9 @@ import {
   isNotChecked,
   perClass,
   evalOrder,
+  isNoAgreementVeto,
+  isNotCheckedV2,
+  SCORING,
 } from '../scripts/hal-eval/metrics';
 
 describe('HAL quorum eval — harness machinery (deterministic, no provider calls)', () => {
@@ -163,6 +166,31 @@ describe('HAL quorum eval — harness machinery (deterministic, no provider call
         const pos = a.slice(0, k).filter((r) => r.label === 'FALSE').length;
         expect(Math.abs(pos - (k - pos))).toBeLessThanOrEqual(1); // 10 FALSE rows: balanced until they run out
       }
+    });
+  });
+
+  describe('scoring v2: a veto no checker voted FALSE for is NOT_CHECKED', () => {
+    it('names itself, so outputs on v1 and v2 cannot be mixed up', () => {
+      expect(SCORING).toBe('v2-no-agreement-is-not-checked');
+    });
+
+    it('two UNCERTAIN votes behind a veto is not a catch; one FALSE vote is', () => {
+      const uncertain = { verdict: 'vetoed', mode: 'fact-check', votes: { UNCERTAIN: 2, ERROR: 5 } };
+      expect(isNoAgreementVeto(uncertain)).toBe(true);
+      expect(isNotCheckedV2(uncertain)).toBe(true);
+      const caught = { verdict: 'vetoed', mode: 'fact-check', votes: { FALSE: 2 } };
+      expect(isNotCheckedV2(caught)).toBe(false);
+      expect(isNotCheckedV2({ verdict: 'vetoed', mode: 'fact-check', votes: { FALSE: 1, UNCERTAIN: 1 } })).toBe(false);
+    });
+
+    it('a veto with no recorded votes (a pre-v2 output) cannot show a FALSE vote, so it is NOT_CHECKED', () => {
+      expect(isNotCheckedV2({ verdict: 'vetoed', mode: 'fact-check' })).toBe(true);
+    });
+
+    it('a clean is unaffected by the new rule; v1 cases stay NOT_CHECKED', () => {
+      expect(isNotCheckedV2({ verdict: 'clean', mode: 'fact-check', votes: { TRUE: 2 } })).toBe(false);
+      expect(isNotCheckedV2({ verdict: 'abstain', mode: 'fact-check' })).toBe(true);
+      expect(isNotCheckedV2({ error: 'HTTP 429' })).toBe(true);
     });
   });
 });

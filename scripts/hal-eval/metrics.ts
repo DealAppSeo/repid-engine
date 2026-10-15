@@ -136,3 +136,25 @@ export function evalOrder<T extends { id: string; label: string }>(rows: T[]): T
   }
   return out;
 }
+
+/**
+ * The scoring rule a run's `checked` numbers are taken under. Numbers under different scorings are
+ * different rulers and are never compared (CLAUDE_RULES 24).
+ *   v1 (2026-10-14): NOT_CHECKED = an error, an abstain or an extractor fallback (isNotChecked).
+ *   v2: v1, plus a veto no checker voted FALSE for. A veto built only of UNCERTAIN votes (halScore
+ *       0.5, the all-UNCERTAIN over-veto) is not a catch. A row with no recorded votes, such as an
+ *       output written before v2, cannot show a FALSE vote and so reads NOT_CHECKED. A veto forced
+ *       by the ground-truth gate or the execution floor with no FALSE vote reads NOT_CHECKED too:
+ *       conservative on purpose.
+ */
+export const SCORING = 'v2-no-agreement-is-not-checked';
+
+/** A veto that no checker voted FALSE for. */
+export function isNoAgreementVeto(r: { verdict?: string; votes?: Record<string, number> }): boolean {
+  return predictedHallucination(r.verdict) && !((r.votes?.FALSE ?? 0) > 0);
+}
+
+/** NOT_CHECKED under scoring v2. */
+export function isNotCheckedV2(r: { error?: string; verdict?: string; mode?: string; votes?: Record<string, number> }): boolean {
+  return isNotChecked(r) || isNoAgreementVeto(r);
+}
