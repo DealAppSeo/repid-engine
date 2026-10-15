@@ -25,7 +25,8 @@
  * (unsigned, or pre-consumed) suppressed a real signed wrong, and args_hash is client-chosen, so "one
  * wrong per content" never meant one wrong per piece of work. Each signed FAILED receipt is a distinct
  * kernel decision and is spent once, by receipt_id. The MAX_PER_RUN cap counts ACCEPTED rows, and the
- * scan reads past refused ones (up to SCAN_FACTOR × the cap), so a batch of decoys cannot starve it.
+ * scan pages past refused ones with a keyset cursor that persists across ticks (see SCAN_FACTOR), so a
+ * batch of decoys costs ticks and can never pin the window.
  * Shadow and enforce make the same decision on the same rows: the shadow count is what enforce applies.
  *
  * RESIDUAL (stated, not closed here): a writer that can UPDATE kernel_receipts can still mark the real
@@ -69,14 +70,26 @@ export type FailedSettleMode = 'off' | 'shadow' | 'enforce';
 export const SETTLE_EVENT_TYPE: RepIdEventType = 'CHALLENGE_LOSS';
 const INTERVAL_MS = 15 * 60 * 1000;
 /**
- * Rows read per run = SCAN_FACTOR × MAX_PER_RUN, so refused rows in front cannot starve a signed wrong.
- * Unsigned rows are filtered out in the query; only rows carrying SOME signature can occupy the scan.
- * ponytail: one bounded read, not pagination. Any finite scan can be flooded by a service-role writer
- * with garbage-signed rows (Postgres cannot check the signature), and paging only moves the ceiling, so
- * the answer is detection: a window holding more refused rows than this is logged LOUDLY every run
- * (scan_ceiling). Page by (created_at, receipt_id) if that ever fires for a reason other than an attack.
+ * Rows read per tick = SCAN_FACTOR × MAX_PER_RUN (the per-tick budget). Unsigned rows are filtered out
+ * in the query; only rows carrying SOME signature can be read.
+ *
+ * KEYSET, NOT A CEILING (XC1 re-attack of #1384). A one-shot oldest-first read could be pinned: N
+ * garbage-signed rows (Postgres cannot check secp256k1) dated just before a victim refilled every read,
+ * so the victim never fit until its TTL ran out, and the loud log was detection, not a drain. Now each
+ * tick reads the NEXT page after `scanCursor` = the (created_at, receipt_id) of the last row it
+ * processed, refused rows included, so N refused rows cost ceil(N / budget) ticks, never forever. A
+ * short page means the window is exhausted: the cursor wraps to the oldest row, so a row refused for a
+ * transient reason (a missing key) is reconsidered. The cursor lives in memory: a restart starts from the
+ * oldest row again and progress resumes from there; no DDL.
  */
 const SCAN_FACTOR = 20;
+let scanCursor: { createdAt: string; receiptId: string } | null = null;
+/** Test seam: forget the keyset position. */
+export function __resetSettleCursor(): void {
+  scanCursor = null;
+}
+/** A PostgREST logic-tree value, double-quoted so ':' '.' ',' in a timestamp or id cannot break the tree. */
+const pgQuote = (v: string) => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
 export function failedSettleMode(): FailedSettleMode {
   const m = (process.env['CONFIRMED_FAILED_SETTLE_MODE'] ?? '').trim().toLowerCase();
@@ -99,8 +112,10 @@ export interface SettleSummary {
   accepted: number;
   applied: Array<{ receiptId: string; agentId: string; delta: number }>;
   held: Array<{ receiptId: string; agentId: string; why: string }>;
-  /** True when the scan read its whole SCAN_FACTOR × MAX_PER_RUN budget without filling the cap (logged loudly). */
-  scanCeiling?: true;
+  /** True when this tick read its whole SCAN_FACTOR × MAX_PER_RUN budget without filling the cap (logged loudly). */
+  scanBudgetSpent?: true;
+  /** Where the next tick's read starts (null: from the oldest row). */
+  nextCursor: { createdAt: string; receiptId: string } | null;
 }
 
 let running = false;
@@ -108,7 +123,7 @@ let running = false;
 /** One pass. Exported for tests and for an operator one-shot; never throws. */
 export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
   const mode = failedSettleMode();
-  const summary: SettleSummary = { mode, found: 0, accepted: 0, applied: [], held: [] };
+  const summary: SettleSummary = { mode, found: 0, accepted: 0, applied: [], held: [], nextCursor: scanCursor };
   if (mode === 'off') return { ...summary, refused: 'mode_off' };
   if (running) return { ...summary, refused: 'already_running' };
   running = true;
@@ -148,7 +163,7 @@ export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
 
     const now = Date.now();
     const scanLimit = maxPerRun * SCAN_FACTOR;
-    const { data, error } = await db
+    let query = db
       .from('kernel_receipts')
       .select('receipt_id, subject_agent_id, settled_by, created_at')
       .eq('verification_status', 'FAILED')
@@ -158,15 +173,23 @@ export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
       .in('settled_by', ['holdout', 'known_answer'])
       // UNSIGNED ROWS NEVER ENTER THE SCAN (XC1 re-attack of #1378): they can never confirm, so letting
       // them in only lets them be stamped oldest to fill it. A row with a garbage (non-null) signature
-      // still enters: Postgres cannot check secp256k1. Those are refused by the verifier and count
-      // against SCAN_FACTOR only, with SCAN CEILING logged loudly if they fill it.
+      // still enters: Postgres cannot check secp256k1. Those are refused by the verifier, and the keyset
+      // cursor moves past them (see SCAN_FACTOR), so they cost ticks, never the victim.
       .not('engine_signature', 'is', null)
       // The window and the order read the created_at COLUMN. For any row that can be applied it IS the
       // signed time: the gate refuses a column more than CREATED_AT_SKEW_MS from header.created_at, and
       // the verifier's TTL reads the signed header itself.
       .lt('created_at', new Date(now - graceMs).toISOString())
-      .gt('created_at', new Date(now - ttlMs).toISOString())
+      .gt('created_at', new Date(now - ttlMs).toISOString());
+    if (scanCursor) {
+      // Strictly after the last processed row, in (created_at, receipt_id) order, so equal timestamps
+      // cannot stall the cursor either.
+      const c = pgQuote(scanCursor.createdAt);
+      query = query.or(`created_at.gt.${c},and(created_at.eq.${c},receipt_id.gt.${pgQuote(scanCursor.receiptId)})`);
+    }
+    const { data, error } = await query
       .order('created_at', { ascending: true })
+      .order('receipt_id', { ascending: true })
       .limit(scanLimit);
     if (error || !Array.isArray(data)) {
       console.error(`[failed-settle] read failed, nothing applied: ${error?.message ?? 'no data'}`);
@@ -176,8 +199,12 @@ export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
 
     // VERIFIER FIRST, ONE WRONG PER SIGNED RECEIPT (see the header). Nothing is keyed on an unsigned
     // column: a row either passes the same decision updateRepId makes, or it is refused and blocks nothing.
-    for (const row of data as Array<{ receipt_id: string; subject_agent_id: string; settled_by: 'holdout' | 'known_answer' }>) {
+    let processed = 0;
+    let last: { createdAt: string; receiptId: string } | null = null;
+    for (const row of data as Array<{ receipt_id: string; subject_agent_id: string; settled_by: 'holdout' | 'known_answer'; created_at: string }>) {
       if (summary.accepted >= maxPerRun) break;
+      processed++;
+      last = { createdAt: row.created_at, receiptId: row.receipt_id };
       const receiptId = row.receipt_id;
       const agentId = row.subject_agent_id;
       const decision = await previewSettledWrong(agentId, receiptId, row.settled_by);
@@ -208,12 +235,17 @@ export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
         summary.held.push({ receiptId, agentId, why: `error: ${e instanceof Error ? e.message : String(e)}` });
       }
     }
+    // Advance the keyset past everything processed. A short page read to its end means the window is
+    // exhausted: wrap to the oldest row next tick.
+    const exhausted = data.length < scanLimit && processed === data.length;
+    scanCursor = exhausted ? null : last ?? scanCursor;
+    summary.nextCursor = scanCursor;
     const refusedRows = summary.held.filter((h) => h.why.startsWith('verifier_refuses:')).length;
     if (data.length === scanLimit && summary.accepted < maxPerRun) {
-      summary.scanCeiling = true;
+      summary.scanBudgetSpent = true;
       console.error(
-        `[failed-settle] SCAN CEILING: read ${scanLimit} candidate FAILED receipts, ${refusedRows} refused by the verifier; ` +
-          'signed wrongs may be waiting behind them. Investigate the refused rows (decoys?).',
+        `[failed-settle] SCAN BUDGET SPENT: read ${scanLimit} candidate FAILED receipts, ${refusedRows} refused by the verifier; ` +
+          `the next tick continues after ${scanCursor?.createdAt} / ${scanCursor?.receiptId}. Investigate the refused rows (decoys?).`,
       );
     }
     console.warn(

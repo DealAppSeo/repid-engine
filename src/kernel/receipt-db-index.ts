@@ -37,8 +37,9 @@ export interface KernelReceiptIndexRow {
 /**
  * How far the created_at COLUMN may sit from the SIGNED header.created_at. The indexer writes the column
  * from the header, so a genuine row differs by 0; the slack only absorbs timestamp representation.
- * TTL, the settler's grace window and its scan order all read that column (the settler's from a query
- * that runs before any signature is checked), so an edited column is an edited receipt: refused.
+ * The TTL reads the signed header itself (resolveServerConfirmation). The column is read only by the
+ * settler's query, for its grace window and its keyset scan order, before any signature is checked; so
+ * an edited column is an edited receipt: refused here, and it can only reorder the scan, never apply.
  */
 export const CREATED_AT_SKEW_MS = 5_000;
 
