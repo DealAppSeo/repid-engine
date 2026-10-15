@@ -1,0 +1,804 @@
+[
+  {
+    "input": "The sum is 4. Also 2 + 2 = 4.\n- Item one\n- Item two",
+    "claims": [
+      {
+        "content": "The sum is 4.",
+        "type": "source-grounded",
+        "checkability": 0.4
+      },
+      {
+        "content": "Also 2 + 2 = 4.",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      },
+      {
+        "content": "- Item one",
+        "type": "source-grounded",
+        "checkability": 0.4
+      },
+      {
+        "content": "- Item two",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 = 4",
+    "claims": [
+      {
+        "content": "2 + 2 = 4",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "The contract 0x8004A818BFB912233c491871b3d84c89A494BD9e is deployed",
+    "claims": [
+      {
+        "content": "The contract 0x8004A818BFB912233c491871b3d84c89A494BD9e is deployed",
+        "type": "executable",
+        "executableKind": "onchain",
+        "checkability": 1,
+        "parsed": {
+          "kind": "code",
+          "address": "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+        }
+      }
+    ]
+  },
+  {
+    "input": "tx 0x6f7cfc07e906d8ca426e81f4ad693e2f5ada9360c3a29244d3a2cf074726330d landed",
+    "claims": [
+      {
+        "content": "tx 0x6f7cfc07e906d8ca426e81f4ad693e2f5ada9360c3a29244d3a2cf074726330d landed",
+        "type": "executable",
+        "executableKind": "onchain",
+        "checkability": 1,
+        "parsed": {
+          "kind": "tx",
+          "txHash": "0x6f7cfc07e906d8ca426e81f4ad693e2f5ada9360c3a29244d3a2cf074726330d"
+        }
+      }
+    ]
+  },
+  {
+    "input": "The function foo returns 42",
+    "claims": [
+      {
+        "content": "The function foo returns 42",
+        "type": "executable",
+        "executableKind": "code",
+        "checkability": 0.6,
+        "parsed": {
+          "runnable": false,
+          "reason": "code execution disabled (unsafe) — marked executable-but-not-run"
+        }
+      }
+    ]
+  },
+  {
+    "input": "See https://example.com/paper for details",
+    "claims": [
+      {
+        "content": "See https://example.com/paper for details",
+        "type": "source-grounded",
+        "checkability": 0.4,
+        "parsed": {
+          "url": "https://example.com/paper"
+        }
+      }
+    ]
+  },
+  {
+    "input": "BTC will hit $100k next year",
+    "claims": [
+      {
+        "content": "BTC will hit $100k next year",
+        "type": "probabilistic",
+        "checkability": 0.1
+      }
+    ]
+  },
+  {
+    "input": "This design is elegant",
+    "claims": [
+      {
+        "content": "This design is elegant",
+        "type": "unverifiable",
+        "checkability": 0
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 = 5",
+    "claims": [
+      {
+        "content": "2 + 2 = 5",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "5",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "This architecture is elegant and well designed",
+    "claims": [
+      {
+        "content": "This architecture is elegant and well designed",
+        "type": "unverifiable",
+        "checkability": 0
+      }
+    ]
+  },
+  {
+    "input": "Contract 0x8004A818BFB912233c491871b3d84c89A494BD9e is deployed",
+    "claims": [
+      {
+        "content": "Contract 0x8004A818BFB912233c491871b3d84c89A494BD9e is deployed",
+        "type": "executable",
+        "executableKind": "onchain",
+        "checkability": 1,
+        "parsed": {
+          "kind": "code",
+          "address": "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+        }
+      }
+    ]
+  },
+  {
+    "input": "tx 0x6f7cfc07e906d8ca426e81f4ad693e2f5ada9360c3a29244d3a2cf074726330d is confirmed",
+    "claims": [
+      {
+        "content": "tx 0x6f7cfc07e906d8ca426e81f4ad693e2f5ada9360c3a29244d3a2cf074726330d is confirmed",
+        "type": "executable",
+        "executableKind": "onchain",
+        "checkability": 1,
+        "parsed": {
+          "kind": "tx",
+          "txHash": "0x6f7cfc07e906d8ca426e81f4ad693e2f5ada9360c3a29244d3a2cf074726330d"
+        }
+      }
+    ]
+  },
+  {
+    "input": "Contract 0x8004A818BFB912233c491871b3d84c89A494BD9e exists",
+    "claims": [
+      {
+        "content": "Contract 0x8004A818BFB912233c491871b3d84c89A494BD9e exists",
+        "type": "executable",
+        "executableKind": "onchain",
+        "checkability": 1,
+        "parsed": {
+          "kind": "code",
+          "address": "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+        }
+      }
+    ]
+  },
+  {
+    "input": "The total is 2 + 2 = 5. This is a great design. It will probably rain tomorrow.",
+    "claims": [
+      {
+        "content": "The total is 2 + 2 = 5.",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "5",
+          "relation": "eq"
+        }
+      },
+      {
+        "content": "This is a great design.",
+        "type": "source-grounded",
+        "checkability": 0.4
+      },
+      {
+        "content": "It will probably rain tomorrow.",
+        "type": "probabilistic",
+        "checkability": 0.1
+      }
+    ]
+  },
+  {
+    "input": "2 + 2",
+    "claims": [
+      {
+        "content": "2 + 2",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "10 * (3 + 4)",
+    "claims": [
+      {
+        "content": "10",
+        "type": "source-grounded",
+        "checkability": 0.4
+      },
+      {
+        "content": "(3 + 4)",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "2 ^ 10",
+    "claims": [
+      {
+        "content": "2 ^ 10",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "-5 + 3",
+    "claims": [
+      {
+        "content": "-5 + 3",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "50%",
+    "claims": [
+      {
+        "content": "50%",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "10% of 250",
+    "claims": [
+      {
+        "content": "10% of 250",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "1,000 + 500",
+    "claims": [
+      {
+        "content": "1,000 + 500",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "1 / 0",
+    "claims": [
+      {
+        "content": "1 / 0",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "(1 + 2",
+    "claims": [
+      {
+        "content": "(1 + 2",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "The total is 2 + 2 = 5",
+    "claims": [
+      {
+        "content": "The total is 2 + 2 = 5",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "5",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 equals 4",
+    "claims": [
+      {
+        "content": "2 + 2 equals 4",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "3 * 3 is equal to 9",
+    "claims": [
+      {
+        "content": "3",
+        "type": "source-grounded",
+        "checkability": 0.4
+      },
+      {
+        "content": "3 is equal to 9",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "9 is equal to 3 + 6",
+    "claims": [
+      {
+        "content": "9 is equal to 3 + 6",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "9",
+          "rhs": "3 + 6",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "22 / 7 is approximately 3.14",
+    "claims": [
+      {
+        "content": "22 / 7 is approximately 3.14",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "22 / 7",
+          "rhs": "3.14",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "10% of 250 is 25",
+    "claims": [
+      {
+        "content": "10% of 250 is 25",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "10%  of  250",
+          "rhs": "25",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "10 percent of 250 = 25",
+    "claims": [
+      {
+        "content": "10 percent of 250 = 25",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "10 %  of  250",
+          "rhs": "25",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "x is 5",
+    "claims": [
+      {
+        "content": "x is 5",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 IS 4",
+    "claims": [
+      {
+        "content": "2 + 2 IS 4",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "1,000 + 500 = 1500",
+    "claims": [
+      {
+        "content": "1,000 + 500 = 1500",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "1,000 + 500",
+          "rhs": "1500",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 <= 5",
+    "claims": [
+      {
+        "content": "2 + 2 <= 5",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "5",
+          "relation": "lte"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 >= 5",
+    "claims": [
+      {
+        "content": "2 + 2 >= 5",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "5",
+          "relation": "gte"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 != 4",
+    "claims": [
+      {
+        "content": "2 + 2 != 4",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "neq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 ≠ 5",
+    "claims": [
+      {
+        "content": "2 + 2 ≠ 5",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "5",
+          "relation": "neq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 ≈ 4",
+    "claims": [
+      {
+        "content": "2 + 2 ≈ 4",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "approx"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 == 4",
+    "claims": [
+      {
+        "content": "2 + 2 == 4",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "5 > 2 + 2",
+    "claims": [
+      {
+        "content": "5 > 2 + 2",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "5",
+          "rhs": "2 + 2",
+          "relation": "gt"
+        }
+      }
+    ]
+  },
+  {
+    "input": "3 < 2 + 2",
+    "claims": [
+      {
+        "content": "3 < 2 + 2",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "3",
+          "rhs": "2 + 2",
+          "relation": "lt"
+        }
+      }
+    ]
+  },
+  {
+    "input": "a = b = 2 + 2 = 4",
+    "claims": [
+      {
+        "content": "a = b = 2 + 2 = 4",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "the result 6 + 7 is 13!",
+    "claims": [
+      {
+        "content": "the result 6 + 7 is 13!",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "6 + 7",
+          "rhs": "13",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "is 4 is 4",
+    "claims": [
+      {
+        "content": "is 4 is 4",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "Total: 2+2=4?",
+    "claims": [
+      {
+        "content": "Total: 2+2=4?",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2+2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2 + 2\r= 4",
+    "claims": [
+      {
+        "content": "2 + 2\r= 4",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 \r is 4",
+    "claims": [
+      {
+        "content": "2 + 2 \r is 4",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 = 4",
+    "claims": [
+      {
+        "content": "2 + 2 = 4",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "x\r 2 + 2 is 4",
+    "claims": [
+      {
+        "content": "x\r 2 + 2 is 4",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "(1 + 2) + 3 = 6.",
+    "claims": [
+      {
+        "content": "(1 + 2) + 3 = 6.",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "(1 + 2) + 3",
+          "rhs": "6",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 is 4 and 3 + 3 is 6",
+    "claims": [
+      {
+        "content": "2 + 2 is 4 and 3 + 3 is 6",
+        "type": "executable",
+        "executableKind": "arithmetic",
+        "checkability": 1,
+        "parsed": {
+          "lhs": "2 + 2",
+          "rhs": "4",
+          "relation": "eq"
+        }
+      }
+    ]
+  },
+  {
+    "input": "2+2=4=4",
+    "claims": [
+      {
+        "content": "2+2=4=4",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 =",
+    "claims": [
+      {
+        "content": "2 + 2 =",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "= 4",
+    "claims": [
+      {
+        "content": "= 4",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "2 + 2 is",
+    "claims": [
+      {
+        "content": "2 + 2 is",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  },
+  {
+    "input": "is 4",
+    "claims": [
+      {
+        "content": "is 4",
+        "type": "source-grounded",
+        "checkability": 0.4
+      }
+    ]
+  }
+]
