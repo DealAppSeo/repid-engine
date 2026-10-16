@@ -6,32 +6,41 @@
 // the agent's services, name, image, and back-references to the
 // on-chain identity.
 //
-// Spec: github.com/erc-8004/erc-8004-contracts — section "Agent
-//       registration file" (the off-chain JSON tied to tokenURI).
+// Spec: ERC-8004 "Trustless Agents", section "Agent registration file" —
+//   https://github.com/ethereum/ERCs/blob/master/ERCS/erc-8004.md
+//   (ethereum/ERCs master, last change 503591a6, 2026-01-25; status Draft).
+//   "The registration file MUST have the following structure": `type` is the
+//   literal https://eips.ethereum.org/EIPS/eip-8004#registration-v1; `name`,
+//   `description`, `image`; `services[]` of {name, endpoint, version?};
+//   `x402Support`; `active`; `registrations[]` of {agentId, agentRegistry}
+//   (all mandatory, agentId a number in the spec example); `supportedTrust[]`
+//   OPTIONAL. Our extras live under ONE namespaced key, `hyperdag`.
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { canonicalIdentityRegistry } from '../identity/registry-address';
+import { slotStateFromHistory, type SlotState } from './registration-slots';
+
+export const REGISTRATION_TYPE = 'https://eips.ethereum.org/EIPS/eip-8004#registration-v1';
 
 export interface AgentRegistrationFile {
-  type: 'erc8004-registration-v1';
+  type: typeof REGISTRATION_TYPE;
   name: string;
   description: string;
   image: string;
-  services: Array<{
-    type: string;
-    url: string;
-    description?: string;
-    [k: string]: unknown;
-  }>;
+  services: Array<{ name: string; endpoint: string; version?: string }>;
+  x402Support: boolean;
+  active: boolean;
   registrations: Array<{
-    agentRegistry: string; // CAIP-2 format: eip155:<chainId>:<contract>
-    agentId: string;
+    agentId: number | string; // number per spec; string only if it would lose precision
+    agentRegistry: string; // {namespace}:{chainId}:{identityRegistry}
   }>;
   supportedTrust: string[];
-  hyperdag?: {
+  hyperdag: {
     current_repid: number;
     tier: string;
     verifier_package: string;
     verify_url: string;
     proof_endpoint: string;
+    slots?: SlotState; // only when REGISTRATION_SLOTS_ENABLED=true
   };
 }
 
@@ -41,127 +50,118 @@ export interface AgentRegistrationContext {
   description: string;
   current_repid: number;
   tier: string;
+  active: boolean;
   erc8004_token_id: string;
   chain_id: number;
   identity_registry_address: string;
+  slots?: SlotState;
 }
-
-const CAIP2_PREFIX_BY_CHAIN: Record<number, string> = {
-  8453: 'eip155:8453',     // Base Mainnet
-  84532: 'eip155:84532',   // Base Sepolia
-  1: 'eip155:1',           // Ethereum
-  11155111: 'eip155:11155111', // Ethereum Sepolia
-  137: 'eip155:137',       // Polygon
-  42161: 'eip155:42161',   // Arbitrum One
-  421614: 'eip155:421614', // Arbitrum Sepolia
-};
-
-const CANONICAL_IDENTITY_REGISTRY_TESTNET =
-  '0x8004A818BFB912233c491871b3d84c89A494BD9e';
 
 const BASE_ENGINE_URL =
   process.env.PUBLIC_ENGINE_BASE_URL ||
   'https://repid-engine-production.up.railway.app';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function slotsEnabled(): boolean {
+  return (process.env.REGISTRATION_SLOTS_ENABLED || '').toLowerCase() === 'true';
+}
+
 export function generateRegistrationFile(
   ctx: AgentRegistrationContext
 ): AgentRegistrationFile {
-  const caipPrefix =
-    CAIP2_PREFIX_BY_CHAIN[ctx.chain_id] || `eip155:${ctx.chain_id}`;
-  const agentRegistry = `${caipPrefix}:${ctx.identity_registry_address}`;
+  const agentUrl = `${BASE_ENGINE_URL}/api/v1/agents/${ctx.agent_id}`;
+  const verifyUrl = `${BASE_ENGINE_URL}/api/v1/proof/verify`;
+  const tokenNum = Number(ctx.erc8004_token_id);
 
   return {
-    type: 'erc8004-registration-v1',
+    type: REGISTRATION_TYPE,
     name: ctx.agent_name,
     description: ctx.description,
-    image: `${BASE_ENGINE_URL}/api/v1/agents/${ctx.agent_id}/avatar.png`,
+    // No avatar route exists (GET .../avatar.png answered 401 live, 2026-10-16). An empty
+    // image beats a URL that does not resolve.
+    image: '',
+    // Only endpoints that exist. The old `.../agents/:id/verify` was never a route; the
+    // public range-check verifier is /api/v1/proof/verify.
     services: [
+      { name: 'agent-state', endpoint: agentUrl },
+      { name: 'agent-card', endpoint: `${agentUrl}/card` },
+      { name: 'recall', endpoint: `${agentUrl}/recall` },
+      { name: 'repid-proof-verify', endpoint: verifyUrl },
+      { name: 'reputation-feedback', endpoint: `${agentUrl}/reputation/payload.json` },
+    ],
+    // No agent service here takes x402 payment; claiming it would be a new public claim.
+    x402Support: false,
+    active: ctx.active,
+    registrations: [
       {
-        type: 'http',
-        url: `${BASE_ENGINE_URL}/api/v1/agents/${ctx.agent_id}`,
-        description: 'HyperDAG agent state endpoint',
-      },
-      {
-        type: 'http-verify',
-        url: `${BASE_ENGINE_URL}/api/v1/agents/${ctx.agent_id}/verify`,
-        description: 'STARK-verifiable RepID proof endpoint',
-      },
-      {
-        type: 'http-recall',
-        url: `${BASE_ENGINE_URL}/api/v1/agents/${ctx.agent_id}/recall`,
-        description: 'Graph RAG memory recall surface',
-      },
-      {
-        type: 'http-card',
-        url: `${BASE_ENGINE_URL}/api/v1/agents/${ctx.agent_id}/card`,
-        description: 'Public agent card (no private fields)',
-      },
-      {
-        type: 'http-feedback',
-        url: `${BASE_ENGINE_URL}/api/v1/agents/${ctx.agent_id}/reputation/payload.json`,
-        description: 'Latest reputation feedback payload (off-chain content for giveFeedback)',
+        agentId: Number.isSafeInteger(tokenNum) ? tokenNum : ctx.erc8004_token_id,
+        agentRegistry: `eip155:${ctx.chain_id}:${ctx.identity_registry_address}`,
       },
     ],
-    registrations: [{ agentRegistry, agentId: ctx.erc8004_token_id }],
     supportedTrust: ['reputation'],
     hyperdag: {
       current_repid: ctx.current_repid,
       tier: ctx.tier,
       verifier_package: '@hyperdag/proof-verifier@^0.1.0',
-      verify_url: `${BASE_ENGINE_URL}/api/v1/agents/${ctx.agent_id}/verify`,
+      verify_url: verifyUrl,
       proof_endpoint: `${BASE_ENGINE_URL}/api/v1/repid/proof/:job_id`,
+      ...(ctx.slots ? { slots: ctx.slots } : {}),
     },
   };
 }
 
+export type RegistrationLookup =
+  | { status: 'ok'; file: AgentRegistrationFile }
+  | { status: 'not_found' }
+  | { status: 'ambiguous' };
+
 /**
- * Fetches an agent from Supabase and renders its registration file.
- * Returns `null` if the agent is not minted (no erc8004_token_id).
+ * Fetches an agent by UUID or by exact agent_name and renders its registration file.
+ * A name is accepted so the minted token URIs that carry a name
+ * (https://trustrepid.dev/agents/trinity-orch, tokens 6705-6712) can resolve here.
+ * Names are not unique, so more than one match is `ambiguous` (use the id).
+ * `not_found` also covers an agent with no erc8004_token_id. DB errors throw.
  * Mounted at GET /api/v1/agents/:id/registration.json.
  */
 export async function fetchAndGenerateRegistrationFile(
   supabase: SupabaseClient,
-  agentId: string,
-  options: { chain_id?: number; registry_address?: string } = {}
-): Promise<AgentRegistrationFile | null> {
-  const { data: agent, error } = await supabase
+  ref: string
+): Promise<RegistrationLookup> {
+  const { data, error } = await supabase
     .from('repid_agents')
-    .select(
-      'id, agent_name, description, current_repid, tier, erc8004_token_id, mint_chain_id, erc8004_address'
-    )
-    .eq('id', agentId)
-    .single();
+    .select('id, agent_name, description, current_repid, tier, lifecycle_status, erc8004_token_id, mint_chain_id')
+    .eq(UUID_RE.test(ref) ? 'id' : 'agent_name', ref)
+    .limit(2);
 
-  if (error || !agent) return null;
-  if (!agent.erc8004_token_id) return null;
+  if (error) throw new Error(`agent lookup failed: ${error.message}`);
+  const rows = data ?? [];
+  if (rows.length > 1) return { status: 'ambiguous' };
+  const agent = rows[0];
+  if (!agent || !agent.erc8004_token_id) return { status: 'not_found' };
 
-  const resolvedChainId =
-    options.chain_id ?? agent.mint_chain_id ?? 84532;
+  const chainId: number = agent.mint_chain_id ?? 84532;
+  // The registry comes from config, never from repid_agents.erc8004_address: that column holds
+  // placeholders, tx hashes and a one-character-off registry for some minted agents
+  // (see src/identity/registry-address.ts), and the old shape check published one of them.
+  const registry = canonicalIdentityRegistry(chainId);
+  if (!registry) return { status: 'not_found' };
 
-  // Prefer the explicit option, then the DB-stored contract address (only
-  // if it looks like a contract — APM-style legacy values may be wallets).
-  // Fall back to the canonical testnet vanity address.
-  let resolvedRegistry =
-    options.registry_address ?? CANONICAL_IDENTITY_REGISTRY_TESTNET;
-  if (
-    !options.registry_address &&
-    typeof agent.erc8004_address === 'string' &&
-    agent.erc8004_address.length === 42 &&
-    agent.erc8004_address.toLowerCase().startsWith('0x8004')
-  ) {
-    resolvedRegistry = agent.erc8004_address;
-  }
-
-  return generateRegistrationFile({
-    agent_id: agent.id,
-    agent_name: agent.agent_name,
-    description:
-      agent.description ||
-      `HyperDAG-anchored AI agent ${agent.agent_name}`,
-    current_repid: agent.current_repid || 0,
-    tier: agent.tier || 'PROBATIONARY',
-    erc8004_token_id: agent.erc8004_token_id,
-    chain_id: resolvedChainId,
-    identity_registry_address: resolvedRegistry,
-  });
+  return {
+    status: 'ok',
+    file: generateRegistrationFile({
+      agent_id: agent.id,
+      agent_name: agent.agent_name,
+      description: agent.description || `HyperDAG-anchored AI agent ${agent.agent_name}`,
+      current_repid: agent.current_repid || 0,
+      tier: agent.tier || 'PROBATIONARY',
+      active: agent.lifecycle_status === 'active',
+      erc8004_token_id: String(agent.erc8004_token_id),
+      chain_id: chainId,
+      identity_registry_address: registry,
+      // No slot store exists yet (no write path in this change), so ON serves an empty,
+      // valid chain: max 3, no entries.
+      slots: slotsEnabled() ? slotStateFromHistory([]) : undefined,
+    }),
+  };
 }
