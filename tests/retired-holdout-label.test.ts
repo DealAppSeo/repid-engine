@@ -25,6 +25,7 @@ const RETIRED_REF = /rigorous-corpus-v1|canary-corpus-v1|hal_corpus_v1|rigorous-
 const LABELLED: Record<string, RegExp[]> = {
   'scripts/hal-eval/run-frozen-corpus-offline.ts': [/retiredLine\(/, /retiredStamp\(/],
   'scripts/hal-eval/run-frozen-corpus-local.ts': [/retiredLine\(/, /retiredStamp\(/],
+  'scripts/hal-eval/calibration-loop.ts': [/retiredLine\(/, /retiredStamp\(/],
   'scripts/hal-eval/run-frozen-corpus.mjs': [/RETIRED PUBLIC SET: \$\{set\} is public in git \(retired as a holdout /, /holdout: 'retired-public'/, /\.\.\.RETIRED/],
   'scripts/eval/rigorous-hal-eval.ts': [/retiredLine\(/, /retiredStamp\(/],
   'scripts/eval/canary-f1.ts': [/retiredLine\(/, /retiredStamp\(/],

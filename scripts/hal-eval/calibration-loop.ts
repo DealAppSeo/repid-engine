@@ -23,6 +23,7 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { evalOrder } from './metrics';
+import { retiredLine, retiredStamp } from '../eval/retired-holdout';
 import {
   parseClaimIs,
   parseConfidence01,
@@ -213,6 +214,7 @@ function lastJsonWith(text: string | null, key: string): Record<string, unknown>
   const out = {
     ruler: `hal-v1-frozen@${entry.sha256.slice(0, 12)} first ${done} of ${raw.split('\n').filter((l) => l.trim()).length} (evalOrder)`,
     corpus_sha256: hashed,
+    ...retiredStamp(),
     protocol: 'self_claim_is + self_confidence before the answer (one reply, keys in order); >=2 other families, unanimous, resolve; blind peers',
     agents: agents.map((a) => ({ id: a.id, family: a.family })),
     isolation: ISOLATION.mode,
@@ -237,6 +239,7 @@ function lastJsonWith(text: string | null, key: string): Record<string, unknown>
     console.log(`  ${k}: vs peers Brier ${f(s.brier)} (n=${s.resolved}) overconf ${f(s.overconfidence_rate)} coverage ${f(s.coverage)} | vs label Brier ${f(t.brier)} (n=${t.resolved})`);
   }
   for (const [k, j] of Object.entries(out.peer_as_judge)) console.log(`  judge ${k}: ${j.right}/${j.rated} right (${f(j.accuracy)}), ${j.undetermined} undetermined`);
+  console.log(`  ${retiredLine('hal-v1-frozen')}`);
   console.log(`  NOT_CHECKED self ${notChecked.self}, peer ${notChecked.peer}; calls ${calls}/${maxCalls}; RepID writes 0`);
   console.log(`  written: ${file}`);
 })();
