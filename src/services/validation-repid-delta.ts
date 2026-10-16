@@ -73,14 +73,14 @@ export function tierBand(numericTier: number | null | undefined): TierBand {
 }
 
 // === Canonical RepID Delta Matrix (May 15 handoff doc Architecture Decision #6) ===
-const CLAIMER_DELTAS = {
+export const CLAIMER_DELTAS = {
   verified:         { T2a:   80, T3plus:  200 },
   challenged:       { T2a: -250, T3plus: -500 },
   rework_required:  { T2a:    0, T3plus:    0 },
   no_action:        { T2a:    0, T3plus:    0 },
 } as const;
 
-const VALIDATOR_DELTAS = {
+export const VALIDATOR_DELTAS = {
   agreed_no_correctness:    40,
   agreed_with_correctness:  120,
   caught_real_failure:      300,
