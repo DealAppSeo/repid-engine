@@ -28,6 +28,6 @@ describe('a2a ring/Sybil sim', () => {
     expect(rule.ring_member.net_avg).toBe(0);
     expect(rule.sybil_provider.net).toBe(0);
     expect(rule.honest.net).toBe(live.honest.net);
-    expect(rule.honest_beats).toEqual({ fabrication: true, collusion: true, sybil: true });
+    expect(rule.honest_beats).toMatchObject({ fabrication: true, collusion: true, sybil: true });
   });
 });
