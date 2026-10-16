@@ -88,6 +88,7 @@ import { retrieveEvidence } from './retrieval';
 import { grokApiKey } from '../providers/xai-key';
 import { gradeEvidence, type CragResult, type CragGrade } from './crag';
 import { publishDetectorSnapshot } from '../services/detector-coverage';
+import { modelFamily } from '../classify/free-votes';
 
 export interface FactCheckProviderCfg {
   name: string;
@@ -614,6 +615,11 @@ export function providerBody(cfg: FactCheckProviderCfg, deliverable: string, max
     ],
     max_tokens: maxTokens,
     temperature: 0,
+    // gpt-oss reasons before it answers, and at its default effort it spent all 512 tokens reasoning
+    // on 5-7 of 40 hal-v1-frozen rows (finish_reason 'length', no answer: a lost family). Low effort
+    // answers inside the budget. By family, so any host serving gpt-oss gets it; the classify voters
+    // already send the same setting (free-votes.ts).
+    ...(modelFamily(cfg.model) === 'gpt-oss' ? { reasoning_effort: 'low' } : {}),
   });
 }
 
