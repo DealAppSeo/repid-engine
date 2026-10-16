@@ -44,12 +44,9 @@ export function createAgentRegistrationRouter(
         res.setHeader('Cache-Control', 'public, max-age=300');
         res.status(200).json(result.file);
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.error('[agents-registration] failed:', msg);
-        res.status(500).json({
-          error: 'registration_file_generation_failed',
-          message: msg,
-        });
+        // Log the cause; answer a fixed string. A database message is not for anonymous callers.
+        console.error('[agents-registration] failed:', e instanceof Error ? e.message : String(e));
+        res.status(500).json({ error: 'registration_file_generation_failed' });
       }
     }
   );
