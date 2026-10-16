@@ -507,8 +507,18 @@ function factCheckPrompt(deliverable: string): string {
   );
 }
 
-/** Extract a verdict from possibly-verbose model output (reasoning models emit prose THEN JSON). */
-function parseVerdict(text: string): { verdict: Verdict; confidence: number; note?: string } {
+/**
+ * Extract a verdict from possibly-verbose model output (reasoning models emit prose THEN JSON).
+ *
+ * NULL, NEVER A DEFAULT (Lane A, 2026-10-16). A reply with no verdict (TRUE / FALSE / UNCERTAIN) and
+ * no confidence that both parse is a provider that did not answer, and the caller records it as an
+ * ERROR (NOT_CHECKED, not counted). This used to return UNCERTAIN at 50 (60 from the keyword scan),
+ * and that default was COUNTED: it added a family to the quorum and 0.5 to hal_score. Measured on
+ * hal-v1-frozen (40 rows, free providers): groq gpt-oss-20b ran out of tokens mid-reasoning on 7 rows
+ * (finish_reason 'length', content empty, the cut-off reasoning parsed here), and on 4 rows that
+ * invented vote completed a 2-family quorum, one of them a veto of a TRUE claim.
+ */
+function parseVerdict(text: string): { verdict: Verdict; confidence: number; note?: string } | null {
   // Scan ALL brace-groups and prefer the one that actually carries a "verdict" key — a reasoning
   // model emits chain-of-thought (sometimes with braces) before the final JSON, so the first
   // match isn't reliably the answer.
@@ -520,23 +530,24 @@ function parseVerdict(text: string): { verdict: Verdict; confidence: number; not
   for (const c of ordered) {
     try {
       const o = JSON.parse(c);
-      if (o.verdict === undefined && o.confidence === undefined) continue;
-      const v = String(o.verdict ?? '').toUpperCase();
-      const verdict: Verdict = v === 'TRUE' || v === 'FALSE' || v === 'UNCERTAIN' ? (v as Verdict) : 'UNCERTAIN';
-      let confidence = Number(o.confidence);
-      if (!Number.isFinite(confidence)) confidence = 50;
-      confidence = Math.max(0, Math.min(100, confidence));
-      return { verdict, confidence, note: typeof o.note === 'string' ? o.note.slice(0, 80) : undefined };
+      const v = String(o?.verdict ?? '').toUpperCase();
+      if (v !== 'TRUE' && v !== 'FALSE' && v !== 'UNCERTAIN') continue;
+      const raw = Number(o.confidence);
+      // Missing or non-numeric confidence: not this candidate. `Number(null)` and `Number('')` are 0, so
+      // only a real number or a numeric string counts.
+      if (o.confidence === null || o.confidence === '' || typeof o.confidence === 'boolean' || !Number.isFinite(raw)) continue;
+      const confidence = Math.max(0, Math.min(100, raw));
+      return { verdict: v as Verdict, confidence, note: typeof o.note === 'string' ? o.note.slice(0, 80) : undefined };
     } catch {
       /* try next candidate */
     }
   }
-  // Fallback keyword scan if no parseable verdict JSON. Prefer an explicit "verdict": value over a
-  // bare TRUE/FALSE token appearing in reasoning prose.
-  const up = text.toUpperCase();
-  const vm = up.match(/"VERDICT"\s*:\s*"(TRUE|FALSE|UNCERTAIN)"/);
-  if (vm) return { verdict: vm[1] as Verdict, confidence: 60 };
-  return { verdict: 'UNCERTAIN', confidence: 50 };
+  // Keyword scan for JSON that did not parse as a whole (an unescaped quote in the note): the model's own
+  // "verdict" AND "confidence" values, or nothing. A bare TRUE/FALSE in reasoning prose is never read.
+  const vm = text.toUpperCase().match(/"VERDICT"\s*:\s*"(TRUE|FALSE|UNCERTAIN)"/);
+  const cm = text.match(/"confidence"\s*:\s*"?(\d+(?:\.\d+)?)/i);
+  if (vm && cm) return { verdict: vm[1] as Verdict, confidence: Math.max(0, Math.min(100, Number(cm[1]))) };
+  return null;
 }
 
 /**
@@ -722,7 +733,11 @@ async function queryProvider(
       }).catch(err => console.error('[fact-check] logLlmCall error:', err));
       return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error: 'empty content', latency_ms };
     }
-    
+
+    // A reply with no parseable verdict + confidence did not answer: ERROR, never a default vote.
+    const parsed = parseVerdict(content);
+    const finish = data?.choices?.[0]?.finish_reason ?? data?.stop_reason;
+    const unparseable = parsed ? undefined : `unparseable reply${finish ? ` (finish_reason ${finish})` : ''}`;
     logLlmCall({
       call_id,
       provider: cfg.name,
@@ -732,11 +747,12 @@ async function queryProvider(
       completion_tokens: tokensOut,
       cost_usd,
       latency_ms,
-      status: 'success',
+      status: parsed ? 'success' : 'failed',
+      ...(unparseable ? { error_message: unparseable } : {}),
       task_hint: 'hal_fact_check', quorum_id: quorumId, agent_id: agentId
     }).catch(err => console.error('[fact-check] logLlmCall error:', err));
+    if (!parsed) return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error: unparseable, latency_ms };
 
-    const parsed = parseVerdict(content);
     // `model` IS NOT OPTIONAL DECORATION HERE. Every ERROR return above sets it; this one — the only
     // return that carries a real verdict — did not, so the field was populated exactly on the paths
     // where no model had answered and empty on every path where one had. Measured on production
