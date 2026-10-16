@@ -271,10 +271,14 @@ export function routingChain(includeSlm: boolean): { provider: string; tier: '0a
  *
  * COST (review of #1432): a provider is pinnable only if the pinned call is FREE (a declared
  * free-tier entitlement, or an explicit zero price) or PRICED. An unpriced call records
- * cost 0, and incrementSpend skips 0, so the spend cap would never move. `freeOnly` (a
- * keyless caller) allows free only, minus providers paid from a prepaid balance
- * (PREPAID_NOT_KEYLESS_PINNABLE). Nobody without a key can pin a paid model onto our account
- * ahead of the free providers the chain would have used first.
+ * cost 0, and incrementSpend skips 0, so the spend cap would never move.
+ *
+ * `freeOnly` (a keyless caller) is stricter. It needs a MODEL-level explicit zero price
+ * (costClass === 'free'), never the provider-level FREE_PROVIDERS entitlement, because a
+ * free-tier provider can still bill some of its models (Strix, #1432: a listed-price groq
+ * model passed the provider-level check). It also excludes providers paid from a prepaid
+ * balance (PREPAID_NOT_KEYLESS_PINNABLE). So nobody without a key can pin a paid model onto
+ * our account ahead of the free providers the chain would have used first.
  *
  * The error message carries the real reason, wiring included, for the LOG only. The route
  * returns a generic message to the client.
@@ -297,10 +301,11 @@ export function resolvePin(model: string, opts: { freeOnly?: boolean } = {}): Pi
   const inChain = [...tier0aAdapters, ...tier1Adapters]
     .map((a) => a.name)
     .filter((name) => entries.some((e) => e.provider === name));
-  const providers = inChain.filter((name) => {
-    const cls = pinCostClass(name, exact);
-    return opts.freeOnly ? cls === 'free' && !PREPAID_NOT_KEYLESS_PINNABLE.has(name) : cls !== 'unpriced';
-  });
+  const providers = inChain.filter((name) =>
+    opts.freeOnly
+      ? costClass(name, exact) === 'free' && !PREPAID_NOT_KEYLESS_PINNABLE.has(name)
+      : pinCostClass(name, exact) !== 'unpriced',
+  );
   if (providers.length === 0) {
     throw new PinRefusedError(
       `model "${model}" (family ${family}) has no pinnable provider: registered under [${entries.map((e) => e.provider).join(', ')}], ` +
@@ -314,8 +319,9 @@ export function resolvePin(model: string, opts: { freeOnly?: boolean } = {}): Pi
  * Providers in FREE_PROVIDERS that are actually paid from a PREPAID BALANCE, so a keyless
  * caller may not pin them. PINS ONLY: FREE_PROVIDERS and the chain walk are unchanged. The
  * source is the note above applyFreeFirstOrder: openrouter's default model is "a cheap PAID
- * variant drawn against a prepaid balance" (also openrouter.ts header). When another
- * adapter's comments say the same, add it here.
+ * variant drawn against a prepaid balance" (also openrouter.ts header). openrouter has no
+ * zero-price row today, so the model-level free check already refuses it. This set keeps it
+ * out even if one is added. When another adapter's comments say the same, add it here.
  */
 const PREPAID_NOT_KEYLESS_PINNABLE = new Set<string>(['openrouter']);
 

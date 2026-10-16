@@ -49,6 +49,8 @@ const { routeRequest, resolvePin, PinRefusedError } = require('../src/providers/
 const { GroqAdapter } = require('../src/providers/groq');
 const { DeepSeekAdapter } = require('../src/providers/deepseek');
 const { OpenRouterAdapter } = require('../src/providers/openrouter');
+const { CerebrasAdapter } = require('../src/providers/cerebras');
+const { PRICING_PER_1M_TOKENS } = require('../src/billing/pricing');
 const { isHealthy } = require('../src/providers/health');
 const { logLlmCall } = require('../src/billing/log-call');
 const { logToolCall } = require('../src/utils/tool-call-logger');
@@ -80,6 +82,7 @@ const toolLog = (toolName: string) =>
 let groq: jest.SpyInstance;
 let deepseek: jest.SpyInstance;
 let openrouter: jest.SpyInstance;
+let cerebras: jest.SpyInstance;
 let server: Server;
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -97,15 +100,17 @@ afterAll((done) => {
 beforeEach(() => {
   jest.clearAllMocks();
   __resetAnonLlmBudget();
-  for (const k of ['GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'REPID_API_KEYS']) savedEnv[k] = process.env[k];
+  for (const k of ['GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'CEREBRAS_API_KEY', 'REPID_API_KEYS']) savedEnv[k] = process.env[k];
   process.env.GROQ_API_KEY = 'test-groq-key-not-real';
   process.env.DEEPSEEK_API_KEY = 'test-deepseek-key-not-real';
+  process.env.CEREBRAS_API_KEY = 'test-cerebras-key-not-real';
   process.env.REPID_API_KEYS = `${ENV_KEY}:pro`;
   (checkCap as jest.Mock).mockImplementation(() => Promise.resolve({ allowed: true }));
   (isHealthy as jest.Mock).mockImplementation(() => true);
   groq = jest.spyOn(GroqAdapter.prototype, 'complete').mockResolvedValue(vendor('groq', GROQ_CONFIGURED, GROQ_SERVED));
   deepseek = jest.spyOn(DeepSeekAdapter.prototype, 'complete').mockResolvedValue(vendor('deepseek', 'deepseek-chat', 'deepseek-chat'));
   openrouter = jest.spyOn(OpenRouterAdapter.prototype, 'complete').mockResolvedValue(vendor('openrouter', QWEN, QWEN));
+  cerebras = jest.spyOn(CerebrasAdapter.prototype, 'complete').mockResolvedValue(vendor('cerebras', 'zai-glm-4.7', 'zai-glm-4.7'));
   jest.spyOn(console, 'warn').mockImplementation(() => undefined);
   jest.spyOn(console, 'log').mockImplementation(() => undefined);
   jest.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -120,14 +125,30 @@ describe('resolvePin: registry-only, priced or free, refuses rather than guesses
     expect(resolvePin('deepseek-chat')).toEqual({ model: 'deepseek-chat', family: 'deepseek', providers: ['deepseek'] });
   });
 
-  it('freeOnly (a keyless caller) refuses a paid model and allows a declared-free one', () => {
+  it('freeOnly (a keyless caller) needs a MODEL-level zero price; a free-tier provider is not enough', () => {
     expect(() => resolvePin('deepseek-chat', { freeOnly: true })).toThrow(/none served free \(keyless caller\)/);
-    expect(resolvePin('llama-3.3-70b-versatile', { freeOnly: true }).providers).toEqual(['groq']);
+    // Strix on #1432: groq is a FREE_PROVIDERS member but this model carries a list price.
+    expect(() => resolvePin('llama-3.1-8b-instant', { freeOnly: true })).toThrow(/none served free/);
+    // No price row at all: not provably free either.
+    expect(() => resolvePin('llama-3.3-70b-versatile', { freeOnly: true })).toThrow(/none served free/);
+    // An explicit { in: 0, out: 0 } row is.
+    expect(resolvePin('zai-glm-4.7', { freeOnly: true }).providers).toEqual(['cerebras']);
+    // Keyed callers keep the provider-level entitlement.
+    expect(resolvePin('llama-3.3-70b-versatile').providers).toEqual(['groq']);
   });
 
   it('freeOnly refuses a declared-free provider paid from a prepaid balance (openrouter); keyed pins are unchanged', () => {
     expect(() => resolvePin(QWEN, { freeOnly: true })).toThrow(/none served free \(keyless caller\)/);
     expect(resolvePin(QWEN).providers).toEqual(['openrouter']);
+  });
+
+  it('the prepaid denylist holds even if openrouter gains a zero-price row', () => {
+    PRICING_PER_1M_TOKENS.openrouter = { [QWEN]: { in: 0, out: 0 } };
+    try {
+      expect(() => resolvePin(QWEN, { freeOnly: true })).toThrow(/none served free/);
+    } finally {
+      delete PRICING_PER_1M_TOKENS.openrouter;
+    }
   });
 
   it('refuses an unpriced model that is not declared free: its calls would never move the spend cap', () => {
@@ -242,8 +263,22 @@ describe('POST /api/v1/llm/complete: pin end to end', () => {
     expect(res.body).toMatchObject({ decision: 'pinned', family: 'qwen' });
   });
 
-  it('a keyless caller may pin a declared-free model', async () => {
-    const res = await post({ model: 'llama-3.3-70b-versatile' });
+  it('a keyless caller cannot pin a list-priced model on a free-tier provider (Strix, #1432)', async () => {
+    const res = await post({ model: 'llama-3.1-8b-instant' });
+    expect(res.status).toBe(400);
+    expect(res.body).toStrictEqual(REFUSED);
+    expect(groq).not.toHaveBeenCalled();
+  });
+
+  it('a keyless caller may pin a model with an explicit zero price', async () => {
+    const res = await post({ model: 'zai-glm-4.7' });
+    expect(res.status).toBe(200);
+    expect(cerebras).toHaveBeenCalledWith(expect.objectContaining({ model: 'zai-glm-4.7' }));
+    expect(res.body).toMatchObject({ decision: 'pinned', family: 'glm' });
+  });
+
+  it('a keyed caller keeps the free-tier entitlement: llama-3.3-70b-versatile on groq is honoured', async () => {
+    const res = await post({ model: 'llama-3.3-70b-versatile' }, KEYED);
     expect(res.status).toBe(200);
     expect(groq).toHaveBeenCalledWith(expect.objectContaining({ model: 'llama-3.3-70b-versatile' }));
     expect(res.body).toMatchObject({ decision: 'pinned', family: 'llama' });
