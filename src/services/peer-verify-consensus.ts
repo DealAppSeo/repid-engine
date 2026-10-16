@@ -63,6 +63,13 @@ const PANEL_DIVERGE_DELTA = Number(process.env.PEER_VERIFY_PANEL_DIVERGE_DELTA |
 // Producer delta on a 'verified' consensus (positive) vs 'disputed' (penalty).
 const PANEL_PRODUCER_VERIFIED_DELTA = Number(process.env.PEER_VERIFY_PANEL_PRODUCER_VERIFIED_DELTA || 3);
 const PANEL_PRODUCER_DISPUTED_DELTA = Number(process.env.PEER_VERIFY_PANEL_PRODUCER_DISPUTED_DELTA || -5);
+/** The four panel deltas as resolved in THIS process — read by the delta-conformance checker. */
+export const PANEL_DELTAS = {
+  agree: PANEL_AGREE_DELTA,
+  diverge: PANEL_DIVERGE_DELTA,
+  producerVerified: PANEL_PRODUCER_VERIFIED_DELTA,
+  producerDisputed: PANEL_PRODUCER_DISPUTED_DELTA,
+} as const;
 
 export interface PanelVote {
   verifier_agent_id: string;
