@@ -133,6 +133,17 @@ export interface TrustReceipt {
   criterion_ratings: unknown | null;
   /** The derived score, so the derivation above can be checked against it. */
   buyer_satisfaction_score: number | null;
+  /**
+   * Who checked the work, as far as the record says. The validators are read from
+   * `service_contracts.result->validators` (that one key, never the rest of the result), and their
+   * model families from `repid_agents.model_family`. Names are not published.
+   *
+   * `families` lists only families actually recorded. It is empty when none are: on 2026-10-16
+   * `model_family` was null for every validator of every exchange in the last 15 days, so the page
+   * cannot honestly say the validators ran on different model families. `includes_provider` is true
+   * when the provider is one of its own validators (1 of 17 in that window). `null` = no record.
+   */
+  validators: { families: string[]; includes_provider: boolean } | null;
   /** Anything we could not establish, stated rather than omitted. */
   caveats: string[];
 }
@@ -142,7 +153,7 @@ const scan = (tx: string) => `https://sepolia.basescan.org/tx/${tx}`;
 export async function buildTrustReceipt(contractId: string): Promise<TrustReceipt | null> {
   const { data: c } = await db
     .from('service_contracts')
-    .select('id, status, agreed_price_usdc_raw, buyer_agent_id, provider_agent_id, settled_at, fulfilled_at, work_statement_hash, work_statement, criterion_ratings, buyer_satisfaction_score')
+    .select('id, status, agreed_price_usdc_raw, buyer_agent_id, provider_agent_id, settled_at, fulfilled_at, work_statement_hash, work_statement, criterion_ratings, buyer_satisfaction_score, validators:result->validators')
     .eq('id', contractId)
     .maybeSingle();
   if (!c) return null;
@@ -154,6 +165,22 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
   for (const id of [c.buyer_agent_id, c.provider_agent_id]) {
     const { data } = await db.from('repid_agents').select('agent_name').eq('id', id).maybeSingle();
     names[id] = data?.agent_name ?? String(id).slice(0, 8);
+  }
+
+  const validatorNames = Array.isArray((c as any).validators)
+    ? [...new Set(((c as any).validators as unknown[]).filter((v): v is string => typeof v === 'string'))]
+    : null;
+  let validators: TrustReceipt['validators'] = null;
+  if (validatorNames) {
+    // ponytail: agent_name is not unique (six agents are named HUMAN), so a shared name contributes
+    // every family recorded under it. Exact once validators are recorded by id.
+    const { data: va } = validatorNames.length
+      ? await db.from('repid_agents').select('model_family').in('agent_name', validatorNames)
+      : { data: [] as Array<{ model_family: string | null }> };
+    validators = {
+      families: [...new Set((va ?? []).map((a) => a.model_family).filter((f): f is string => typeof f === 'string' && f.trim() !== ''))].sort(),
+      includes_provider: validatorNames.includes(names[c.provider_agent_id]!),
+    };
   }
 
   const { data: settlement } = await db
@@ -301,6 +328,7 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
       (c as any).buyer_satisfaction_score === null || (c as any).buyer_satisfaction_score === undefined
         ? null
         : Number((c as any).buyer_satisfaction_score),
+    validators,
     caveats,
   };
 }

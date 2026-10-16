@@ -104,6 +104,12 @@ describe('public trust receipt', () => {
       'payer_wallet', 'payee_wallet',
       // Where those come from: 'settlement_record' (this route does not re-read the chain), or null.
       'wallets_source',
+
+      // ── ADDED 2026-10-16: who checked the work ──────────────────────────────
+      // Only the validators' RECORDED model families and whether the provider is
+      // among them. Read from result->validators alone; the names and the rest of
+      // the result are not published.
+      'validators',
     ]);
     // A new field is not automatically safe to publish — this fails until
     // someone decides it is, which is the point.
