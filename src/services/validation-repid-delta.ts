@@ -521,6 +521,7 @@ export async function applyServiceFulfilledDeltas(
               contractId: contract.id,
               providerAgentId: contract.provider_agent_id,
               isSimulated,
+              x402PaymentId: fullContract.x402_payment_id ?? null,
               repidEventId: insertedEvent?.id ?? null,
             });
             console.log(

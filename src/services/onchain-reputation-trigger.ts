@@ -1,6 +1,11 @@
 // Buy-loop last mile (2026-07-06) — auto-trigger ERC-8004 on-chain reputation
 // write when a service contract completes.
 //
+// CORRECTED 2026-10-16: this is called at FULFIL, and under pay-on-verified-delivery the money
+// moves later, at /satisfy. "Completes" was the wrong word: 3 of 16 daily exchanges got an
+// on-chain RepID write mined 6-28 s BEFORE their USDC settled. Gate (d) below now waits for the
+// settlement to be confirmed; FeedbackLoopWorker writes it once it is.
+//
 // WHY: applyServiceFulfilledDeltas() writes the RepID delta + a
 // `service_fulfilled_settled` row into repid_events, but the on-chain
 // attestation only happened asynchronously via FeedbackLoopWorker (which polls
@@ -33,6 +38,7 @@
 // like the other on-chain surfaces (cascade-settlement-worker, feedback loop).
 
 import { db } from '../db';
+import { settlementGate, type SettlementGate } from '../workers/feedback-loop-filters';
 import {
   getReputationWriter,
   persistReputationWrite,
@@ -61,14 +67,31 @@ export interface OnChainTriggerInput {
   contractId: string;
   providerAgentId: string;
   isSimulated: boolean;
+  /** The contract's x402_settlements row id. The write waits until that settlement is confirmed. */
+  x402PaymentId?: string | null;
   // Optional link back to the repid_events row for the audit trail.
   repidEventId?: number | null;
 }
 
 export type OnChainTriggerOutcome =
-  | { attempted: false; reason: 'disabled' | 'simulated' | 'no_token_id' | 'below_floor' | 'agent_not_found' | 'already_written' | 'no_writer' }
+  | { attempted: false; reason: 'disabled' | 'simulated' | 'no_token_id' | 'below_floor' | 'agent_not_found' | 'already_written' | 'no_writer' | 'settlement_pending' | 'settlement_never' | 'settlement_unreadable' }
   | { attempted: true; ok: true; txHash: string }
   | { attempted: true; ok: false; error: string };
+
+/**
+ * Where the contract's payment stands (see settlementGate). `unreadable` = the read failed, which is
+ * not "unpaid": the caller leaves the outbox row for a later tick rather than deciding.
+ */
+export async function readSettlementGate(paymentId: string | null | undefined): Promise<SettlementGate | 'unreadable'> {
+  if (!paymentId) return 'never';
+  const { data, error } = await db
+    .from('x402_settlements')
+    .select('status, tx_hash, is_simulated')
+    .eq('id', paymentId)
+    .maybeSingle();
+  if (error) return 'unreadable';
+  return settlementGate(data as any);
+}
 
 /**
  * Best-effort inline ERC-8004 reputation write for a completed real settlement.
@@ -132,6 +155,17 @@ export async function maybeWriteOnChainReputation(
         );
         return { attempted: false, reason: 'already_written' };
       }
+    }
+
+    // (d) PAID FIRST. This runs at FULFIL time; the payment is broadcast later, at /satisfy. Until
+    // the settlement is confirmed there is nothing paid to attest to, so wait: the outbox row stays
+    // unprocessed and FeedbackLoopWorker writes it once the settlement lands (or never, if voided).
+    const paid = await readSettlementGate(input.x402PaymentId);
+    if (paid !== 'confirmed') {
+      console.log(
+        `[onchain-reputation-trigger] contract ${input.contractId}: settlement ${paid} — on-chain RepID write deferred until the payment is confirmed.`,
+      );
+      return { attempted: false, reason: `settlement_${paid}` };
     }
 
     // Writer resolves the signing key from env. Null = no key set.

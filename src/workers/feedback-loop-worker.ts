@@ -5,6 +5,7 @@ import { Erc8004ReputationWriter, getReputationWriter, persistReputationWrite, t
 import { buildFeedbackFile, feedbackFileUrl, feedbackHashOf, proofOfPaymentFrom, type SettlementRow } from '../services/erc8004-feedback-file';
 import { getActiveNetwork } from '../config/network';
 import { shouldParkForHalt } from '../services/emergency-halt';
+import { readSettlementGate } from '../services/onchain-reputation-trigger';
 
 // Phase 8 — drain-mode rate limit. For the first 24h after worker boot, cap
 // on-chain writes at 1 per 60s so a backlog drain (e.g., the 10 unprocessed
@@ -195,6 +196,22 @@ export class FeedbackLoopWorker {
             console.error(`[FeedbackLoopWorker] failed to mark ineligible event ${event.id} processed:`, skipErr.message ?? skipErr);
           }
           continue;
+        }
+
+        // Paid first: a fulfil-time outbox row waits for its settlement (feedback-loop-filters.ts
+        // settlementGate). pending/unreadable → leave it for a later tick; never → close it.
+        if (event.event_type === 'service_fulfilled_settled') {
+          const paid = await readSettlementGate((event_data?.metadata ?? {}).x402_payment_id);
+          if (paid === 'pending' || paid === 'unreadable') {
+            console.log(`[FeedbackLoopWorker] event ${event.id}: settlement ${paid} — deferring the on-chain write`);
+            continue;
+          }
+          if (paid === 'never') {
+            console.warn(`[FeedbackLoopWorker] event ${event.id}: settlement never confirmed (voided/simulated/no tx) — no on-chain write`);
+            const { error: closeErr } = await db.from('repid_events').update({ processed_at: new Date().toISOString() }).eq('id', event.id);
+            if (closeErr) console.error(`[FeedbackLoopWorker] failed to close event ${event.id}:`, closeErr.message ?? closeErr);
+            continue;
+          }
         }
 
         const { data: agent } = await db
