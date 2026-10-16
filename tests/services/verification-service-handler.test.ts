@@ -256,3 +256,44 @@ describe('verdict states the claim, confident states the old meaning', () => {
     expect(routesToDispute(undefined)).toBe(false); // verdict-less handlers are filed as delivered
   });
 });
+
+// VALIDATOR_POOL_INTEGRITY (pcp-validator.ts). The handler names both parties so runPCP can tell an
+// independent voter from the provider's own agents; with the flag ON and too few independent voters
+// left, runPCP says so and the handler files UNDETERMINED instead of throwing into an endless retry.
+describe('validator pool integrity', () => {
+  const h = () => new VerificationServiceHandler() as any;
+  const short = { score: 0, confidence: 0, checked: false, reason: 'insufficient_independent_validators', respondedCount: 0, attemptedCount: 0, validators: [], attemptedValidators: [], validatorBeliefs: [] };
+  beforeEach(() => {
+    rpcCall.mockReset();
+    rpcCall.mockImplementation(node(async () => '0x14a34'));
+  });
+
+  it('passes the provider and the contract id to runPCP', async () => {
+    runPCP.mockResolvedValue(pcpOk);
+    await h().fulfill(contract);
+    expect(runPCP.mock.calls.at(-1)[0]).toMatchObject({ claimed_by: 'buyer1', counterparties: ['p1'], contract_id: 'c1' });
+  });
+
+  it('a normal vote carries no validator_pool key (flag OFF output unchanged)', async () => {
+    runPCP.mockResolvedValue(pcpOk);
+    expect('validator_pool' in (await h().fulfill(contract))).toBe(false);
+  });
+
+  it('too few independent validators: UNDETERMINED, named, never paid, never disputed, not thrown', async () => {
+    runPCP.mockResolvedValue(short);
+    const out = await h().fulfill(contract);
+    expect(out).toMatchObject({ verdict: 'UNDETERMINED', claim_is: 'UNDETERMINED', confident: false, validators: [], validator_count: 0, validator_pool: 'insufficient_independent_validators' });
+    expect(isSoundDeliverable(out)).toBe(false);
+    expect(routesToDispute(out)).toBe(false);
+  });
+
+  it('any other NOT_CHECKED still throws for retry', async () => {
+    runPCP.mockResolvedValue({ ...short, reason: 'no_validator_answered' });
+    await expect(h().fulfill(contract)).rejects.toThrow(/NOT_CHECKED/);
+  });
+
+  it('a chain-checkable claim is still decided by the chain read, which needs no voter', async () => {
+    runPCP.mockResolvedValue(short);
+    expect(await h().fulfill(daily)).toMatchObject({ verdict: 'PASS', claim_is: 'TRUE', validators: [], validator_pool: 'insufficient_independent_validators' });
+  });
+});
