@@ -92,6 +92,10 @@ export class VerificationServiceHandler extends ServiceHandlerBase {
     const syntheticTask = {
       id: -1 as const, // sentinel — not a trinity_tasks row
       claimed_by: contract.buyer_agent_id, // excludes buyer from the validator pool
+      // Read only by VALIDATOR_POOL_INTEGRITY (pcp-validator.ts): the provider and its owner's other
+      // agents are not independent judges of its deliverable. Flag OFF, they only name a shadow line.
+      contract_id: contract.id,
+      counterparties: [contract.provider_agent_id],
       title: payload.title ?? 'verification-service-request',
       description: payload.criteria?.join(', ') ?? 'verify content accuracy and coherence',
       result: payload.content,
@@ -99,6 +103,10 @@ export class VerificationServiceHandler extends ServiceHandlerBase {
     };
 
     const pcpResult = await runPCP(syntheticTask);
+    // Too few INDEPENDENT validators (flag ON only) is not "no answer yet": retrying draws from the
+    // same pool. It falls through with confidence 0, so the vote decides nothing and the claim is
+    // UNDETERMINED (unpaid, not disputed), unless a chain read decides it, which needs no voter.
+    const poolShort = pcpResult.reason === 'insufficient_independent_validators';
 
     // THREE OUTCOMES, NEVER TWO. `confidence >= 0.5 ? 'PASS' : 'FAIL'` collapsed
     // "nobody answered" into "the provider failed". When all three validators erred,
@@ -109,7 +117,7 @@ export class VerificationServiceHandler extends ServiceHandlerBase {
     // Throwing leaves the contract ESCROWED with an error trail (processOne is
     // try/caught and never rethrows), so the next cycle retries it. That is the
     // correct handling of NOT_CHECKED: not a verdict, not a dispute, just no answer yet.
-    if (!pcpResult.checked) {
+    if (!pcpResult.checked && !poolShort) {
       throw new Error(
         `verification NOT_CHECKED: 0 of ${pcpResult.attemptedCount} validator(s) answered ` +
         `(${(pcpResult.attemptedValidators ?? []).join(', ')}). Contract stays escrowed for retry; ` +
@@ -164,6 +172,7 @@ export class VerificationServiceHandler extends ServiceHandlerBase {
       validators: pcpResult.validators, // string[] of agent names
       validator_count: pcpResult.validators.length,
       attempted_validator_count: pcpResult.attemptedCount,
+      ...(poolShort ? { validator_pool: 'insufficient_independent_validators' } : {}),
       contract_id: contract.id,
       verified_at: new Date().toISOString(),
       patent_marker: 'P-001',

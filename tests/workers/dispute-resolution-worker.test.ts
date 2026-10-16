@@ -86,3 +86,35 @@ describe('DisputeResolutionWorker', () => {
     expect(updates.some((u) => u.status === 'completed' || u.status === 'resolved' || 'dispute_verdict' in u)).toBe(false);
   });
 });
+
+// VALIDATOR_POOL_INTEGRITY ON (XC1 on #1433): too few INDEPENDENT validators does not change by
+// retrying every 15s poll, so it is terminal (skipped / escalated to a human), never pending forever.
+describe('DisputeResolutionWorker: too few independent validators', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('passes the buyer as a counterparty; on the pool reason: skipped + escalated, no judge, no verdict, not retried', async () => {
+    (pcp.runPCP as jest.Mock).mockResolvedValueOnce({ confidence: 0, checked: false, reason: 'insufficient_independent_validators' });
+    (db.maybeSingle as jest.Mock)
+      .mockResolvedValueOnce({
+        data: {
+          id: 'dispute-3',
+          metadata: { dispute_reason: 'x' },
+          service_contracts: { id: 'contract-3', provider_agent_id: 'prov-1', buyer_agent_id: 'buy-1', result: { data: 'x' } },
+        },
+      })
+      .mockResolvedValueOnce({ data: { id: 'dispute-3' } });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const handled = await (new DisputeResolutionWorker() as any).processOne();
+    expect(handled).toBe(true);
+    expect((pcp.runPCP as jest.Mock).mock.calls[0][0]).toMatchObject({ claimed_by: 'prov-1', counterparties: ['buy-1'], contract_id: 'contract-3' });
+    expect(judge.runAdversarialJudge).not.toHaveBeenCalled();
+    const updates = (db.update as jest.Mock).mock.calls.map((c) => c[0]);
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: 'skipped', worker_verdict: 'escalated',
+      metadata: expect.objectContaining({ dispute_reason: 'x', not_checked_reason: 'insufficient_independent_validators' }),
+    }));
+    expect(updates.some((u) => u.status === 'pending' || u.status === 'completed' || 'dispute_verdict' in u)).toBe(false);
+    warn.mockRestore();
+  });
+});

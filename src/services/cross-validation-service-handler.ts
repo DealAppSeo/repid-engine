@@ -41,7 +41,25 @@ export class CrossValidationServiceHandler extends ServiceHandlerBase {
       tier: 0,
       metadata: {} as Record<string, unknown>,
     };
-    const pcpResult = await runPCP(syntheticTask);
+    // contract_id + counterparties feed only VALIDATOR_POOL_INTEGRITY (pcp-validator.ts); the judge
+    // below still receives syntheticTask unchanged.
+    const pcpResult = await runPCP({ ...syntheticTask, contract_id: contract.id, counterparties: [contract.provider_agent_id] });
+
+    // Flag ON only: too few independent validators is no assessment. Below it would score as
+    // confidence 0 → FAIL → dispute, blaming the provider for a pool we could not staff. UNDETERMINED
+    // is filed as delivered, unpaid (verdict.ts), and the marker withholds SERVICE_FULFILLED deltas.
+    if (pcpResult.reason === 'insufficient_independent_validators') {
+      return {
+        verdict: 'UNDETERMINED',
+        validator_pool: 'insufficient_independent_validators',
+        pcp_score: pcpResult.score,
+        pcp_confidence: pcpResult.confidence,
+        pcp_validators: pcpResult.validators,
+        contract_id: contract.id,
+        verified_at: new Date().toISOString(),
+        patent_marker: 'P-003', // AUDIT EVIDENCE TAG — DO NOT REMOVE (column name, not a claim)
+      };
+    }
 
     // Step B — Adversarial judge with cross-LLM diversity (Decision 2:
     // synthetic taskData carrying metadata.provider = claimer_provider; the

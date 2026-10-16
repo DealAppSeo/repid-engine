@@ -1,4 +1,4 @@
-import { runPCP, selectWeightedValidators, eligibleValidators } from '../../src/services/pcp-validator';
+import { runPCP, selectWeightedValidators, eligibleValidators, poolIntegrityExclusions } from '../../src/services/pcp-validator';
 import { db } from '../../src/db';
 
 jest.mock('../../src/db', () => ({
@@ -202,5 +202,169 @@ describe('eligibleValidators: who may be named as a validator', () => {
 
   it('a row with no is_human / mock fields (older selects) is not excluded by them', () => {
     expect(eligibleValidators([{ ...ok, is_human: false, mock: null }], 'x')).toHaveLength(1);
+  });
+});
+
+// VALIDATOR_POOL_INTEGRITY. Mirrors contract 02ed66b1 (settled 2026-10-16 12:04Z) [V prod]: buyer
+// trinity-nexus, provider trinity-chesed, voters orch + trinity-redteam-synth-subject (a red-team
+// fixture inserted active by scripts/redteam/synthetic-round.ts) + gcm (same builder as both parties).
+describe('VALIDATOR_POOL_INTEGRITY: test agents and same-owner voters', () => {
+  const B = 'd8e47f71-61b6-45ef-af16-bc5de20b1234';
+  const row = (agent_name: string, builder_id: string | null, current_repid = 1000) =>
+    ({ id: `u-${agent_name}`, agent_name, builder_id, current_repid, lifecycle_status: 'active' });
+  // Pool order matters: with Math.random() = 0 the draw takes the first three eligible rows, which
+  // are exactly the three the rule flags. So OFF must draw them and ON must not.
+  const ROWS = [
+    row('trinity-nexus', B), // buyer
+    row('trinity-chesed', B), // provider
+    row('trinity-gcm', B),
+    row('trinity-redteam-synth-subject', null, 580),
+    row('trinity-orch', null),
+    row('trinity-w3c', null),
+    row('trinity-apm', '44cebb64-f4f2-46d1-8782-d83c5bf23202'),
+  ];
+  const task = { claimed_by: 'u-trinity-nexus', counterparties: ['u-trinity-chesed'], contract_id: '02ed66b1', title: 'T', description: 'D', result: 'R' };
+  const answer = { json: () => Promise.resolve({ choices: [{ message: { content: '{"validity": 1, "confidence": 0.9}' } }] }) };
+  let log: jest.SpyInstance;
+  let rnd: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.GROQ_API_KEY = 'test-key';
+    (global.fetch as jest.Mock).mockResolvedValue(answer);
+    rnd = jest.spyOn(Math, 'random').mockReturnValue(0);
+    log = jest.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    delete process.env.VALIDATOR_POOL_INTEGRITY;
+    rnd.mockRestore();
+    log.mockRestore();
+  });
+  const shadowLines = () => log.mock.calls.map((c) => String(c[0])).filter((s) => s.includes('validator_pool_shadow')).map((s) => JSON.parse(s));
+
+  it('classifies: fixture by name, the provider itself, a shared builder_id; a null builder is never "same"', () => {
+    const eligible = eligibleValidators(ROWS, task.claimed_by);
+    const flagged = poolIntegrityExclusions(eligible, ROWS, [task.claimed_by, ...task.counterparties]);
+    expect(Object.fromEntries([...flagged].map(([a, r]) => [a.agent_name, r]))).toEqual({
+      'trinity-chesed': 'counterparty',
+      'trinity-gcm': 'same_builder',
+      'trinity-redteam-synth-subject': 'test_agent_name',
+    });
+  });
+
+  it('the name stopgap matches whole tokens only', () => {
+    const names = ['trinity-t12-e2e', 'trinity-dry_run_agent_1780476000151', 'test-agent-v11', 'trinity-redteam-synth-finder', 'fixture.1',
+      'trinity-attestor', 'trinity-mockingbird-auditor', 'CONTESTED', 'synthesis-bot'];
+    const rows = names.map((n) => row(n, null));
+    expect([...poolIntegrityExclusions(rows, rows, [])].map(([a]) => a.agent_name))
+      .toEqual(['trinity-t12-e2e', 'trinity-dry_run_agent_1780476000151', 'test-agent-v11', 'trinity-redteam-synth-finder', 'fixture.1']);
+  });
+
+  it('OFF: the draw and the result are byte-identical to the unfiltered draw; the shadow line names the tainted voters', async () => {
+    // A sequence, not a constant: the draw must take exactly 0, 0, 0. One extra Math.random() call
+    // anywhere before it shifts the third pick to 0.99 (trinity-apm); one anywhere after it breaks
+    // the call count. A constant 0 could not tell either apart (XC1 on #1433).
+    const seq = [0, 0, 0, 0.99, 0.99, 0.99];
+    let i = 0;
+    rnd.mockImplementation(() => seq[i++] ?? 0.99);
+    (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
+    const res = await runPCP(task);
+    expect(rnd).toHaveBeenCalledTimes(3);
+    // What main draws: the same eligible pool, the same RNG sequence, no integrity filter.
+    i = 0;
+    const drawn = selectWeightedValidators(eligibleValidators(ROWS, task.claimed_by), 3).map((a) => a.agent_name);
+    expect(drawn).toEqual(['trinity-chesed', 'trinity-gcm', 'trinity-redteam-synth-subject']);
+    expect(JSON.stringify(res)).toBe(JSON.stringify({
+      score: 1, confidence: 0.9, checked: true, respondedCount: 3, attemptedCount: 3,
+      validators: drawn, attemptedValidators: drawn, validatorBeliefs: [0.9, 0.9, 0.9],
+    }));
+    expect(shadowLines()).toEqual([{
+      event: 'validator_pool_shadow', contract_id: '02ed66b1',
+      excluded: [
+        { agent: 'trinity-chesed', reason: 'counterparty' },
+        { agent: 'trinity-gcm', reason: 'same_builder' },
+        { agent: 'trinity-redteam-synth-subject', reason: 'test_agent_name' },
+      ],
+      independent_pool: 3,
+    }]);
+  });
+
+  it('OFF includes an ignored value: only the exact string "true" turns it on', async () => {
+    process.env.VALIDATOR_POOL_INTEGRITY = 'TRUE';
+    (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
+    const res = await runPCP(task);
+    expect(res.validators).toEqual(['trinity-chesed', 'trinity-gcm', 'trinity-redteam-synth-subject']);
+  });
+
+  it('ON: flagged agents are never drawn; the independent three vote; no shadow line', async () => {
+    process.env.VALIDATOR_POOL_INTEGRITY = 'true';
+    (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
+    const res = await runPCP(task);
+    expect(res.checked).toBe(true);
+    expect(res.validators).toEqual(['trinity-orch', 'trinity-w3c', 'trinity-apm']);
+    expect(shadowLines()).toEqual([]);
+  });
+
+  it('ON, fewer than 3 independent validators: NOT_CHECKED (insufficient_independent_validators), no vote on fewer', async () => {
+    process.env.VALIDATOR_POOL_INTEGRITY = 'true';
+    const loud = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const short = ROWS.filter((a) => a.agent_name !== 'trinity-w3c' && a.agent_name !== 'trinity-apm');
+    (db as any).select.mockResolvedValueOnce({ data: short, error: null });
+    const res = await runPCP(task);
+    expect(res).toMatchObject({ checked: false, reason: 'insufficient_independent_validators', score: 0, confidence: 0, validators: [] });
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(loud).toHaveBeenCalledWith(expect.stringMatching(/1 independent validator\(s\), 3 required; excluded .*trinity-redteam-synth-subject:test_agent_name/));
+    loud.mockRestore();
+  });
+
+  // QUORUM (XC1 on #1433): three drawn, but a vote needs 2 independent answers carrying confidence.
+  const answers = (...conf: Array<number | null>) => {
+    let n = 0;
+    (global.fetch as jest.Mock).mockImplementation(() => {
+      const c = conf[n++];
+      return c === null ? Promise.reject(new Error('down'))
+        : Promise.resolve({ json: () => Promise.resolve({ choices: [{ message: { content: `{"validity": 1, "confidence": ${c}}` } }] }) });
+    });
+  };
+
+  it('ON, 1 of 3 answers with confidence: NOT_CHECKED (insufficient_independent_validators), names who was asked', async () => {
+    process.env.VALIDATOR_POOL_INTEGRITY = 'true';
+    const loud = jest.spyOn(console, 'error').mockImplementation(() => {});
+    answers(0.9, null, 0);
+    (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
+    const res = await runPCP(task);
+    expect(res).toMatchObject({ checked: false, reason: 'insufficient_independent_validators', score: 0, confidence: 0,
+      attemptedCount: 3, attemptedValidators: ['trinity-orch', 'trinity-w3c', 'trinity-apm'] });
+    expect(loud).toHaveBeenCalledWith(expect.stringMatching(/1 of 3 independent validator\(s\) answered with confidence, 2 required/));
+    loud.mockRestore();
+  });
+
+  it('ON, 2 of 3 answer: a vote', async () => {
+    process.env.VALIDATOR_POOL_INTEGRITY = 'true';
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    answers(0.9, null, 0.8);
+    (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
+    const res = await runPCP(task);
+    expect(res).toMatchObject({ checked: true, validators: ['trinity-orch', 'trinity-apm'] });
+    (console.error as jest.Mock).mockRestore();
+  });
+
+  it('ON, nobody answers: keeps no_validator_answered (retry), not the pool reason', async () => {
+    process.env.VALIDATOR_POOL_INTEGRITY = 'true';
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    answers(null, null, null);
+    (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
+    expect(await runPCP(task)).toMatchObject({ checked: false, reason: 'no_validator_answered' });
+    (console.error as jest.Mock).mockRestore();
+  });
+
+  it('OFF, 1 of 3 answers: unchanged, one answer still decides', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    answers(0.9, null, 0);
+    (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
+    const res = await runPCP(task);
+    expect(res.checked).toBe(true);
+    expect(res.reason).toBeUndefined();
+    (console.error as jest.Mock).mockRestore();
   });
 });

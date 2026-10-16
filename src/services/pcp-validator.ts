@@ -34,7 +34,7 @@ export async function runPCP(taskData: any) {
   // 1. Select Validators
   const { data: agents, error } = await db
     .from('repid_agents')
-    .select('id, agent_name, current_repid, lifecycle_status, is_human, mock:constitution->mock');
+    .select('id, agent_name, current_repid, lifecycle_status, is_human, builder_id, mock:constitution->mock');
 
   if (error || !agents) {
     return notChecked('validator_fetch_failed', `could not read repid_agents: ${error?.message ?? 'no rows returned'}`);
@@ -57,10 +57,34 @@ export async function runPCP(taskData: any) {
   // permit, so the exclusion now covers both shapes.
   const eligible = eligibleValidators(agents, taskData.claimed_by);
 
+  // VALIDATOR_POOL_INTEGRITY (default OFF). OFF: the draw below is unchanged and one shadow line
+  // names the drawn voters the rule would have excluded. ON: they are never drawn, and the result is
+  // NOT_CHECKED (insufficient_independent_validators) when fewer than VALIDATOR_COUNT independent
+  // validators are left to draw, or fewer than VALIDATOR_QUORUM of the drawn answer with confidence
+  // (see the quorum below). So a VOTE needs 2 of 3 independent answers. A claim a caller can decide
+  // without a vote (the verification handler's eth_chainId read) is still decided with zero voters.
+  const flagged = poolIntegrityExclusions(eligible, agents, [taskData.claimed_by, ...(taskData.counterparties ?? [])]);
+  const enforce = validatorPoolIntegrityEnabled();
+  const pool = enforce ? eligible.filter((a) => !flagged.has(a)) : eligible;
+  if (enforce && pool.length < VALIDATOR_COUNT) {
+    return notChecked('insufficient_independent_validators',
+      `${pool.length} independent validator(s), ${VALIDATOR_COUNT} required; excluded ` +
+      [...flagged].map(([a, r]) => `${a.agent_name}:${r}`).join(', '));
+  }
+
   // Random sample weighted by RepID. Diversity logic is a plus.
-  const selectedValidators = selectWeightedValidators(eligible, 3);
+  const selectedValidators = selectWeightedValidators(pool, VALIDATOR_COUNT);
   if (selectedValidators.length === 0) {
     return notChecked('no_eligible_validators', `0 of ${agents.length} agent(s) are eligible validators`);
+  }
+  if (!enforce) {
+    console.log(JSON.stringify({
+      event: 'validator_pool_shadow',
+      contract_id: taskData.contract_id ?? null,
+      excluded: selectedValidators.filter((a) => flagged.has(a)).map((a) => ({ agent: a.agent_name, reason: flagged.get(a) })),
+      // < VALIDATOR_COUNT means turning the flag on would leave this check NOT_CHECKED.
+      independent_pool: eligible.length - flagged.size,
+    }));
   }
 
   // 2. Call LLMs
@@ -201,6 +225,17 @@ ${taskData.result}`;
     );
   }
 
+  // Quorum, flag ON only: one confident voter beside two silent ones is not a panel. No answer at
+  // all keeps its own reason above (no_validator_answered: retry); one answer is not enough to decide.
+  const answered = responded.filter((r) => r.confidence > 0).length;
+  if (enforce && checked && answered < VALIDATOR_QUORUM) {
+    return notChecked('insufficient_independent_validators',
+      `${answered} of ${results.length} independent validator(s) answered with confidence, ${VALIDATOR_QUORUM} required`, {
+        respondedCount: responded.length, attemptedCount: results.length,
+        validators: responded.map(r => r.name), attemptedValidators: results.map(r => r.name), validatorBeliefs: responded.map(r => r.confidence),
+      });
+  }
+
   return {
     score: finalScore,
     confidence: avgConfidence,
@@ -242,15 +277,60 @@ export function eligibleValidators(agents: any[], claimer: unknown): any[] {
 
 const MOCK_HARNESS_NAME = /^(trinity-)?mock-/;
 
+const VALIDATOR_COUNT = 3;
+const VALIDATOR_QUORUM = 2; // flag ON only
+
+/** Default OFF. Strict 'true', like every gate in this engine (config/flag-readiness.ts). */
+export const validatorPoolIntegrityEnabled = () => process.env.VALIDATOR_POOL_INTEGRITY === 'true';
+
+// ponytail: STOPGAP. repid_agents has no test-agent column, so this is a name pattern, matched as a
+// whole token so 'attestor' and 'mockingbird' stay in. Measured 2026-10-16 it catches the 3
+// redteam-synth rows (scripts/redteam/synthetic-round.ts inserted them active at repid 600, no
+// marker), trinity-t12-e2e and trinity-dry_run_agent_*. Replace with an is_test_agent column.
+const TEST_AGENT_NAME = /(^|[-_.])(mock|synth|fixture|redteam|red-team|dummy|test|e2e|dry[-_]?run)([-_.0-9]|$)/i;
+
+export type PoolExclusionReason = 'test_agent_name' | 'counterparty' | 'same_builder';
+
+/**
+ * Which eligible validators are not independent of the work they would judge. Pure; decides nothing.
+ *   test_agent_name  a fixture by name (stopgap above). A fixture's vote is not a peer's vote.
+ *   counterparty     a party itself (the provider, on a contract): judging its own deliverable.
+ *   same_builder     shares repid_agents.builder_id with a party. MINIMAL owner check: the unsigned
+ *                    FK only, and a null builder_id is never "same". PR #1429's resolver
+ *                    (owner-distinct-shadow.ts: signed bindings, delegations) should replace it.
+ * `parties` are ids or names (callers pass either), e.g. [buyer_agent_id, provider_agent_id].
+ */
+export function poolIntegrityExclusions(eligible: any[], agents: any[], parties: unknown[]): Map<any, PoolExclusionReason> {
+  const ps = parties.filter((p) => p !== null && p !== undefined && p !== '');
+  const partyRows = agents.filter((a) => ps.includes(a.id) || ps.includes(a.agent_name));
+  const partyBuilders = new Set(partyRows.map((a) => a.builder_id).filter(Boolean));
+  const out = new Map<any, PoolExclusionReason>();
+  for (const a of eligible) {
+    const reason: PoolExclusionReason | null =
+      TEST_AGENT_NAME.test(String(a.agent_name ?? '')) ? 'test_agent_name'
+      : partyRows.includes(a) ? 'counterparty'
+      : a.builder_id && partyBuilders.has(a.builder_id) ? 'same_builder'
+      : null;
+    if (reason) out.set(a, reason);
+  }
+  return out;
+}
+
 /** PCP's verdict, with no validator having assessed anything. Callers must retry, never score it. */
-type NotCheckedReason = 'validator_fetch_failed' | 'no_eligible_validators' | 'no_validator_answered';
-function notChecked(reason: NotCheckedReason, detail: string) {
+type NotCheckedReason = 'validator_fetch_failed' | 'no_eligible_validators' | 'no_validator_answered' | 'insufficient_independent_validators';
+function notChecked(
+  reason: NotCheckedReason, detail: string,
+  // Who was asked and who answered, when some did but too few to decide (the flag-ON quorum).
+  seen: { respondedCount?: number; attemptedCount?: number; validators?: string[]; attemptedValidators?: string[]; validatorBeliefs?: number[] } = {},
+) {
   // Loud: an unchecked task stalls a contract until someone looks, and a quiet log line is how it
   // sat unnoticed before (validation queue, 2026-09-10 to 2026-10-15).
-  console.error(`[runPCP] ✗ NOT_CHECKED (${reason}): ${detail}. Returning checked:false — no validator assessed this task.`);
+  console.error(`[runPCP] ✗ NOT_CHECKED (${reason}): ${detail}. Returning checked:false — ` +
+    (seen.respondedCount ? 'too few independent answers to decide.' : 'no validator assessed this task.'));
   return {
     score: 0, confidence: 0, checked: false as const, reason,
     respondedCount: 0, attemptedCount: 0, validators: [] as string[], attemptedValidators: [] as string[], validatorBeliefs: [] as number[],
+    ...seen,
   };
 }
 

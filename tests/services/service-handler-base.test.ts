@@ -85,3 +85,42 @@ describe('ServiceHandlerBase (Phase 2.10 production superset)', () => {
     expect(h.fulfilled).toBe(false);
   });
 });
+
+// VALIDATOR_POOL_INTEGRITY ON (XC1 on #1433): an UNDETERMINED filed because too few independent
+// validators existed was assessed by nobody, so it earns nobody SERVICE_FULFILLED RepID (+10/+5).
+describe('ServiceHandlerBase: no SERVICE_FULFILLED deltas for an unstaffed check', () => {
+  class Returns extends ServiceHandlerBase {
+    protected readonly serviceType = 'verification';
+    constructor(private readonly out: Record<string, unknown>) { super(); }
+    protected async fulfill(): Promise<Record<string, unknown>> { return this.out; }
+  }
+  const run = async (out: Record<string, unknown>) => {
+    maybeSingleQueue.push({ data: contract, error: null }, { data: contract, error: null });
+    return new Returns(out).processOne('p1');
+  };
+  let log: jest.SpyInstance;
+  beforeEach(() => {
+    jest.clearAllMocks();
+    maybeSingleQueue.length = 0;
+    terminalResult.error = null;
+    log = jest.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => log.mockRestore());
+
+  it('UNDETERMINED + insufficient_independent_validators: filed, no deltas, says why', async () => {
+    const r = await run({ verdict: 'UNDETERMINED', validator_pool: 'insufficient_independent_validators' });
+    expect(r).toEqual({ processed: true, contract_id: 'c1' });
+    expect(applyServiceFulfilledDeltas).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/c1 filed UNDETERMINED: too few independent validators .* deltas NOT applied/));
+  });
+
+  it('a chain-decided PASS with the same marker was assessed: deltas as before', async () => {
+    await run({ verdict: 'PASS', validator_pool: 'insufficient_independent_validators' });
+    expect(applyServiceFulfilledDeltas).toHaveBeenCalledTimes(1);
+  });
+
+  it('any other UNDETERMINED (flag OFF never sets the marker): deltas as before', async () => {
+    await run({ verdict: 'UNDETERMINED' });
+    expect(applyServiceFulfilledDeltas).toHaveBeenCalledTimes(1);
+  });
+});
