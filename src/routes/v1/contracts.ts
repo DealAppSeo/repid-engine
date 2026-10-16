@@ -4,6 +4,7 @@ import { applyServiceFulfilledDeltas, applyServiceOutcomeDeltas, type ServiceOut
 import { x402Facilitator, X402_VERSION } from '../../services/x402-facilitator';
 import { isPayableAddress } from '../../services/payee-guard';
 import { isSoundDeliverable } from '../../services/verdict';
+import { decideAcceptance, requireAllCriteria } from '../../services/acceptance-rule';
 import {
   isSettleOnDeliveryEnabled,
   recordAuthorization,
@@ -944,18 +945,42 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
     // since 2026-10-15 `verdict` states the claim's truth, and a correct "false" is delivered work.
     // UNDETERMINED never pays. Rule: src/services/verdict.ts.
     const verdict = String((pre.result as any)?.verdict ?? '').toUpperCase();
-    const passed = isSoundDeliverable(pre.result as any) && derived.score > 0;
+    // Partial criteria pay today; ACCEPTANCE_REQUIRE_ALL_CRITERIA (default OFF) requires all.
+    // Rule and measured impact: src/services/acceptance-rule.ts.
+    const decision = decideAcceptance({
+      sound: isSoundDeliverable(pre.result as any),
+      score: derived.score,
+      ratings: derived.ratings,
+      requireAll: requireAllCriteria(),
+    });
+    if (decision.today !== decision.would) {
+      console.log(JSON.stringify({
+        event: 'acceptance_shadow',
+        contract_id: String(req.params.id),
+        met: decision.met,
+        total: decision.total,
+        today: decision.today,
+        would: decision.would,
+      }));
+    }
+    const passed = decision.release;
+    // Reachable only with the flag ON: today's rule would pay, the all-criteria rule withholds.
+    const notAllMet = !passed && decision.today === 'release';
 
     if (!passed) {
       const voided = await voidAuthorization(
         String(req.params.id),
-        `deliverable rejected: verdict=${verdict || 'NONE'} satisfaction=${derived.score}`
+        `deliverable rejected: verdict=${verdict || 'NONE'} satisfaction=${derived.score}` +
+          (notAllMet ? ` criteria=${decision.met}/${decision.total}` : '')
       );
       return res.status(409).json({
         error: 'deliverable_rejected',
         message: 'payment authorization voided — no funds moved; the buyer keeps them',
         verdict: verdict || null,
         satisfaction_score: derived.score,
+        ...(notAllMet
+          ? { reason: 'not_all_criteria_met', criteria_met: decision.met, criteria_total: decision.total }
+          : {}),
         voided,
       });
     }
