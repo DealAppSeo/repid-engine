@@ -140,6 +140,8 @@ const ALLOWLIST = {
     'Read as env.HAL_ISSUER_IDENTITY_ENABLED on an injected ProcessEnv; generator only sees process.env.NAME.',
   RRL_SHADOW_ENABLED:
     'Read as env.RRL_SHADOW_ENABLED on an injected ProcessEnv; generator only sees process.env.NAME.',
+  CALIBRATION_SHADOW_ENABLED:
+    'Read as env.CALIBRATION_SHADOW_ENABLED on an injected ProcessEnv (src/rrl/peer-calibration.ts); generator only sees process.env.NAME.',
   REPID_FORMULA_COMMITMENT_SALT:
     'Read as process.env[FORMULA_SALT_ENV]; generator misses indirection.',
   REPID_IDENTITY_MASTER_SECRET:
