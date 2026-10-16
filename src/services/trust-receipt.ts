@@ -268,7 +268,7 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
 
   const { data: events } = await db
     .from('repid_score_events')
-    .select('agent_id, event_type, delta, repid_before, repid_after, metadata, zk_proof_id')
+    .select('agent_id, event_type, delta, repid_before, repid_after, metadata, zk_proof_id, is_shadow')
     .eq('contract_id', contractId)
     .order('created_at');
 
@@ -310,7 +310,12 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
     payee_wallet: paid ? getAddress(paid.toAddress.toLowerCase()) : null,
     wallets_source: paid ? 'settlement_record' : null,
     paid_before_delivery,
-    reputation_events: (events ?? []).map((e) => {
+    // SHADOW ROWS ARE NOT REPUTATION. `is_shadow` rows record what a would-be policy WOULD have
+    // paid; the applier forces their applied delta to 0, so they moved nothing. Published here
+    // they read as real gains ("+15 1371 -> 1371") and the receipt's own verifier could not
+    // balance the ledger. Measured 2026-10-16: a third of the reputation rows on the daily
+    // receipts were shadow rows. They stay in repid_score_events for whoever measures the shadow.
+    reputation_events: (events ?? []).filter((e) => (e as { is_shadow?: boolean | null }).is_shadow !== true).map((e) => {
       // `decayApplied` ABSENT and `decayApplied: 0` are different facts and are
       // published differently. Absent means no writer recorded a decomposition,
       // so a reader cannot tell an honest decay from a rewritten score; zero
