@@ -6,6 +6,9 @@
  * REAL: the touchpoint constants the live writers apply (SERVICE_FULFILLED_DELTAS,
  * SERVICE_SATISFIED_DELTA_BASE, SERVICE_DISPUTE_DELTAS), the [10, 10000] clamp, the tier bands, and
  * the DB's counterparty rule (count_unique_counterparties counts distinct buyer AGENTS).
+ * The tariff is a parameter (SimOpts.tariff) defaulting to COMMITTED_TARIFF, so scripts/repid-sim/daily-shadow.ts
+ * can score candidate deltas on the same machinery. A volume farmer runs on its own PRNG stream, so it moves no
+ * other agent's numbers.
  * MODELLED: demand, deliverable quality, dispute rates and the attacker's trade volume (stated below).
  * NOT MODELLED: T3 SERVICE_OUTCOME. It cannot be written today: 'SERVICE_OUTCOME' is not in the
  * repid_score_events event_type CHECK, so the "largest weight" touchpoint never lands.
@@ -14,11 +17,27 @@
  * other, or a provider buying from its own sock puppets? And what would an owner-distinct
  * counterparty rule (same operator => no RepID) change? The rule is a SHADOW counterfactual here.
  */
-import { SERVICE_FULFILLED_DELTAS, SERVICE_SATISFIED_DELTA_BASE, SERVICE_DISPUTE_DELTAS } from '../../src/services/validation-repid-delta';
+import { SERVICE_FULFILLED_DELTAS, SERVICE_SATISFIED_DELTA_BASE, SERVICE_DISPUTE_DELTAS, SERVICE_OUTCOME_BASE, RATER_WEIGHT } from '../../src/services/validation-repid-delta';
 import { REPID_MIN, REPID_MAX } from '../../src/scoring/repid-deltas';
 
+/** The A2A touchpoint tariff the sim applies. Defaults to the committed constants the live writers use. */
+export interface Tariff {
+  fulfilled: { provider: number; buyer: number };
+  satisfied: { provider: number; buyer: number };
+  dispute: { provider_at_fault: { provider: number; buyer: number }; buyer_at_fault: { provider: number; buyer: number } };
+  outcome: { good: number; bad: number };
+  raterWeightMax: number;
+}
+export const COMMITTED_TARIFF: Tariff = {
+  fulfilled: { ...SERVICE_FULFILLED_DELTAS },
+  satisfied: { ...SERVICE_SATISFIED_DELTA_BASE },
+  dispute: { provider_at_fault: { ...SERVICE_DISPUTE_DELTAS.provider_at_fault }, buyer_at_fault: { ...SERVICE_DISPUTE_DELTAS.buyer_at_fault } },
+  outcome: { good: SERVICE_OUTCOME_BASE.good, bad: SERVICE_OUTCOME_BASE.bad },
+  raterWeightMax: RATER_WEIGHT.max,
+};
+
 export interface Agent { name: string; operator: string; repid: number; buyers: Set<string>; buyerOperators: Set<string> }
-export interface SimOpts { seed: number; days: number; ownerDistinctRule: boolean; ringTradesPerPairPerDay: number }
+export interface SimOpts { seed: number; days: number; ownerDistinctRule: boolean; ringTradesPerPairPerDay: number; tariff?: Tariff }
 
 function prng(seed: number) {
   let s = seed >>> 0;
@@ -40,16 +59,17 @@ function trade(provider: Agent, buyer: Agent, s: number, disputed: boolean, opts
   provider.buyers.add(buyer.name);
   provider.buyerOperators.add(buyer.operator);
   if (opts.ownerDistinctRule && provider.operator === buyer.operator) return; // shadow counterfactual
-  provider.repid = clamp(provider.repid + SERVICE_FULFILLED_DELTAS.provider);
-  buyer.repid = clamp(buyer.repid + SERVICE_FULFILLED_DELTAS.buyer);
+  const t = opts.tariff ?? COMMITTED_TARIFF;
+  provider.repid = clamp(provider.repid + t.fulfilled.provider);
+  buyer.repid = clamp(buyer.repid + t.fulfilled.buyer);
   if (disputed) {
-    provider.repid = clamp(provider.repid + SERVICE_DISPUTE_DELTAS.provider_at_fault.provider);
-    buyer.repid = clamp(buyer.repid + SERVICE_DISPUTE_DELTAS.provider_at_fault.buyer);
+    provider.repid = clamp(provider.repid + t.dispute.provider_at_fault.provider);
+    buyer.repid = clamp(buyer.repid + t.dispute.provider_at_fault.buyer);
     return;
   }
   if (s > 0) {
-    provider.repid = clamp(provider.repid + Math.round(SERVICE_SATISFIED_DELTA_BASE.provider * s));
-    buyer.repid = clamp(buyer.repid + Math.round(SERVICE_SATISFIED_DELTA_BASE.buyer * s));
+    provider.repid = clamp(provider.repid + Math.round(t.satisfied.provider * s));
+    buyer.repid = clamp(buyer.repid + Math.round(t.satisfied.buyer * s));
   }
 }
 
@@ -66,11 +86,16 @@ export function runA2ARingSim(opts: SimOpts) {
   const sybil = mk('sybil', 'op-sybil');
   const puppets = [mk('puppet-1', 'op-sybil'), mk('puppet-2', 'op-sybil')];
   const market = Array.from({ length: 20 }, (_, i) => mk(`buyer-${i}`, `op-buyer-${i}`));
+  // Volume farmer: real distinct buyers, 4x the honest volume, fabricator-grade quality, rarely disputed
+  // (cheap work is not worth a buyer's dispute). Its own PRNG stream, so adding it moves no other agent.
+  const farmer = mk('farmer', 'op-farm');
+  const farmRnd = prng(opts.seed ^ 0x5eed);
 
   for (let d = 0; d < opts.days; d++) {
     // Honest and fabricating providers: real, demand-limited buyers (Poisson 1.5/day each).
     for (let k = poisson(rnd, 1.5); k > 0; k--) trade(honest, market[Math.floor(rnd() * market.length)]!, rating(rnd, 0.85), rnd() < 0.03, opts);
     for (let k = poisson(rnd, 1.5); k > 0; k--) trade(fabricator, market[Math.floor(rnd() * market.length)]!, rating(rnd, 0.3), rnd() < 0.25, opts);
+    for (let k = poisson(farmRnd, 6); k > 0; k--) trade(farmer, market[Math.floor(farmRnd() * market.length)]!, rating(farmRnd, 0.3), farmRnd() < 0.05, opts);
     // Ring: every member sells to every other member N times a day, rates it perfect, never disputes.
     for (const p of ring) for (const b of ring) if (p !== b) for (let n = 0; n < opts.ringTradesPerPairPerDay; n++) trade(p, b, 1, false, opts);
     // Sybil: two sock puppets buy from the provider N times a day each.
@@ -80,8 +105,8 @@ export function runA2ARingSim(opts: SimOpts) {
   const ringAvg = Math.round(ring.reduce((s, a) => s + a.repid - START, 0) / ring.length);
   return {
     seed: opts.seed, days: opts.days, ownerDistinctRule: opts.ownerDistinctRule, ringTradesPerPairPerDay: opts.ringTradesPerPairPerDay,
-    honest: row(honest), fabricator: row(fabricator), ring_member: { ...row(ring[0]!), net_avg: ringAvg }, sybil_provider: row(sybil),
-    honest_beats: { fabrication: honest.repid > fabricator.repid, collusion: honest.repid - START > ringAvg, sybil: honest.repid > sybil.repid },
+    honest: row(honest), fabricator: row(fabricator), ring_member: { ...row(ring[0]!), net_avg: ringAvg }, sybil_provider: row(sybil), farmer: row(farmer),
+    honest_beats: { fabrication: honest.repid > fabricator.repid, collusion: honest.repid - START > ringAvg, sybil: honest.repid > sybil.repid, farming: honest.repid > farmer.repid },
   };
 }
 
