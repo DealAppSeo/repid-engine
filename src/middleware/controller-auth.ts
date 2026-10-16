@@ -12,13 +12,6 @@ function qrSecret(): string {
   return (process.env.CONTROLLER_QR_SECRET || '').trim();
 }
 
-export interface SbtContext {
-  tokenId?: string;
-  wallet?: string;
-  tier?: string;
-  isMaster: boolean;
-}
-
 export function mintQrToken(role: 'viewer' | 'operator' | 'admin', durationMs: number = 3600 * 1000): string {
   const secret = qrSecret();
   if (!secret) throw new Error(QR_SECRET_MISSING);
@@ -58,27 +51,6 @@ export function verifyQrToken(tokenStr: string): { role: 'viewer' | 'operator' |
   } catch (e) {
     return null;
   }
-}
-
-export async function resolveSbt(req: Request): Promise<SbtContext | null> {
-  const token = ((req.headers['x-sbt-token'] as string) || '').trim();
-  const wallet = ((req.headers['x-sbt-wallet'] as string) || '').trim().toLowerCase();
-  if (!token && !wallet) return null;
-
-  const query = token
-    ? db.from('human_sbt_registry').select('token_id, wallet_address, qualification_tier').eq('token_id', token).limit(1)
-    : db.from('human_sbt_registry').select('token_id, wallet_address, qualification_tier').ilike('wallet_address', wallet).limit(1);
-
-  const { data } = await query;
-  const row = data?.[0];
-  if (!row) return null;
-
-  const master = (process.env.CONTROLLER_MASTER_SBT || '').trim();
-  const isMaster =
-    !!master &&
-    (row.token_id === master || (row.wallet_address || '').toLowerCase() === master.toLowerCase());
-
-  return { tokenId: row.token_id, wallet: row.wallet_address ?? undefined, tier: row.qualification_tier ?? undefined, isMaster };
 }
 
 function isMasterKey(key: string): boolean {
@@ -151,21 +123,11 @@ export async function resolveControllerRole(req: Request): Promise<'viewer' | 'o
     }
   }
 
-  // 3. Check for SBT (x-sbt-token or x-sbt-wallet). [F-15, 2026-10-08] A header that names a token
-  // id or a wallet is a claim, not a proof: both are public on chain, and nothing here checks a
-  // signature. So an SBT named in a header reads (viewer) and never writes. It used to grant
-  // operator or admin by tier or by matching CONTROLLER_MASTER_SBT. Operator and admin now need
-  // CONTROLLER_MASTER_KEY or a QR token signed with CONTROLLER_QR_SECRET (an agent key's scopes no
-  // longer count, see above).
-  try {
-    const sbt = await resolveSbt(req);
-    if (sbt) {
-      return 'viewer';
-    }
-  } catch (e) {
-    console.error('SBT lookup failed', e);
-  }
-
+  // [S2-1, 2026-10-16] No step 3. An `x-sbt-token` / `x-sbt-wallet` header named a token id or a
+  // wallet, both public on chain, and nothing checked a signature, so it was a claim, not a proof.
+  // It granted viewer (F-15 had already removed operator/admin), which read the HITL queue. The
+  // wallet lookup was also an unescaped `.ilike`, so `%` matched any registered SBT. An SBT header
+  // now grants no role; the lookup is gone with it.
   return null;
 }
 
@@ -186,7 +148,7 @@ export function requireRole(requiredRole: 'viewer' | 'operator' | 'admin') {
     // isRole: anything outside the allowlist is no role. `roleHierarchy[unknown] < n` is
     // `undefined < n`, which is false, so an unknown role used to be ADMITTED at every level.
     if (!role || !isRole(role)) {
-      res.status(401).json({ error: 'Unauthorized: Valid SBT, API key, or scoped QR token required' });
+      res.status(401).json({ error: 'Unauthorized: API key or signed controller token required' });
       return;
     }
 
@@ -226,6 +188,9 @@ export function requireRole(requiredRole: 'viewer' | 'operator' | 'admin') {
       } catch (e) {
         console.warn('[controllerAuth] repid_agents lookup failed (possibly mocked DB):', e);
       }
+      // [S2-1] Routes that scope an agent-key viewer's reads use this; undefined means "unknown",
+      // and those routes then show nothing rather than everything.
+      (req as any).boundAgentName = boundAgentName;
 
       if (targetAgentId || targetAgentName) {
         if (targetAgentId && String(targetAgentId).trim().toLowerCase() !== String(dbAgentId).trim().toLowerCase()) {

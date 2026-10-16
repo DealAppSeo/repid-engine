@@ -65,6 +65,11 @@ function adminToken(): string {
   process.env.CONTROLLER_QR_SECRET = TEST_QR_SECRET;
   return mintQrToken('admin');
 }
+// [S2-1] An SBT named in a header grants no role, so read tests use a signed viewer token.
+function viewerToken(): string {
+  process.env.CONTROLLER_QR_SECRET = TEST_QR_SECRET;
+  return mintQrToken('viewer');
+}
 
 test('agent-grid: no SBT header → 401', async () => {
   setMock({ human_sbt_registry: { await: { data: [] } } });
@@ -72,7 +77,7 @@ test('agent-grid: no SBT header → 401', async () => {
   expect(r.status).toBe(401);
 });
 
-test('agent-grid: valid SBT → 200 with live/uptime computed', async () => {
+test('agent-grid: signed viewer token → 200 with live/uptime computed', async () => {
   const now = new Date().toISOString();
   setMock({
     human_sbt_registry: { await: { data: [SBT_ROW] } },
@@ -82,7 +87,7 @@ test('agent-grid: valid SBT → 200 with live/uptime computed', async () => {
     ] } },
     repid_agents: { await: { data: [{ agent_name: 'trinity-mel', current_repid: 10, tier: 'PROBATIONARY' }] } },
   });
-  const r = await request(app).get('/api/v1/controller/agent-grid').set('x-sbt-token', 't1');
+  const r = await request(app).get('/api/v1/controller/agent-grid').set('x-controller-token', viewerToken());
   expect(r.status).toBe(200);
   expect(r.body.count).toBe(2);
   expect(r.body.live).toBe(1); // only the fresh ping counts
@@ -99,15 +104,13 @@ test('squads: reads agent_squad_map → grouped', async () => {
       { agent_name: 'c', squad: 'beta', role: 'researcher', is_active: true },
     ] } },
   });
-  const r = await request(app).get('/api/v1/controller/squads').set('x-sbt-token', 't1');
+  const r = await request(app).get('/api/v1/controller/squads').set('x-controller-token', viewerToken());
   expect(r.status).toBe(200);
   expect(r.body.squad_count).toBe(2);
 });
 
-test('wake: valid SBT but NOT master → 403', async () => {
-  setMock({ human_sbt_registry: { await: { data: [SBT_ROW] } } });
-  // CONTROLLER_MASTER_SBT unset → nobody is master
-  const r = await request(app).post('/api/v1/controller/wake/trinity-mel').set('x-sbt-token', 't1').send({});
+test('wake: a signed viewer token is not admin → 403', async () => {
+  const r = await request(app).post('/api/v1/controller/wake/trinity-mel').set('x-controller-token', viewerToken()).send({});
   expect(r.status).toBe(403);
 });
 
@@ -314,14 +317,14 @@ describe('[F-15] the controller accepts no credential anyone can construct', () 
     expect(typeof r.body.token).toBe('string');
   });
 
-  test('an SBT named in a header reads but never writes, even the master or an institutional tier', async () => {
+  test('an SBT named in a header grants no role, even the master or an institutional tier [S2-1]', async () => {
     process.env.CONTROLLER_MASTER_SBT = 't1';
     setMock({ human_sbt_registry: { await: { data: [{ ...SBT_ROW, qualification_tier: 'institutional' }] } } });
     const wake = await request(app).post('/api/v1/controller/wake/trinity-mel').set('x-sbt-token', 't1').send({});
-    expect(wake.status).toBe(403);
+    expect(wake.status).toBe(401);
     const decide = await request(app).post('/api/v1/controller/requests/r1/decide')
       .set('x-sbt-wallet', '0xabc').send({ decision: 'approved' });
-    expect(decide.status).toBe(403);
+    expect(decide.status).toBe(401);
   });
 });
 
@@ -334,13 +337,13 @@ describe('[F-15] the controller accepts no credential anyone can construct', () 
 describe('[F-18] POST /leads requires operator — a public SBT (viewer) must not write a lead', () => {
   const LEAD = { email: 'stranger@example.com' };
 
-  test('a viewer (SBT named in a header) cannot write a lead → 403, nothing inserted', async () => {
+  test('a viewer cannot write a lead → 403, nothing inserted', async () => {
     const inserts: any[] = [];
     setMock({
       human_sbt_registry: { await: { data: [SBT_ROW] } },
       trinity_leads: { _insert: (v: any) => inserts.push(v) },
     });
-    const r = await request(app).post('/api/v1/controller/leads').set('x-sbt-token', 't1').send(LEAD);
+    const r = await request(app).post('/api/v1/controller/leads').set('x-controller-token', viewerToken()).send(LEAD);
     expect(r.status).toBe(403);
     expect(inserts).toHaveLength(0); // the refusal is a refusal, not a 403 after the row landed
   });
