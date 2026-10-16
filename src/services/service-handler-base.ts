@@ -346,12 +346,22 @@ export abstract class ServiceHandlerBase {
 
       // Canonical Phase 2.6 economy. Signature (Phase 2.9):
       // applyServiceFulfilledDeltas({id, service_id, provider_agent_id, buyer_agent_id})
-      await applyServiceFulfilledDeltas({
-        id: contract.id,
-        service_id: contract.service_id as string,
-        provider_agent_id: contract.provider_agent_id,
-        buyer_agent_id: contract.buyer_agent_id,
-      });
+      // EXCEPT an UNDETERMINED filed because too few independent validators existed to judge it
+      // (VALIDATOR_POOL_INTEGRITY ON, the only way a handler sets this marker): nothing was assessed,
+      // so nobody earns RepID for it. A claim the chain decided (PASS/FAIL) was assessed and earns as before.
+      if (verdict === 'UNDETERMINED' && (result as any)?.validator_pool === 'insufficient_independent_validators') {
+        console.log(
+          `[${this.serviceType}] contract ${contract.id} filed UNDETERMINED: too few independent ` +
+            `validators (VALIDATOR_POOL_INTEGRITY). SERVICE_FULFILLED deltas NOT applied.`
+        );
+      } else {
+        await applyServiceFulfilledDeltas({
+          id: contract.id,
+          service_id: contract.service_id as string,
+          provider_agent_id: contract.provider_agent_id,
+          buyer_agent_id: contract.buyer_agent_id,
+        });
+      }
 
       // QUALITY, as distinct from DELIVERY. Everything above pays for the fact
       // that work arrived; nothing above asks whether it was any good. This is

@@ -261,9 +261,17 @@ describe('VALIDATOR_POOL_INTEGRITY: test agents and same-owner voters', () => {
   });
 
   it('OFF: the draw and the result are byte-identical to the unfiltered draw; the shadow line names the tainted voters', async () => {
+    // A sequence, not a constant: the draw must take exactly 0, 0, 0. One extra Math.random() call
+    // anywhere before it shifts the third pick to 0.99 (trinity-apm); one anywhere after it breaks
+    // the call count. A constant 0 could not tell either apart (XC1 on #1433).
+    const seq = [0, 0, 0, 0.99, 0.99, 0.99];
+    let i = 0;
+    rnd.mockImplementation(() => seq[i++] ?? 0.99);
     (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
     const res = await runPCP(task);
-    // What main draws: the same eligible pool, the same RNG, no integrity filter.
+    expect(rnd).toHaveBeenCalledTimes(3);
+    // What main draws: the same eligible pool, the same RNG sequence, no integrity filter.
+    i = 0;
     const drawn = selectWeightedValidators(eligibleValidators(ROWS, task.claimed_by), 3).map((a) => a.agent_name);
     expect(drawn).toEqual(['trinity-chesed', 'trinity-gcm', 'trinity-redteam-synth-subject']);
     expect(JSON.stringify(res)).toBe(JSON.stringify({
@@ -307,5 +315,56 @@ describe('VALIDATOR_POOL_INTEGRITY: test agents and same-owner voters', () => {
     expect(global.fetch).not.toHaveBeenCalled();
     expect(loud).toHaveBeenCalledWith(expect.stringMatching(/1 independent validator\(s\), 3 required; excluded .*trinity-redteam-synth-subject:test_agent_name/));
     loud.mockRestore();
+  });
+
+  // QUORUM (XC1 on #1433): three drawn, but a vote needs 2 independent answers carrying confidence.
+  const answers = (...conf: Array<number | null>) => {
+    let n = 0;
+    (global.fetch as jest.Mock).mockImplementation(() => {
+      const c = conf[n++];
+      return c === null ? Promise.reject(new Error('down'))
+        : Promise.resolve({ json: () => Promise.resolve({ choices: [{ message: { content: `{"validity": 1, "confidence": ${c}}` } }] }) });
+    });
+  };
+
+  it('ON, 1 of 3 answers with confidence: NOT_CHECKED (insufficient_independent_validators), names who was asked', async () => {
+    process.env.VALIDATOR_POOL_INTEGRITY = 'true';
+    const loud = jest.spyOn(console, 'error').mockImplementation(() => {});
+    answers(0.9, null, 0);
+    (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
+    const res = await runPCP(task);
+    expect(res).toMatchObject({ checked: false, reason: 'insufficient_independent_validators', score: 0, confidence: 0,
+      attemptedCount: 3, attemptedValidators: ['trinity-orch', 'trinity-w3c', 'trinity-apm'] });
+    expect(loud).toHaveBeenCalledWith(expect.stringMatching(/1 of 3 independent validator\(s\) answered with confidence, 2 required/));
+    loud.mockRestore();
+  });
+
+  it('ON, 2 of 3 answer: a vote', async () => {
+    process.env.VALIDATOR_POOL_INTEGRITY = 'true';
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    answers(0.9, null, 0.8);
+    (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
+    const res = await runPCP(task);
+    expect(res).toMatchObject({ checked: true, validators: ['trinity-orch', 'trinity-apm'] });
+    (console.error as jest.Mock).mockRestore();
+  });
+
+  it('ON, nobody answers: keeps no_validator_answered (retry), not the pool reason', async () => {
+    process.env.VALIDATOR_POOL_INTEGRITY = 'true';
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    answers(null, null, null);
+    (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
+    expect(await runPCP(task)).toMatchObject({ checked: false, reason: 'no_validator_answered' });
+    (console.error as jest.Mock).mockRestore();
+  });
+
+  it('OFF, 1 of 3 answers: unchanged, one answer still decides', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    answers(0.9, null, 0);
+    (db as any).select.mockResolvedValueOnce({ data: ROWS, error: null });
+    const res = await runPCP(task);
+    expect(res.checked).toBe(true);
+    expect(res.reason).toBeUndefined();
+    (console.error as jest.Mock).mockRestore();
   });
 });

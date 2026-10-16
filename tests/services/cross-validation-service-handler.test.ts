@@ -9,6 +9,7 @@ jest.mock('../../src/services/validation-repid-delta', () => ({ applyServiceFulf
 jest.mock('../../src/db', () => ({ db: {} }));
 
 import { CrossValidationServiceHandler } from '../../src/services/cross-validation-service-handler';
+import { isSoundDeliverable, routesToDispute } from '../../src/services/verdict';
 
 const contract: any = {
   id: 'c1', provider_agent_id: 'p1', buyer_agent_id: 'buyer1', status: 'escrowed',
@@ -62,5 +63,25 @@ describe('CrossValidationServiceHandler (P-003)', () => {
     const out = await (new CrossValidationServiceHandler() as any).fulfill(contract);
     expect(out.verdict).toBe('FAIL');
     expect(out.pcp_score).toBe(0);
+  });
+
+  // VALIDATOR_POOL_INTEGRITY ON (XC1 on #1433): too few independent validators used to score as
+  // confidence 0 → FAIL → dispute, blaming the provider for a pool nobody could staff.
+  it('passes the provider and contract id to runPCP only; the judge input is unchanged', async () => {
+    runPCP.mockResolvedValue({ score: 0.8, confidence: 0.8, validators: ['a', 'b', 'c'] });
+    runAdversarialJudge.mockResolvedValue({ verdict: 'APPROVE', confidence: 0.9, critique: '' });
+    checkPythagoreanComma.mockReturnValue({ severity: 'none', comma_gap: 0.1, comma_veto: false });
+    await (new CrossValidationServiceHandler() as any).fulfill(contract);
+    expect(runPCP.mock.calls[0][0]).toMatchObject({ claimed_by: 'buyer1', counterparties: ['p1'], contract_id: 'c1' });
+    expect(runAdversarialJudge.mock.calls[0][0]).not.toHaveProperty('counterparties');
+  });
+
+  it('insufficient_independent_validators → UNDETERMINED: no judge, not disputed, not paid, marked', async () => {
+    runPCP.mockResolvedValue({ score: 0, confidence: 0, checked: false, reason: 'insufficient_independent_validators', validators: [] });
+    const out = await (new CrossValidationServiceHandler() as any).fulfill(contract);
+    expect(out).toMatchObject({ verdict: 'UNDETERMINED', validator_pool: 'insufficient_independent_validators', patent_marker: 'P-003' });
+    expect(runAdversarialJudge).not.toHaveBeenCalled();
+    expect(routesToDispute(out)).toBe(false);
+    expect(isSoundDeliverable(out)).toBe(false);
   });
 });

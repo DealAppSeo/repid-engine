@@ -73,7 +73,26 @@ export class DisputeResolutionWorker {
         tier: 4,  // T3+ for disputes — higher stakes
       };
 
-      const pcpResult = await runPCP(syntheticTask);
+      // contract_id + counterparties feed only VALIDATOR_POOL_INTEGRITY: the buyer who disputed is
+      // no more independent than the provider. The judge below still receives syntheticTask unchanged.
+      const pcpResult = await runPCP({ ...syntheticTask, contract_id: contract.id, counterparties: [contract.buyer_agent_id] });
+
+      // Flag ON only: too few INDEPENDENT validators will not change by retrying every poll, so this
+      // is terminal, not pending. Escalated to a human: no verdict, no contract change, no RepID.
+      if (pcpResult.reason === 'insufficient_independent_validators') {
+        await db.from('dispute_validation_queue').update({
+          status: 'skipped',
+          worker_verdict: 'escalated',
+          processed_at: new Date().toISOString(),
+          metadata: {
+            ...(candidate.metadata ?? {}),
+            not_checked_reason: 'insufficient_independent_validators',
+            escalated_at: new Date().toISOString(),
+          },
+        }).eq('id', candidate.id);
+        console.warn(`[DisputeWorker] contract ${contract.id}: too few independent validators (VALIDATOR_POOL_INTEGRITY) — escalated to a human, no verdict, not retried`);
+        return true;
+      }
 
       // NO ANSWER IS NOT A FAULT [F2, 2026-10-07]. With every validator silent, PCP's confidence is
       // 0, which the gate below read as "< 0.3" and resolved provider_at_fault — a -100 for work

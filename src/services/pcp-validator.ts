@@ -58,8 +58,11 @@ export async function runPCP(taskData: any) {
   const eligible = eligibleValidators(agents, taskData.claimed_by);
 
   // VALIDATOR_POOL_INTEGRITY (default OFF). OFF: the draw below is unchanged and one shadow line
-  // names the drawn voters the rule would have excluded. ON: they are never drawn, and fewer than
-  // VALIDATOR_COUNT independent voters is NOT_CHECKED, never a verdict on fewer voters.
+  // names the drawn voters the rule would have excluded. ON: they are never drawn, and the result is
+  // NOT_CHECKED (insufficient_independent_validators) when fewer than VALIDATOR_COUNT independent
+  // validators are left to draw, or fewer than VALIDATOR_QUORUM of the drawn answer with confidence
+  // (see the quorum below). So a VOTE needs 2 of 3 independent answers. A claim a caller can decide
+  // without a vote (the verification handler's eth_chainId read) is still decided with zero voters.
   const flagged = poolIntegrityExclusions(eligible, agents, [taskData.claimed_by, ...(taskData.counterparties ?? [])]);
   const enforce = validatorPoolIntegrityEnabled();
   const pool = enforce ? eligible.filter((a) => !flagged.has(a)) : eligible;
@@ -222,6 +225,17 @@ ${taskData.result}`;
     );
   }
 
+  // Quorum, flag ON only: one confident voter beside two silent ones is not a panel. No answer at
+  // all keeps its own reason above (no_validator_answered: retry); one answer is not enough to decide.
+  const answered = responded.filter((r) => r.confidence > 0).length;
+  if (enforce && checked && answered < VALIDATOR_QUORUM) {
+    return notChecked('insufficient_independent_validators',
+      `${answered} of ${results.length} independent validator(s) answered with confidence, ${VALIDATOR_QUORUM} required`, {
+        respondedCount: responded.length, attemptedCount: results.length,
+        validators: responded.map(r => r.name), attemptedValidators: results.map(r => r.name), validatorBeliefs: responded.map(r => r.confidence),
+      });
+  }
+
   return {
     score: finalScore,
     confidence: avgConfidence,
@@ -264,6 +278,7 @@ export function eligibleValidators(agents: any[], claimer: unknown): any[] {
 const MOCK_HARNESS_NAME = /^(trinity-)?mock-/;
 
 const VALIDATOR_COUNT = 3;
+const VALIDATOR_QUORUM = 2; // flag ON only
 
 /** Default OFF. Strict 'true', like every gate in this engine (config/flag-readiness.ts). */
 export const validatorPoolIntegrityEnabled = () => process.env.VALIDATOR_POOL_INTEGRITY === 'true';
@@ -303,13 +318,19 @@ export function poolIntegrityExclusions(eligible: any[], agents: any[], parties:
 
 /** PCP's verdict, with no validator having assessed anything. Callers must retry, never score it. */
 type NotCheckedReason = 'validator_fetch_failed' | 'no_eligible_validators' | 'no_validator_answered' | 'insufficient_independent_validators';
-function notChecked(reason: NotCheckedReason, detail: string) {
+function notChecked(
+  reason: NotCheckedReason, detail: string,
+  // Who was asked and who answered, when some did but too few to decide (the flag-ON quorum).
+  seen: { respondedCount?: number; attemptedCount?: number; validators?: string[]; attemptedValidators?: string[]; validatorBeliefs?: number[] } = {},
+) {
   // Loud: an unchecked task stalls a contract until someone looks, and a quiet log line is how it
   // sat unnoticed before (validation queue, 2026-09-10 to 2026-10-15).
-  console.error(`[runPCP] ✗ NOT_CHECKED (${reason}): ${detail}. Returning checked:false — no validator assessed this task.`);
+  console.error(`[runPCP] ✗ NOT_CHECKED (${reason}): ${detail}. Returning checked:false — ` +
+    (seen.respondedCount ? 'too few independent answers to decide.' : 'no validator assessed this task.'));
   return {
     score: 0, confidence: 0, checked: false as const, reason,
     respondedCount: 0, attemptedCount: 0, validators: [] as string[], attemptedValidators: [] as string[], validatorBeliefs: [] as number[],
+    ...seen,
   };
 }
 
