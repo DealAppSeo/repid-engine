@@ -146,8 +146,14 @@ export function evalOrder<T extends { id: string; label: string }>(rows: T[]): T
  *       output written before v2, cannot show a FALSE vote and so reads NOT_CHECKED. A veto forced
  *       by the ground-truth gate or the execution floor with no FALSE vote reads NOT_CHECKED too:
  *       conservative on purpose.
+ *   v3 (2026-10-16): v2, plus a row HAL decided on fewer than two model families. HAL itself says
+ *       such a row is not judged: with one family a would-be veto is HELD at 'flagged' and a would-be
+ *       clean becomes 'abstain' (fact-check.ts, MIN_QUORUM_FOR_VETO). v2 caught the abstain but read
+ *       the held 'flagged' as a negative answer, so every under-quorum row on a hallucination scored
+ *       as a miss: on the Lane A baseline (2026-10-16) 9 of 40 rows were 1-family holds, 7 of them FN.
+ *       A row with no recorded family count reads NOT_CHECKED (conservative, like v2's no-votes rule).
  */
-export const SCORING = 'v2-no-agreement-is-not-checked';
+export const SCORING = 'v3-two-families-or-not-checked';
 
 /** A veto that no checker voted FALSE for. */
 export function isNoAgreementVeto(r: { verdict?: string; votes?: Record<string, number> }): boolean {
@@ -157,4 +163,14 @@ export function isNoAgreementVeto(r: { verdict?: string; votes?: Record<string, 
 /** NOT_CHECKED under scoring v2. */
 export function isNotCheckedV2(r: { error?: string; verdict?: string; mode?: string; votes?: Record<string, number> }): boolean {
   return isNotChecked(r) || isNoAgreementVeto(r);
+}
+
+/** Decided on fewer than two model families, or on an unknown number of them. */
+export function isUnderQuorum(r: { familiesUsed?: number }): boolean {
+  return !(typeof r.familiesUsed === 'number' && r.familiesUsed >= 2);
+}
+
+/** NOT_CHECKED under scoring v3 (SCORING). */
+export function isNotCheckedV3(r: { error?: string; verdict?: string; mode?: string; votes?: Record<string, number>; familiesUsed?: number }): boolean {
+  return isNotCheckedV2(r) || isUnderQuorum(r);
 }
