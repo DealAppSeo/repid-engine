@@ -166,7 +166,8 @@ describe('POST /api/v1/contracts/:id/satisfy — acceptance rule wiring', () => 
       criteria_met: 1,
       criteria_total: 2,
     });
-    expect(releaseHeldPayment).not.toHaveBeenCalled();
+    expect(releaseHeldPayment).toHaveBeenCalledTimes(0);
+    expect(voidAuthorization).toHaveBeenCalledTimes(1);
     expect(voidAuthorization).toHaveBeenCalledWith(ID, expect.stringContaining('criteria=1/2'));
   });
 
