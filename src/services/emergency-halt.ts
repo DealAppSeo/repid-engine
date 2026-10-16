@@ -88,6 +88,10 @@
  *   - A MISSING COLUMN is treated as "not halted" and logged once, so this code
  *     is safe to deploy before (or without) the DDL, and safe if the column is
  *     ever rolled back.
+ *   - The rules above are for worker tick loops. The HTTP guard is stricter
+ *     [S3-5, 2026-10-16]: in production it refuses writes while the state has
+ *     never been read or the latest read failed (`peekHaltState().readFailing`).
+ *     See middleware/emergency-halt.ts.
  *
  * LEVERS: EMERGENCY_HALT_MODE (above) · EMERGENCY_HALT_CACHE_MS (default 5000)
  * · EMERGENCY_HALT_TIMEOUT_MS (default 1000 — the hard ceiling on how long this
@@ -167,6 +171,8 @@ let failBackoffUntil = 0;
 let lastFailReason = '';
 /** Last value from a SUCCESSFUL read; drives the sticky-halt rule. */
 let lastKnownGood: boolean | null = null;
+/** True from a failed read until the next successful one. The HTTP guard fails closed on it. */
+let readFailing = false;
 let warnedBadMode = false;
 let warnedMissingColumn = false;
 /** Last `halted` value we logged, so steady state doesn't spam every tick. */
@@ -324,6 +330,9 @@ export async function checkEmergencyHalt(
               'treating as NOT halted. The kill switch is INERT until the column is added.',
           );
         }
+        // A completed read that found no switch: known not-halted, not unknown.
+        lastKnownGood = false;
+        readFailing = false;
         return decide(false, mode, 'column_absent', 'column missing; switch inert');
       }
       return failRead(mode, error.message ?? 'unknown error', now, cacheMs);
@@ -335,6 +344,7 @@ export async function checkEmergencyHalt(
     cachedFlag = flag;
     cachedAt = now;
     lastKnownGood = flag;
+    readFailing = false;
     failBackoffUntil = 0;
     return decide(flag, mode, 'db', data ? 'read from trinity_system_config id=1' : 'no config row (id=1 absent)');
   } catch (e: unknown) {
@@ -352,6 +362,7 @@ export async function checkEmergencyHalt(
 function failRead(mode: EmergencyHaltMode, message: string, now: number, cacheMs: number): HaltDecision {
   lastFailReason = message;
   failBackoffUntil = now + cacheMs;
+  readFailing = true;
   return failDecision(mode, message, { silent: false });
 }
 
@@ -368,7 +379,7 @@ function failDecision(mode: EmergencyHaltMode, message: string, opts: { silent: 
   }
   if (!opts.silent) {
     console.error(
-      `[EmergencyHalt] read ${timedOut ? 'TIMED OUT' : 'FAILED'} (${message}) — failing OPEN (not halted).`,
+      `[EmergencyHalt] read ${timedOut ? 'TIMED OUT' : 'FAILED'} (${message}) — workers fail OPEN (not halted); in production the HTTP guard refuses writes until a good read.`,
     );
   }
   return decide(false, mode, 'error_open', `read failed: ${message}; failing open`);
@@ -430,11 +441,11 @@ function logTransition(flag: boolean, halted: boolean, mode: EmergencyHaltMode, 
  * (fail open, consistent with everything else here), and the middleware says so
  * loudly once rather than silently guarding nothing.
  */
-export function peekHaltState(): { halted: boolean; initialized: boolean; mode: EmergencyHaltMode } {
+export function peekHaltState(): { halted: boolean; initialized: boolean; readFailing: boolean; mode: EmergencyHaltMode } {
   const mode = resolveHaltMode(process.env.EMERGENCY_HALT_MODE);
-  if (mode === 'off') return { halted: false, initialized: true, mode };
+  if (mode === 'off') return { halted: false, initialized: true, readFailing: false, mode };
   const known = lastKnownGood ?? cachedFlag;
-  return { halted: known === true && mode === 'enforce', initialized: known !== null, mode };
+  return { halted: known === true && mode === 'enforce', initialized: known !== null, readFailing, mode };
 }
 
 let refresherTimer: NodeJS.Timeout | null = null;
@@ -495,6 +506,7 @@ export function __resetEmergencyHaltState(): void {
   failBackoffUntil = 0;
   lastFailReason = '';
   lastKnownGood = null;
+  readFailing = false;
   warnedBadMode = false;
   warnedMissingColumn = false;
   lastLoggedHalted = null;

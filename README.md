@@ -408,13 +408,13 @@ The order of the `app.use(...)` calls, top to bottom. `tests/readme-edges.test.t
 
 ```text
 helmet()
+→ emergencyHaltMiddleware(db)             kill switch for mutating requests, ahead of every router; GET and HEAD pass; fails closed in production
 → classifyRouter, telegramPublicRouter    public doors; each brings its own CORS, body limit and rate limit
 → cors(...)                               allow-list in src/utils/cors-origins.ts
 → express.json(...)                       1mb body limit
 → attestationExtractorMiddleware          reads an optional RepID attestation header
 → globalRateLimit()                       src/middleware/rate-limit.ts
 → JSON parse-error handler                malformed JSON becomes a 400
-→ emergencyHaltMiddleware(db)             kill switch for mutating requests; GET and HEAD pass
 → fullAccountRouter                       ahead of the sanitizer on purpose
 → SQL-keyword sanitizer                   POST bodies only, with per-path exemptions
 → public routers                          no key needed
