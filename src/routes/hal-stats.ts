@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { buildFactCheckProviders, auditFamilyIndependence } from '../hal/fact-check';
+import { SEALED_RULER_VERSIONS, rulerIdFor, sealedRunRuler } from '../hal/sealed-ruler';
+import { recordMeasurement } from '../hal/measurement-ruler';
 
 const router = Router();
 
@@ -76,91 +78,111 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
     }
   };
 
+  // EXTERNAL BENCHMARK — an F1 is published only WITH its ruler (CLAUDE_RULES r24, 2026-10-16).
+  //
+  // ~80% of hal_test_cases is now a readable library, so a score on it measures recall of published
+  // answers. Accuracy is measured on the sealed ruler (src/hal/sealed-ruler.ts). The latest run is
+  // published only when its rows carry a sealed ruler tag that names a registered version with its
+  // pinned hash and scored exactly that version's N cases. Otherwise the number is WITHHELD: no
+  // F1, no confusion counts, just the run's identity and the reason. Every run recorded before the
+  // sealed ruler carries harness_version '1.0.0', so today this withholds.
+  //
+  // The matrix comes from the run's own `correct` column (the labels the ruler hash was taken
+  // over), not from today's hal_test_cases, so a later relabel cannot silently change a published
+  // number.
   const getExternalBenchmark = async () => {
     try {
-      const { data: runs, error: runsErr } = await db
+      const { data: latest, error: latestErr } = await db
         .from('hal_external_validation_runs')
-        .select('test_case_id, hal_decision, run_id, run_at')
-        .order('run_at', { ascending: false });
+        .select('run_id, run_at')
+        .order('run_at', { ascending: false })
+        .limit(1);
+      if (latestErr || !latest || latest.length === 0) return null;
+      const runId = latest[0]!.run_id;
+      const measuredAt = latest[0]!.run_at;
 
-      if (runsErr || !runs || runs.length === 0) {
-        return null;
+      const { data: rows, error: rowsErr } = await db
+        .from('hal_external_validation_runs')
+        .select('test_case_id, hal_decision, correct, harness_version')
+        .eq('run_id', runId);
+      if (rowsErr || !rows) return null;
+
+      const identity = {
+        run_id: runId,
+        measured_at: measuredAt,
+        measurement_age_days: Math.floor((Date.now() - new Date(measuredAt).getTime()) / 86_400_000),
+      };
+      const withheld = (reason: string) => ({
+        status: 'not_measured_on_sealed_ruler' as const,
+        note: 'not measured on a sealed ruler yet',
+        reason,
+        ...identity,
+        ruler: null,
+        citation: null,
+        metrics: null,
+      });
+
+      const verdict = sealedRunRuler(
+        rows.map((r: any) => r.harness_version),
+        rows.map((r: any) => String(r.test_case_id)),
+      );
+      if (!verdict.ok) return withheld(verdict.reason);
+      if (rows.some((r: any) => typeof r.correct !== 'boolean')) return withheld('run rows are missing their correctness label');
+
+      const matrix = { tp: 0, fp: 0, fn: 0, tn: 0 };
+      for (const r of rows as Array<{ hal_decision: string; correct: boolean }>) {
+        const vetoed = r.hal_decision === 'vetoed';
+        if (vetoed) r.correct ? matrix.tp++ : matrix.fp++;
+        else r.correct ? matrix.tn++ : matrix.fn++;
       }
-
-      const latestRunId = runs[0]!.run_id;
-      const latestRunRuns = runs.filter((r: any) => r.run_id === latestRunId);
-
-      const { data: cases, error: casesErr } = await db
-        .from('hal_test_cases')
-        .select('id, expected_hallucination');
-
-      if (casesErr || !cases) {
-        return null;
-      }
-
-      const caseMap = new Map<string, boolean>(cases.map((c: any) => [c.id, c.expected_hallucination]));
-
-      let tp = 0, fp = 0, tn = 0, fn = 0;
-      for (const r of latestRunRuns) {
-        const expected = caseMap.get(r.test_case_id);
-        if (expected === undefined) continue;
-
-        const isVetoed = r.hal_decision === 'vetoed';
-        if (expected === true) {
-          if (isVetoed) tp++;
-          else fn++;
-        } else {
-          if (isVetoed) fp++;
-          else tn++;
-        }
-      }
-
-      const precision = tp / (tp + fp || 1);
-      const recall = tp / (tp + fn || 1);
-      const f1 = (2 * precision * recall) / (precision + recall || 1);
-      const accuracy = (tp + tn) / (tp + fp + tn + fn || 1);
-
-      return {
-        run_id: latestRunId,
-        measured_at: latestRunRuns[0]!.run_at,
-        corpus_size: latestRunRuns.length,
-        metrics: {
-          tp, fp, tn, fn,
-          precision: +(precision * 100).toFixed(2),
-          recall: +(recall * 100).toFixed(2),
-          f1_score: +(f1 * 100).toFixed(2),
-          accuracy: +(accuracy * 100).toFixed(2),
+      const k = verdict.parsed;
+      const pin = SEALED_RULER_VERSIONS.find((v) => rulerIdFor(v.version) === verdict.rulerId)!.pin;
+      const m = recordMeasurement({
+        matrix,
+        ruler: {
+          corpus: {
+            corpusId: k.corpusId,
+            contentHash: k.contentHash,
+            caseCount: pin.caseCount,
+            positiveCount: matrix.tp + matrix.fn,
+            builtAt: new Date(measuredAt).toISOString(),
+            sources: [{ source: 'hal_external_validation_runs', caseCount: rows.length, note: String(runId) }],
+          },
+          width: {
+            // The stored tag records the observed width, not the configured one.
+            familiesConfigured: Math.max(1, k.familiesMax),
+            familiesMin: k.familiesMin,
+            familiesMax: k.familiesMax,
+            strictness: k.strictness,
+            decisionRequiresQuorum: k.decisionRequiresQuorum,
+            penaltyRequiresQuorum: k.penaltyRequiresQuorum,
+          },
         },
-        path: 'fact-check-quorum (strictness 2)',
-
-        // AS MEASURED, past tense, deliberately. These figures come from one dated run,
-        // and BOTH models named below have since been retired by their vendors:
-        // Groq shut down `llama-3.1-8b-instant` on 2026-08-16, and Cerebras reports
-        // `zai-glm-4.7` as `model_archived_error`. Neither can be called today.
-        //
-        // Stating the configuration in the present tense implied a quorum that is
-        // currently running. It is not, and `npm run hal:score-external` can no longer
-        // reproduce these numbers — it would fail on both members. A published metric
-        // whose reproduction command does not reproduce is the exact debt this codebase
-        // keeps paying: the caveat has to travel WITH the number, not live in someone's
-        // memory of it.
-        quorum_configuration_as_measured:
-          'Groq (llama-3.1-8b-instant) + Cerebras (zai-glm-4.7) [DeepSeek enabled but simulated-throttled]',
-
-        // Age is computed here rather than left to the reader to subtract from
-        // `measured_at`. Same reasoning as the leaderboard: a date the reader has to do
-        // arithmetic on is a date most readers do not check.
-        measurement_age_days: Math.floor(
-          (Date.now() - new Date(latestRunRuns[0]!.run_at).getTime()) / 86_400_000,
-        ),
-
-        // Three states, not two. `false` here is a FACT about tooling availability, not
-        // a claim that the measurement was wrong — the run happened and its numbers
-        // stand; what has lapsed is our ability to re-run it unchanged.
-        reproducible_today: false,
-        reproducibility_note:
-          'Both quorum members were retired by their vendors after this run. The command below will not reproduce these figures until the quorum is repointed at live models.',
-        reproduction_command: 'npm run hal:score-external',
+      });
+      const pct = (x: number | null) => (x === null ? null : +(x * 100).toFixed(2));
+      return {
+        status: 'measured' as const,
+        ...identity,
+        ruler: {
+          id: k.corpusId,
+          content_hash: k.contentHash,
+          n: pin.caseCount,
+          families_observed_min: k.familiesMin,
+          families_observed_max: k.familiesMax,
+          strictness: k.strictness,
+          decision_requires_quorum: k.decisionRequiresQuorum,
+          penalty_requires_quorum: k.penaltyRequiresQuorum,
+        },
+        citation: m.citation,
+        metrics_unit: 'percent',
+        metrics: {
+          ...matrix,
+          precision: pct(m.metrics.precision),
+          recall: pct(m.metrics.recall),
+          f1_score: pct(m.metrics.f1),
+          accuracy: pct(m.metrics.accuracy),
+        },
+        reproduction_command: `npm run hal:score-external -- --ruler ${k.corpusId}`,
       };
     } catch {
       return null;
@@ -304,7 +326,7 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
       },
     },
 
-    // Verifiable external benchmark statistics
+    // External benchmark: published only with its sealed ruler; otherwise withheld with the reason.
     external_benchmark: externalBenchmark,
 
     // Liveness + latency.

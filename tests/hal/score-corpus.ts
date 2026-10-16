@@ -4,7 +4,7 @@ import { buildFactCheckProviders } from '../../src/hal/fact-check';
 import { evaluate } from '../../src/hal/lib/evaluate';
 import * as crypto from 'crypto';
 import { HalStrictness } from '../../src/hal/measurement-ruler';
-import { caseFamilies, harnessWidth, loadRulerSelection, ruledReport, rulerFromArgv } from '../../src/hal/sealed-ruler';
+import { caseFamilies, harnessWidth, loadRulerSelection, ruledReport, rulerFromArgv, rulerKey } from '../../src/hal/sealed-ruler';
 
 // Ensure env variables are loaded
 import * as dotenv from 'dotenv';
@@ -48,8 +48,8 @@ async function main() {
       decisionRequiresQuorum: envTrue('HAL_DECISION_REQUIRES_QUORUM'),
       penaltyRequiresQuorum: envTrue('HAL_PENALTY_REQUIRES_QUORUM'),
     });
-    const lines = ruledReport(sel, rs.map((r) => ({ id: r.testCaseId, predictedHallucination: r.predictedDecision === 'vetoed' })), width).lines;
-    return [`--- ${label} ---`, ...lines];
+    const rep = ruledReport(sel, rs.map((r) => ({ id: r.testCaseId, predictedHallucination: r.predictedDecision === 'vetoed' })), width);
+    return { lines: [`--- ${label} ---`, ...rep.lines], overall: rep.overall };
   };
   const summary: string[] = [];
 
@@ -91,7 +91,7 @@ async function main() {
       signals: r.signals
     });
   }
-  summary.push(...report('Extractor (strictness 1)', extractorResults, 1, [{ name: 'local-extractor' }]));
+  summary.push(...report('Extractor (strictness 1)', extractorResults, 1, [{ name: 'local-extractor' }]).lines);
   
   // 3. Evaluate Configuration B: Groq Only (strictness 2)
   console.log('--- Evaluating Groq Only (Strictness 2) ---');
@@ -132,7 +132,7 @@ async function main() {
     await delay(PACE_MS);
   }
   console.log();
-  summary.push(...report('Groq only (strictness 2)', groqResults, 2, groqProviders));
+  summary.push(...report('Groq only (strictness 2)', groqResults, 2, groqProviders).lines);
   
   // 4. Evaluate Configuration C: Cerebras Only (strictness 2)
   console.log('--- Evaluating Cerebras Only (Strictness 2) ---');
@@ -173,7 +173,7 @@ async function main() {
     await delay(PACE_MS);
   }
   console.log();
-  summary.push(...report('Cerebras only (strictness 2)', cerebrasResults, 2, cerebrasProviders));
+  summary.push(...report('Cerebras only (strictness 2)', cerebrasResults, 2, cerebrasProviders).lines);
   
   // 5. Evaluate Configuration D: Full Quorum (Groq + Cerebras)
   console.log('--- Evaluating Full Quorum (Strictness 2) ---');
@@ -229,7 +229,11 @@ async function main() {
     await delay(PACE_MS);
   }
   console.log();
-  summary.push(...report('Full quorum (strictness 2)', quorumResults, 2, allProviders));
+  const quorumReport = report('Full quorum (strictness 2)', quorumResults, 2, allProviders);
+  summary.push(...quorumReport.lines);
+  // The stored rows carry their ruler, so GET /hal/stats can cite it (or withhold the number).
+  const rulerTag = `2.0.0|${rulerKey(quorumReport.overall.ruler)}`;
+  for (const row of insertPayloads) row.harness_version = rulerTag;
   
   // 6. Save results to hal_external_validation_runs
   console.log('Saving quorum validation runs to database...');
