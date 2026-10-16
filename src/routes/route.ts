@@ -178,16 +178,40 @@ function inferCategory(prompt: string, taskHint?: string): string {
 /**
  * The four fields every routed response carries (F1, F2): the model asked for (the pin, or
  * the adapter's own id), the model the vendor says served, that model's registry family
- * ('unverified' when unregistered), and whether a pin was honoured. `served` is null when
- * nothing answered.
+ * ('unverified' when unregistered), and whether a pin was honoured. `model_served_source`
+ * says whether the vendor named the model or we fell back to the requested id. `served` is
+ * null when nothing answered.
  */
-function modelFields(decision: RouteDecision | null, requested: string | null, served: string | null) {
+function modelFields(
+  decision: RouteDecision | null,
+  requested: string | null,
+  served: { model: string; source: 'vendor' | 'requested' } | null,
+) {
   return {
     model_requested: decision?.pin?.model_requested ?? requested,
-    model_served: served,
-    family: served ? resolveFamilyOrUnverified(served) : null,
+    model_served: served?.model ?? null,
+    model_served_source: served?.source ?? null,
+    family: served ? resolveFamilyOrUnverified(served.model) : null,
     decision: !decision?.pin ? 'routed' : decision.pin.outcome === 'honoured' ? 'pinned' : 'pin_fallback',
   };
+}
+
+/**
+ * The router decision as the CLIENT sees it. `pin.fallback_reason` names the providers this
+ * deployment has wired and their gate state (unhealthy, cap_hit, no key), so it stays in the
+ * logs and tool-call rows. The client gets `decision: 'pin_fallback'`. An unpinned decision
+ * is returned untouched.
+ */
+function forClient(decision: RouteDecision | null): RouteDecision | null {
+  if (!decision?.pin?.fallback_reason) return decision;
+  const { fallback_reason: _logOnly, ...pin } = decision.pin;
+  return { ...decision, pin };
+}
+
+/** One generic refusal for every reason, so a 400 cannot be used to map our wiring. */
+function refusePin(res: Response, e: Error): void {
+  console.warn(`[llm/complete] pin refused: ${e.message}`);
+  res.status(400).json({ error: 'model_not_pinnable', message: 'model not pinnable here' });
 }
 
 llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Response): Promise<void> => {
@@ -196,14 +220,15 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
     const { prompt, tier_preference = 'auto', task_hint, user_paid_keys, max_tokens, temperature, agent_id, idempotency_key, model } = req.body;
 
     // F1 family pin. Checked before the gate meters a run, so a refused pin costs the caller
-    // nothing. An unknown or unroutable model is refused here, never silently ignored.
+    // nothing. An unknown, unroutable or unpriced model is refused here, never silently
+    // ignored. (The keyless free-only check needs `keyed`, so it runs below.)
     if (model != null) {
       try {
         if (typeof model !== 'string') throw new PinRefusedError('model must be a string naming a registered model');
         resolvePin(model);
       } catch (e) {
         if (!(e instanceof PinRefusedError)) throw e;
-        res.status(400).json({ error: 'model_not_pinnable', message: e.message });
+        refusePin(res, e);
         return;
       }
     }
@@ -311,6 +336,18 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         anonExclusions = envKeyedTier1(user_paid_keys as Record<string, string> | undefined);
       } else {
         effectiveTier = 'tier0_only';
+        // A keyless pin may only be served FREE (review of #1432): otherwise it moves a paid
+        // tier-0 call on our env key ahead of the free providers the chain would use first.
+        // Refused before the shared budget is spent.
+        if (model != null) {
+          try {
+            resolvePin(model, { freeOnly: true });
+          } catch (e) {
+            if (!(e instanceof PinRefusedError)) throw e;
+            refusePin(res, e);
+            return;
+          }
+        }
         const refused = anonLlmBudget.take(
           budgetLimitFrom(process.env['LLM_ANON_GLOBAL_PER_MIN'], LLM_ANON_DEFAULT_PER_MIN),
           budgetLimitFrom(process.env['LLM_ANON_GLOBAL_DAILY'], LLM_ANON_DEFAULT_DAILY),
@@ -336,8 +373,9 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       user_paid_keys,
       maxTokens: max_tokens,
       temperature,
-      // Only when pinned, so an unpinned RouteRequest is exactly what it was.
-      ...(model != null ? { model_override: model } : {})
+      // Only when pinned, so an unpinned RouteRequest is exactly what it was. The router
+      // re-applies free-only to the keyless pin, so the rule does not rest on the check above.
+      ...(model != null ? { model_override: model, ...(!keyed && !bringsOwnKeys ? { pin_free_only: true } : {}) } : {})
     };
 
     // Redact from req.body immediately to ensure downstream error loggers never see it
@@ -409,7 +447,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       });
 
       if (!adapter || decision.reason === 'all_exhausted') {
-        res.status(503).json({ error: 'All available providers exhausted', router_decision: decision, ...modelFields(decision, null, null) });
+        res.status(503).json({ error: 'All available providers exhausted', router_decision: forClient(decision), ...modelFields(decision, null, null) });
         return;
       }
 
@@ -459,8 +497,9 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         const cost_usd = calculateCost(adapter.name, result.model || 'default', result.tokensIn, result.tokensOut);
         // F2: every "model used" record below names what the vendor says served, which can
         // differ from what we asked for. Until 2026-10-16 they all recorded the requested id.
-        const modelServed = servedModel(result) || 'unknown';
-        const routed = modelFields(decision, result.model || 'unknown', modelServed);
+        const served = servedModel(result);
+        const modelServed = served.model || 'unknown';
+        const routed = modelFields(decision, result.model || 'unknown', { model: modelServed, source: served.source });
 
         markSuccess(adapter.name);
         incrementSpend(adapter.name, cost_usd).catch(console.error);
@@ -567,7 +606,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           tokens_out: result.tokensOut,
           latency_ms: result.latencyMs,
           cost_estimate_usd: cost_usd,
-          router_decision: decision,
+          router_decision: forClient(decision),
           hal_evaluation,
           ...routed
         });
@@ -652,7 +691,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       }
     }
 
-    res.status(503).json({ error: 'Max routing attempts reached', router_decision: lastDecision, ...modelFields(lastDecision, null, null) });
+    res.status(503).json({ error: 'Max routing attempts reached', router_decision: forClient(lastDecision), ...modelFields(lastDecision, null, null) });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

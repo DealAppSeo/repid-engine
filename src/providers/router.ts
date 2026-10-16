@@ -17,11 +17,11 @@ import { db } from '../db';
 import { computeShadowDecision, anfisRecommendProvider } from '../services/anfis-router'; // A2 shadow for TRACK A (ANFIS/LASSO rebuild)
 import { applyEscalationOnly } from '../services/anfis-escalation-gate'; // 2026-07-30 bounded live authority (PR #281)
 import { persistShadowDecision } from '../services/anfis-shadow-persist'; // persist shadow decision so ANFIS is measurable (shadow-only, no routing change)
-import { operationalCostClass, declaredFree, defaultBlendedPrice } from './cost-class';
+import { operationalCostClass, declaredFree, defaultBlendedPrice, costClass, type CostClass } from './cost-class';
 import { buildRoutingRecord, summarizeRoutingRecord, RoutingRecord } from '../decisioning/routing-record';
 import { shadowCascadeDecision } from './speculative-cascade-shadow'; // item 8 shadow — inert unless CASCADE_SPECULATION_ENABLED=true
 import { shadowFreeTierQuota } from './free-tier-quota-shadow'; // item 9 shadow — inert unless FREE_TIER_QUOTA_SHADOW_ENABLED=true
-import { FAMILY_REGISTRY_SEED, resolveFamily } from '../decisioning/family-registry';
+import { AMBIGUOUS_SEED, FAMILY_REGISTRY_SEED, resolveFamily } from '../decisioning/family-registry';
 
 export interface RouteRequest {
   prompt: string;
@@ -36,6 +36,8 @@ export interface RouteRequest {
    * recorded on `RouteDecision.pin`.
    */
   model_override?: string;
+  /** Set by /llm/complete for a keyless caller: the pin may only be served free (resolvePin). */
+  pin_free_only?: boolean;
   maxTokens?: number;
   temperature?: number;
 }
@@ -53,7 +55,11 @@ export interface PinRecord {
   model_requested: string;
   family: string;
   outcome: 'honoured' | 'fallback';
-  /** Why each provider of the pinned model could not serve it, e.g. "deepseek: unhealthy". */
+  /**
+   * Why each provider of the pinned model could not serve it, e.g. "deepseek: unhealthy".
+   * Logs and tool-call rows only: /llm/complete strips it from client JSON, because it
+   * names the providers this deployment has wired and their gate state.
+   */
   fallback_reason?: string;
 }
 
@@ -262,28 +268,50 @@ export function routingChain(includeSlm: boolean): { provider: string; tier: '0a
  * registry does not know, or knows only under providers this deployment has not wired
  * (mistral, fireworks, litellm), is REFUSED here rather than quietly routed elsewhere.
  * Tier-0a and tier-1 only: the SLM adapters ignore the requested model.
+ *
+ * COST (review of #1432): a provider is pinnable only if the pinned call is FREE (a declared
+ * free-tier entitlement, or an explicit zero price) or PRICED. An unpriced call records
+ * cost 0, and incrementSpend skips 0, so the spend cap would never move. `freeOnly` (a
+ * keyless caller) allows free only, so nobody without a key can pin a paid tier-0 model onto
+ * our env key ahead of the free providers the chain would have used first.
+ *
+ * The error message carries the real reason, wiring included, for the LOG only. The route
+ * returns a generic message to the client.
  */
-export function resolvePin(model: string): PinTarget {
+export function resolvePin(model: string, opts: { freeOnly?: boolean } = {}): PinTarget {
+  const wanted = String(model ?? '').toLowerCase();
   let family: string;
   try {
     family = resolveFamily(model);
   } catch {
+    const ambiguous = AMBIGUOUS_SEED.find((a) => a.model.toLowerCase() === wanted);
     throw new PinRefusedError(
-      `model "${String(model)}" is not in the family registry (src/decisioning/family-registry.ts); register it before pinning`,
+      ambiguous
+        ? `model "${String(model)}" is ambiguous in the family registry (matches ${ambiguous.matchedFamilies.join('/')}); register it explicitly before pinning`
+        : `model "${String(model)}" is not in the family registry (src/decisioning/family-registry.ts); register it before pinning`,
     );
   }
-  const wanted = model.toLowerCase();
   const entries = FAMILY_REGISTRY_SEED.filter((e) => e.model.toLowerCase() === wanted);
-  const providers = [...tier0aAdapters, ...tier1Adapters]
+  const exact = entries[0]!.model;
+  const inChain = [...tier0aAdapters, ...tier1Adapters]
     .map((a) => a.name)
     .filter((name) => entries.some((e) => e.provider === name));
+  const providers = inChain.filter((name) => {
+    const cls = pinCostClass(name, exact);
+    return opts.freeOnly ? cls === 'free' : cls !== 'unpriced';
+  });
   if (providers.length === 0) {
     throw new PinRefusedError(
-      `model "${model}" (family ${family}) is registered under ${entries.map((e) => e.provider).join(', ')}, ` +
-        `and none of those providers is in this deployment's routing chain`,
+      `model "${model}" (family ${family}) has no pinnable provider: registered under [${entries.map((e) => e.provider).join(', ')}], ` +
+        `in this chain [${inChain.join(', ')}], ${opts.freeOnly ? 'none served free (keyless caller)' : 'none free or priced'}`,
     );
   }
-  return { model: entries[0]!.model, family, providers };
+  return { model: exact, family, providers };
+}
+
+/** A declared free-tier entitlement wins, as in operationalCostClass; else the model's own price row. */
+function pinCostClass(provider: string, model: string): CostClass {
+  return declaredFree(provider) ? 'free' : costClass(provider, model);
 }
 
 /**
@@ -291,7 +319,7 @@ export function resolvePin(model: string): PinTarget {
  * applies: exclusions (no key, disabled, keyless-caller limits, failed earlier in this
  * request), tier_preference, tier-1 key, health and spend cap. Returns the adapter, or the
  * reason none could serve. A pin never bypasses a gate: a keyless caller forced to
- * tier0_only cannot pin a paid tier-1 model onto our key.
+ * tier0_only cannot pin a tier-1 model, and resolvePin's freeOnly keeps it off paid tier-0.
  */
 async function tryPin(pin: PinTarget, req: RouteRequest, excludeProviders: string[]): Promise<ProviderAdapter | string> {
   const why: string[] = [];
@@ -529,7 +557,9 @@ export async function routeRequest(
   excludeProviders: string[] = [],
 ): Promise<RouteResult> {
   // Throws PinRefusedError for an unknown or unroutable pin: refused, never ignored.
-  const pin = req.model_override !== undefined ? resolvePin(req.model_override) : undefined;
+  const pin = req.model_override !== undefined
+    ? resolvePin(req.model_override, { freeOnly: req.pin_free_only })
+    : undefined;
   const pinMiss: { reason?: string } = {};
   const result = await selectRoute(req, excludeProviders, pin, pinMiss);
   if (pin) {

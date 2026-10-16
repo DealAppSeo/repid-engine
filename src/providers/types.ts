@@ -31,11 +31,12 @@ export interface CompletionResponse {
  * OpenAI-compatible vendors and Anthropic, `modelVersion` for Gemini. It can differ from
  * the id requested (a dated snapshot, a gateway's substitution), and until 2026-10-16
  * every log recorded only the requested id. Falls back to that id when the vendor names
- * nothing (cohere, the SLMs).
+ * nothing (cohere, the SLMs), and says so: `source: 'requested'` is an omission, not a
+ * confirmation.
  */
-export function servedModel(r: CompletionResponse): string {
+export function servedModel(r: CompletionResponse): { model: string; source: 'vendor' | 'requested' } {
   const raw = r.rawResponse?.model ?? r.rawResponse?.modelVersion;
-  return typeof raw === 'string' && raw.trim() ? raw : r.model;
+  return typeof raw === 'string' && raw.trim() ? { model: raw, source: 'vendor' } : { model: r.model, source: 'requested' };
 }
 
 export class RateLimitError extends Error {
