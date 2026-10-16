@@ -6,6 +6,8 @@ import { buildAgentLogRow } from '../engine/agent-log-row';
 import { generateProofReal, logProofGeneration } from '../zkp/plonky3-real';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { fireWebhook } from '../services/webhook';
+import { isOperatorKey } from '../middleware/auth';
+import { resolvedTargetProblem } from '../services/erc8004-feedback-verify';
 import { getBuilderProfile, registerBuilder } from '../services/builder-registry';
 import { depositStake, withdrawStake, snapshotAuthority, getCurrentStake } from '../services/stake-vault';
 import { escrowHealth } from '../services/escrow-refunder';
@@ -890,11 +892,25 @@ router.post('/demo/run-round-anonymous', async (req: Request, res: Response) => 
   }
 });
 
+// [S2-4, 2026-10-16] Operator-only. Any API key could register any URL, and fireWebhook then POSTed
+// engine events there (SSRF: loopback, private ranges, cloud metadata) with the caller's chosen
+// `api_key` in a header. Now: an operator key; a public https URL (checked again at delivery and on
+// every redirect); and a signing `secret` of at least 32 characters. Every delivery carries
+// X-Webhook-Signature = HMAC-SHA256(secret, body). The secret is kept in the existing `api_key` column
+// (no DDL) and is never sent or echoed back.
 router.post('/webhooks/register', async (req: Request, res: Response) => {
-  const { url, events, api_key } = req.body;
-  if (!url || !events) return res.status(400).json({ error: 'url and events required' });
+  if (!isOperatorKey(req)) return res.status(403).json({ error: 'Forbidden: registering a webhook needs an operator key' });
+  const { url, events, secret } = req.body ?? {};
+  if (typeof url !== 'string' || !Array.isArray(events) || events.length === 0 || !events.every((e: unknown) => typeof e === 'string')) {
+    return res.status(400).json({ error: 'url and events (a non-empty list of event names) required' });
+  }
+  if (typeof secret !== 'string' || secret.length < 32) {
+    return res.status(400).json({ error: 'secret (at least 32 characters) required: every delivery is HMAC-signed with it' });
+  }
+  const problem = await resolvedTargetProblem(url);
+  if (problem) return res.status(400).json({ error: 'webhook_url_refused', detail: problem });
 
-  const { data, error } = await db.from('repid_webhooks').insert({ url, events, api_key }).select().single();
+  const { data, error } = await db.from('repid_webhooks').insert({ url, events, api_key: secret }).select('id, url, events, active, created_at').single();
   if (error) return res.status(500).json({ error: 'Failed' });
 
   res.json(data);
