@@ -81,12 +81,12 @@ export function generateRegistrationFile(
     // No avatar route exists (GET .../avatar.png answered 401 live, 2026-10-16). An empty
     // image beats a URL that does not resolve.
     image: '',
-    // Only endpoints that exist. The old `.../agents/:id/verify` was never a route; the
-    // public range-check verifier is /api/v1/proof/verify.
+    // Only endpoints an anonymous caller can reach. The old `.../agents/:id/verify` was never a
+    // route; the public range-check verifier is /api/v1/proof/verify. `/agents/:id` and
+    // `.../recall` need an API key (401 anonymous, 2026-10-16) and the spec's service entry has
+    // no auth field, so they are not listed.
     services: [
-      { name: 'agent-state', endpoint: agentUrl },
       { name: 'agent-card', endpoint: `${agentUrl}/card` },
-      { name: 'recall', endpoint: `${agentUrl}/recall` },
       { name: 'repid-proof-verify', endpoint: verifyUrl },
       { name: 'reputation-feedback', endpoint: `${agentUrl}/reputation/payload.json` },
     ],
@@ -120,8 +120,9 @@ export type RegistrationLookup =
  * Fetches an agent by UUID or by exact agent_name and renders its registration file.
  * A name is accepted so the minted token URIs that carry a name
  * (https://trustrepid.dev/agents/trinity-orch, tokens 6705-6712) can resolve here.
- * Names are not unique, so more than one match is `ambiguous` (use the id).
- * `not_found` also covers an agent with no erc8004_token_id. DB errors throw.
+ * Only rows with a token id are considered, so `not_found` covers an unminted agent and two
+ * unminted rows sharing a name are not told apart from a miss. Names are not unique, so more
+ * than one MINTED match is `ambiguous` (use the id). DB errors throw; the route never echoes them.
  * Mounted at GET /api/v1/agents/:id/registration.json.
  */
 export async function fetchAndGenerateRegistrationFile(
@@ -132,6 +133,7 @@ export async function fetchAndGenerateRegistrationFile(
     .from('repid_agents')
     .select('id, agent_name, description, current_repid, tier, lifecycle_status, erc8004_token_id, mint_chain_id')
     .eq(UUID_RE.test(ref) ? 'id' : 'agent_name', ref)
+    .neq('erc8004_token_id', '') // PostgREST neq also drops NULL: minted rows only
     .limit(2);
 
   if (error) throw new Error(`agent lookup failed: ${error.message}`);

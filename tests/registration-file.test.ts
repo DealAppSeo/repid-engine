@@ -25,21 +25,31 @@ const HDM = {
   mint_chain_id: 84532,
 };
 
-/** Supabase stand-in: answers select().eq(col, val).limit() from `rows`, and records the column asked. */
+/**
+ * Supabase stand-in: answers select().eq(col, val).neq(col, val).limit(n) from `rows` with
+ * PostgREST semantics (neq drops NULL), and records the eq column asked.
+ */
 function fakeDb(rows: Array<Record<string, unknown>>, error: { message: string } | null = null) {
   const calls: Array<[string, string]> = [];
+  let hit = rows;
   const builder = {
     select: () => builder,
     eq: (col: string, val: string) => {
       calls.push([col, val]);
-      return { limit: async () => ({ data: error ? null : rows.filter((r) => r[col] === val), error }) };
+      hit = rows.filter((r) => r[col] === val);
+      return builder;
     },
+    neq: (col: string, val: string) => {
+      hit = hit.filter((r) => r[col] != null && r[col] !== val);
+      return builder;
+    },
+    limit: async (n: number) => ({ data: error ? null : hit.slice(0, n), error }),
   };
   return { db: { from: () => builder }, calls };
 }
 
-function app(rows: Array<Record<string, unknown>>) {
-  const { db, calls } = fakeDb(rows);
+function app(rows: Array<Record<string, unknown>>, error: { message: string } | null = null) {
+  const { db, calls } = fakeDb(rows, error);
   const a = express();
   a.use('/api/v1', createAgentRegistrationRouter(db));
   return { a, calls };
@@ -52,9 +62,7 @@ const GOLDEN = {
   description: 'HyperDAG-anchored AI agent trinity-hdm',
   image: '',
   services: [
-    { name: 'agent-state', endpoint: `${E}/agents/${UUID}` },
     { name: 'agent-card', endpoint: `${E}/agents/${UUID}/card` },
-    { name: 'recall', endpoint: `${E}/agents/${UUID}/recall` },
     { name: 'repid-proof-verify', endpoint: `${E}/proof/verify` },
     { name: 'reputation-feedback', endpoint: `${E}/agents/${UUID}/reputation/payload.json` },
   ],
@@ -111,7 +119,7 @@ describe('lookup by uuid or by name', () => {
     expect(res.body).toStrictEqual(GOLDEN);
   });
 
-  it('a name matching two agents is 409, never a guess', async () => {
+  it('a name matching two MINTED agents is 409, never a guess', async () => {
     const res = await request(app([HDM, { ...HDM, id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }]).a).get(
       '/api/v1/agents/trinity-hdm/registration.json',
     );
@@ -131,6 +139,32 @@ describe('unknown or unminted agent', () => {
   it('an agent with no token id is 404', async () => {
     const res = await request(app([{ ...HDM, erc8004_token_id: null }]).a).get(`/api/v1/agents/${UUID}/registration.json`);
     expect(res.status).toBe(404);
+  });
+
+  it('two UNMINTED rows sharing a name read as a miss (404), not as 409', async () => {
+    const twin = { ...HDM, id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', erc8004_token_id: null };
+    const res = await request(app([{ ...HDM, erc8004_token_id: null }, twin]).a).get('/api/v1/agents/trinity-hdm/registration.json');
+    expect(res.status).toBe(404);
+  });
+
+  it('one minted and one unminted row sharing a name resolves the minted one', async () => {
+    const twin = { ...HDM, id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', erc8004_token_id: null };
+    const res = await request(app([twin, HDM]).a).get('/api/v1/agents/trinity-hdm/registration.json');
+    expect(res.status).toBe(200);
+    expect(res.body).toStrictEqual(GOLDEN);
+  });
+});
+
+describe('database failure', () => {
+  it('500 is a fixed string and never echoes the database message', async () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app([HDM], { message: 'relation "repid_agents" secret detail' }).a).get(
+      `/api/v1/agents/${UUID}/registration.json`,
+    );
+    spy.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body).toStrictEqual({ error: 'registration_file_generation_failed' });
+    expect(res.text).not.toContain('secret detail');
   });
 });
 
