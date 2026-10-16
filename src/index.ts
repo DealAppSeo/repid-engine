@@ -48,7 +48,6 @@ import policiesRouter from './routes/v1/policies';
 import devCodegenRouter from './routes/v1/dev-codegen';
 import receiptLookupRouter from './routes/v1/receipts';
 import { CORS_ALLOWED_HEADERS, CORS_EXPOSED_HEADERS } from './config/cors-headers';
-import humanBindStagingRouter from './routes/human-bind-staging';
 import negotiationRouter from './routes/v1/negotiation';
 import marketDiscoverRouter from './routes/v1/market-discover';
 import marketplaceP0Router from './routes/marketplace'; // TrustMarket-light P0: list/browse
@@ -513,7 +512,9 @@ app.use('/api/v1', receiptPublicRouter);
 // execute — the router would answer first and the ceiling would be decorative.
 // Same placement as externalScoreLimiter and subscribeLimiter below.
 app.use('/api/v1/account/connect', accountConnectLimiter);
-app.use('/api/v1', humanBindStagingRouter);
+// [2026-10-16] The unsigned "staging" bind (a body naming a wallet, written to human_agent_binds with
+// only an API key) is deleted: that table never existed in prod and nothing read it. POST /human/bind
+// is served by byokRouter alone, which requires both wallet signatures and the agent's own key.
 app.use('/api/v1', byokRouter);
 // TrustKeys reference tier (2026-10-09): POST /api/v1/jobs/verify. Mounted here, ahead of
 // authMiddleware, for the same reason as byok — the OWNER's signature is the authorization, not an
