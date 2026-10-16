@@ -28,6 +28,7 @@ jest.mock('../src/services/erc8004-reputation', () => ({
 }));
 
 import { maybeWriteOnChainReputation } from '../src/services/onchain-reputation-trigger';
+import { settlementGate } from '../src/workers/feedback-loop-filters';
 
 const REAL_UUID = 'f3ef0bf8-5cdc-4fad-bce8-5144f01dc271';
 
@@ -36,9 +37,19 @@ const REAL_UUID = 'f3ef0bf8-5cdc-4fad-bce8-5144f01dc271';
  * repid_agents...maybeSingle() resolves to; `priorWrites` is what the
  * idempotency SELECT on erc8004_reputation_writes resolves to.
  */
-function makeDb(agentRow: any, priorWrites: any[] = []) {
+const CONFIRMED = { status: 'settled', tx_hash: '0x' + 'ab'.repeat(32), is_simulated: false };
+
+function makeDb(agentRow: any, priorWrites: any[] = [], settlement: any = CONFIRMED) {
   return {
     from(table: string) {
+      if (table === 'x402_settlements') {
+        const builder: any = {
+          select: () => builder,
+          eq: () => builder,
+          maybeSingle: async () => ({ data: settlement, error: null }),
+        };
+        return builder;
+      }
       if (table === 'repid_agents') {
         const builder: any = {
           select: () => builder,
@@ -82,6 +93,7 @@ describe('maybeWriteOnChainReputation gating', () => {
       contractId: 'c-1',
       providerAgentId: REAL_UUID,
       isSimulated: false,
+      x402PaymentId: 'pay-1',
     });
     expect(out).toEqual({ attempted: false, reason: 'disabled' });
     expect(persistSpy).not.toHaveBeenCalled();
@@ -107,6 +119,7 @@ describe('maybeWriteOnChainReputation gating', () => {
       contractId: 'c-1',
       providerAgentId: REAL_UUID,
       isSimulated: false,
+      x402PaymentId: 'pay-1',
     });
     expect(out).toEqual({ attempted: false, reason: 'no_token_id' });
     expect(persistSpy).not.toHaveBeenCalled();
@@ -119,6 +132,7 @@ describe('maybeWriteOnChainReputation gating', () => {
       contractId: 'c-1',
       providerAgentId: REAL_UUID,
       isSimulated: false,
+      x402PaymentId: 'pay-1',
     });
     expect(out).toEqual({ attempted: false, reason: 'below_floor' });
   });
@@ -131,6 +145,7 @@ describe('maybeWriteOnChainReputation gating', () => {
       contractId: 'c-1',
       providerAgentId: REAL_UUID,
       isSimulated: false,
+      x402PaymentId: 'pay-1',
       repidEventId: 99,
     });
     expect(out).toEqual({ attempted: false, reason: 'already_written' });
@@ -144,6 +159,7 @@ describe('maybeWriteOnChainReputation gating', () => {
       contractId: 'c-1',
       providerAgentId: REAL_UUID,
       isSimulated: false,
+      x402PaymentId: 'pay-1',
     });
     expect(out).toEqual({ attempted: false, reason: 'no_writer' });
     expect(persistSpy).not.toHaveBeenCalled();
@@ -165,6 +181,7 @@ describe('maybeWriteOnChainReputation gating', () => {
       contractId: 'c-1',
       providerAgentId: REAL_UUID,
       isSimulated: false,
+      x402PaymentId: 'pay-1',
       repidEventId: 55,
     });
     expect(out).toEqual({ attempted: true, ok: true, txHash: '0xbeef' });
@@ -188,6 +205,30 @@ describe('maybeWriteOnChainReputation gating', () => {
     });
   });
 
+  // Paid first (2026-10-16): the write ran at fulfil time, before /satisfy broadcast the payment —
+  // 3 of 16 daily exchanges carried an on-chain RepID write mined before their USDC settled.
+  test('does NOT write while the payment is only authorized (not yet settled)', async () => {
+    process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED = 'true';
+    mockWriter = { writeRepIDFeedback: jest.fn(), chainId: 84532, getContractAddress: () => '0xabc' };
+    (global as any).__triggerDb = makeDb(REAL_AGENT, [], { status: 'authorized', tx_hash: null, is_simulated: false });
+    const out = await maybeWriteOnChainReputation({ contractId: 'c-1', providerAgentId: REAL_UUID, isSimulated: false, x402PaymentId: 'pay-1' });
+    expect(out).toEqual({ attempted: false, reason: 'settlement_pending' });
+    expect(mockWriter.writeRepIDFeedback).not.toHaveBeenCalled();
+  });
+
+  test('does NOT write for a voided payment, a settled row with no real tx, or no payment at all', async () => {
+    process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED = 'true';
+    mockWriter = { writeRepIDFeedback: jest.fn(), chainId: 84532, getContractAddress: () => '0xabc' };
+    for (const row of [{ status: 'voided', tx_hash: null }, { status: 'settled', tx_hash: null }, { status: 'settled', tx_hash: '0xmock' }]) {
+      (global as any).__triggerDb = makeDb(REAL_AGENT, [], row);
+      const out = await maybeWriteOnChainReputation({ contractId: 'c-1', providerAgentId: REAL_UUID, isSimulated: false, x402PaymentId: 'pay-1' });
+      expect(out).toEqual({ attempted: false, reason: 'settlement_never' });
+    }
+    const none = await maybeWriteOnChainReputation({ contractId: 'c-1', providerAgentId: REAL_UUID, isSimulated: false });
+    expect(none).toEqual({ attempted: false, reason: 'settlement_never' });
+    expect(mockWriter.writeRepIDFeedback).not.toHaveBeenCalled();
+  });
+
   test('is non-fatal when the on-chain write throws', async () => {
     process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED = 'true';
     mockWriter = {
@@ -199,8 +240,24 @@ describe('maybeWriteOnChainReputation gating', () => {
       contractId: 'c-1',
       providerAgentId: REAL_UUID,
       isSimulated: false,
+      x402PaymentId: 'pay-1',
     });
     expect(out).toMatchObject({ attempted: true, ok: false });
     expect(persistSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('settlementGate (pure)', () => {
+  test.each([
+    [{ status: 'settled', tx_hash: '0x' + 'ab'.repeat(32), is_simulated: false }, 'confirmed'],
+    [{ status: 'authorized', tx_hash: null }, 'pending'],
+    [{ status: 'settling', tx_hash: null }, 'pending'],
+    [{ status: 'voided', tx_hash: null }, 'never'],
+    [{ status: 'settled', tx_hash: null }, 'never'],
+    [{ status: 'settled', tx_hash: '0xmock' + 'a'.repeat(60) }, 'never'],
+    [{ status: 'settled', tx_hash: '0x' + 'ab'.repeat(32), is_simulated: true }, 'never'],
+    [null, 'never'],
+  ])('%j → %s', (row, want) => {
+    expect(settlementGate(row as never)).toBe(want);
   });
 });

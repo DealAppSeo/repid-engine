@@ -71,6 +71,35 @@ export const POLL_EVENT_FILTER_SQL = `
          AND COALESCE(event_data->>'drained_as_historical_mock', 'false') != 'true'
          AND COALESCE(event_data->>'drained_as_orphaned_conductor_format', 'false') != 'true'`;
 
+/**
+ * WHERE THE MONEY IS, for a reputation write that claims a paid exchange.
+ *
+ * A `service_fulfilled_settled` outbox row is written at FULFIL time, but under pay-on-verified-
+ * delivery the payment is only broadcast later, at /satisfy (x402-deferred-settlement.ts). Until
+ * 2026-10-16 nothing between the two checked that the money had moved, so the on-chain RepID write
+ * could land before the USDC did (3 of 16 daily exchanges, 6-28 s early), and a contract whose
+ * payment was later voided could still carry an on-chain reputation write.
+ *
+ *   confirmed  the settlement row says `settled` with a real tx hash — write.
+ *   pending    authorized / settling — not yet; leave the outbox row for a later tick.
+ *   never      voided, simulated, missing, or `settled` with no real tx — nothing paid that can be
+ *              shown; do not write.
+ *
+ * Status literals mirror SETTLEMENT_STATUS in services/x402-deferred-settlement.ts (not imported:
+ * this file stays free of db/config imports).
+ */
+export type SettlementGate = 'confirmed' | 'pending' | 'never';
+
+export function settlementGate(
+  row: { status?: string | null; tx_hash?: string | null; is_simulated?: boolean | null } | null,
+): SettlementGate {
+  if (!row || row.is_simulated === true) return 'never';
+  if (row.status === 'authorized' || row.status === 'settling') return 'pending';
+  const tx = String(row.tx_hash ?? '');
+  if (row.status === 'settled' && /^0x[0-9a-f]{64}$/i.test(tx) && !MOCK_TX_RE.test(tx)) return 'confirmed';
+  return 'never';
+}
+
 export interface FilterableEvent {
   subject_type?: string | null;
   subject_id?: string | null;
