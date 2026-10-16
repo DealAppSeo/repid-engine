@@ -5,8 +5,7 @@
  * with DIFFERENT owners. Reputation earned trading with yourself is not trust. A rule that
  * refuses or discounts same-owner trades moves RepID, so it is MAJOR and not decided. This file
  * is the finished-and-inert half (CLAUDE_RULES r23): it says what the rule WOULD do, in a log
- * line, and changes no outcome. MEASURED 2026-10-16 (30d, 32 settled contracts): 3 distinct,
- * 25 same, 4 unknown — scripts/metrics/owner-distinct-share.mjs re-runs it.
+ * line, and changes no outcome. scripts/metrics/owner-distinct-share.mjs measures the share.
  *
  * "SAME OWNER", AS THE CODE CAN SUPPORT IT TODAY. Owners come from `resolveOwner`
  * (agent-owner-resolver.ts), its ranked sources and its rule that two claims name the same
@@ -24,19 +23,26 @@
  *             in different namespaces (a builder id and an SBT token can be the same person).
  *             Unknown is NOT distinct. It is the house rule: TRUE only on positive evidence.
  *
- * GAPS (each one is why `unknown` or a weak `distinct` exists):
- *   - Distinct today rests on `repid_agents.builder_id`, an ADMINISTRATIVE foreign key nobody
- *     signed. MEASURED 2026-10-16: the 12 agents that traded in 30 days have zero ownership
- *     bindings, zero delegations, zero custodianship links. One builder account per agent is
- *     enough to read as distinct, so this is a floor on same-owner trading, not a ceiling.
+ * EVIDENCE, reported next to every relation (XC1 review of #1429):
+ *   strong          every claim the answer rests on was SIGNED by someone (an ownership binding,
+ *                   a delegation, a custodianship link: assurance attested_unverified or above).
+ *   administrative  at least one of them is the unsigned `repid_agents.builder_id` FK. A test
+ *                   fixture with its own builder id reads as a distinct owner here, so an
+ *                   administrative `distinct` must never count toward the 90% target.
+ *   none            relation is unknown; there is nothing to grade.
+ *
+ * GAPS:
+ *   - MEASURED 2026-10-16: the 12 agents that traded in 30 days have zero ownership bindings,
+ *     zero delegations, zero custodianship links, so every answer today is administrative.
  *   - `conservator_address` is deliberately not a source (it is the engine's minting signer).
  *     Agents with no builder_id and only a KYA tier (orch, w3c) are therefore `unknown`.
  *   - Cross-namespace equality is not established anywhere (no builder ↔ SBT ↔ wallet map).
- *   - A non-SBT binding with no builder_id carries a WALLET under kind `builder_id` (resolver
- *     quirk, inherited as-is).
+ *   - Resolver quirk: a non-SBT binding with no builder_id carries a WALLET under kind
+ *     `builder_id`. A builder id is a uuid, so a non-uuid key in that namespace is read here as
+ *     a `wallet` and can never be compared with a builder (it would otherwise read as distinct).
  *
  * This module DECIDES NOTHING and writes nothing. With OWNER_DISTINCT_SHADOW unset the caller
- * never reaches it; with it set to 'true' it adds one log line per settled contract.
+ * never reaches it; with it set to 'true' it adds one log line per fulfilled contract.
  */
 import {
   resolveOwner,
@@ -48,7 +54,13 @@ import {
 } from './agent-owner-resolver';
 
 export type OwnerRelation = 'distinct' | 'same' | 'unknown';
+export type OwnerEvidence = 'strong' | 'administrative' | 'none';
 export type OwnerDistinctWould = 'credit' | 'refuse_same_owner' | 'refuse_unknown';
+
+export interface OwnerRelationResult {
+  relation: OwnerRelation;
+  evidence: OwnerEvidence;
+}
 
 /** What the rule would do for each relation. Unknown is refused: fail closed, never open. */
 export const OWNER_DISTINCT_WOULD: Record<OwnerRelation, OwnerDistinctWould> = {
@@ -57,22 +69,29 @@ export const OWNER_DISTINCT_WOULD: Record<OwnerRelation, OwnerDistinctWould> = {
   unknown: 'refuse_unknown',
 };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const identityClaims = (r: Pick<OwnerResolution, 'claims'>): OwnerClaim[] =>
   r.claims
     .filter((c) => c.ownerKey !== null && c.ownerKeyKind !== 'opaque')
+    .map((c) => (c.ownerKeyKind === 'builder_id' && !UUID_RE.test(String(c.ownerKey)) ? { ...c, ownerKeyKind: 'wallet' as const } : c))
     .sort((a, b) => ASSURANCE_RANK[b.assurance] - ASSURANCE_RANK[a.assurance]);
 
-/** PURE. The relation between the two parties' owners. See the header for the definition. */
+const evidenceOf = (...claims: OwnerClaim[]): Exclude<OwnerEvidence, 'none'> =>
+  claims.every((c) => ASSURANCE_RANK[c.assurance] >= ASSURANCE_RANK.attested_unverified) ? 'strong' : 'administrative';
+
+/** PURE. The relation between the two parties' owners, and how strong the evidence is. */
 export function ownerRelation(
   buyer: Pick<OwnerResolution, 'agentId' | 'claims'>,
   provider: Pick<OwnerResolution, 'agentId' | 'claims'>,
-): OwnerRelation {
-  if (buyer.agentId !== null && buyer.agentId === provider.agentId) return 'same';
+): OwnerRelationResult {
+  if (buyer.agentId !== null && buyer.agentId === provider.agentId) return { relation: 'same', evidence: 'strong' };
   const b = identityClaims(buyer);
   const p = identityClaims(provider);
-  if (b.some((x) => p.some((y) => sameOwner(x, y)))) return 'same';
-  if (b[0] && p[0] && b[0].ownerKeyKind === p[0].ownerKeyKind) return 'distinct';
-  return 'unknown';
+  const shared = b.flatMap((x) => p.filter((y) => sameOwner(x, y)).map((y) => evidenceOf(x, y)));
+  if (shared.length > 0) return { relation: 'same', evidence: shared.includes('strong') ? 'strong' : 'administrative' };
+  if (b[0] && p[0] && b[0].ownerKeyKind === p[0].ownerKeyKind) return { relation: 'distinct', evidence: evidenceOf(b[0], p[0]) };
+  return { relation: 'unknown', evidence: 'none' };
 }
 
 /** Default OFF. Strict 'true', like every gate in this engine (config/flag-readiness.ts). */
@@ -84,6 +103,7 @@ export interface OwnerDistinctShadowLine {
   event: 'owner_distinct_shadow';
   contract_id: string;
   relation: OwnerRelation;
+  evidence: OwnerEvidence;
   would: OwnerDistinctWould;
 }
 
@@ -101,11 +121,12 @@ export async function logOwnerDistinctShadow(
       resolve({ id: contract.buyer_agent_id }),
       resolve({ id: contract.provider_agent_id }),
     ]);
-    const relation = ownerRelation(buyer, provider);
+    const { relation, evidence } = ownerRelation(buyer, provider);
     const line: OwnerDistinctShadowLine = {
       event: 'owner_distinct_shadow',
       contract_id: contract.id,
       relation,
+      evidence,
       would: OWNER_DISTINCT_WOULD[relation],
     };
     console.log(JSON.stringify(line));
