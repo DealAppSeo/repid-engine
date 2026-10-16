@@ -112,10 +112,21 @@ describe('POST /api/v1/contracts/:id/satisfy — acceptance rule wiring', () => 
     delete process.env.ACCEPTANCE_REQUIRE_ALL_CRITERIA;
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
     (db.from as jest.Mock).mockImplementation((table: string) => {
+      // Same chain shape as tests/payee-fail-closed-routes.test.ts: middleware on the way in
+      // calls insert/upsert/order/limit, and a missing method surfaces as a bare 500.
       const chain: any = {
         select: jest.fn(() => chain),
         eq: jest.fn(() => chain),
+        in: jest.fn(() => chain),
+        gte: jest.fn(() => chain),
+        lte: jest.fn(() => chain),
+        not: jest.fn(() => chain),
+        order: jest.fn(() => chain),
+        limit: jest.fn(() => chain),
         update: jest.fn(() => chain),
+        insert: jest.fn(() => chain),
+        upsert: jest.fn(async () => ({ data: null, error: null })),
+        single: jest.fn(async () => ({ data: null, error: null })),
         maybeSingle: jest.fn(async () => ({
           data:
             table === 'service_contracts' ? CONTRACT
