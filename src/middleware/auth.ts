@@ -224,9 +224,9 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && /^(\/api\/v1)?\/events\/recent$/.test(req.path)) return next();
   // Sprint 6: public ERC-8004 verification surface (mint-status, onchain)
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/(mint-status|onchain)$/.test(req.path)) return next();
-  // Sprint 12 (megasprint): public Graph RAG recall surface
-  if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/recall$/.test(req.path)) return next();
-  if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/memory\/recent$/.test(req.path)) return next();
+  // [S2-2, 2026-10-16] /agents/:id/recall and /agents/:id/memory/recent are NOT bypassed any more.
+  // They served any agent's private memory content to anyone. They now need a key, and only a key
+  // bound to :id reads content (src/routes/agent-recall.ts).
   // Scoped lesson recall — read-only, and the dispatcher calls it to append
   // context under the LESSONS.md block it already injects verbatim. Requiring a
   // key here would add a dispatch failure mode without protecting anything new.

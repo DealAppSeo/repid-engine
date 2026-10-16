@@ -788,8 +788,8 @@ app.use('/api/v1/agents', createAgentsOnchainRouter(db));
 // Step (d), 2026-10-07: the agent pays up to the USDC cap its owner approved on-chain. Off unless
 // AGENT_SPEND_ENABLED=true; a dry run always works. Base Sepolia only. See src/services/agent-spend.ts.
 app.use('/api/v1/agents', createAgentSpendRouter());
-// Sprint 12 (megasprint): Graph RAG recall surface — public reads. Bypass
-// added in middleware/auth.ts for /recall and /memory/recent.
+// Sprint 12 (megasprint): Graph RAG recall surface. [S2-2] /recall and /memory/recent need a key;
+// content only for a key bound to :id (see routes/agent-recall.ts). /lessons/recall stays public.
 app.use('/api/v1', createAgentRecallRouter(db));
 // Wave 6: ERC-8004 spec compliance — agent registration file + reputation
 // feedback writes. Public reads bypassed in middleware/auth.ts.

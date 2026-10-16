@@ -6,8 +6,10 @@
 //   GET /api/v1/agents/:id/memory/recent?limit=20
 //     Chronological feed of the agent's N most recent memory nodes.
 //
-// Both routes are PUBLIC reads — no auth. Bypass entry added in
-// src/middleware/auth.ts.
+// [S2-2, 2026-10-16] Both routes need an API key (they are not in the auth bypass). Agent memory is
+// private to the agent: only a key bound to :id (authMiddleware sets req.agent_id) reads content.
+// /memory/recent gives any other key metadata only. /recall refuses it, because a search answers
+// "does this agent remember X?" even with the content stripped (scores, counts, ranking).
 import { Router, type Request, type Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { RetrievalService } from '../services/graph-rag/retrieval-service';
@@ -23,6 +25,11 @@ const ALLOWED_NODE_TYPES: NodeType[] = [
   'interaction',
   'reflection',
 ];
+
+function keyBoundTo(req: Request, agentId: string): boolean {
+  const bound = (req as any).agent_id;
+  return typeof bound === 'string' && bound.trim().toLowerCase() === agentId.trim().toLowerCase();
+}
 
 export function createAgentRecallRouter(supabase: SupabaseClient): Router {
   const router = Router();
@@ -162,11 +169,15 @@ export function createAgentRecallRouter(supabase: SupabaseClient): Router {
    *   threshold  (optional, default 0.5, range 0.3-0.95) — minimum cosine similarity
    *   types      (optional, comma-separated) — filter by node_type values
    *
-   * Public; no auth.
+   * Needs an API key bound to :id (S2-2).
    */
   router.get('/agents/:id/recall', async (req: Request, res: Response) => {
     try {
       const id = String(req.params.id);
+      if (!keyBoundTo(req, id)) {
+        res.status(403).json({ error: 'recall_needs_bound_key', message: "recall reads this agent's memory; it needs an API key bound to this agent" });
+        return;
+      }
       const query = String(req.query.q ?? '').slice(0, 1000);
       if (!query) {
         res.status(400).json({ error: 'q parameter required' });
@@ -237,7 +248,7 @@ export function createAgentRecallRouter(supabase: SupabaseClient): Router {
    *
    * Chronological feed of the agent's N most-recent memory nodes.
    * No query needed — useful for a "what does this agent remember?" UI.
-   * Public; no auth.
+   * Content and the metadata blob only for a key bound to :id; any other key gets metadata only (S2-2).
    */
   router.get('/agents/:id/memory/recent', async (req: Request, res: Response) => {
     try {
@@ -247,10 +258,13 @@ export function createAgentRecallRouter(supabase: SupabaseClient): Router {
         Math.min(50, parseInt(String(req.query.limit ?? '20'), 10) || 20)
       );
 
+      const bound = keyBoundTo(req, id);
       const { data, error } = await supabase
         .from('agent_memory_nodes')
         .select(
-          'id, node_type, content, importance, created_at, access_count, metadata'
+          bound
+            ? 'id, node_type, content, importance, created_at, access_count, metadata'
+            : 'id, node_type, importance, created_at, access_count'
         )
         .eq('agent_id', id)
         .order('created_at', { ascending: false })
@@ -262,6 +276,7 @@ export function createAgentRecallRouter(supabase: SupabaseClient): Router {
         agent_id: id,
         limit,
         count: data?.length ?? 0,
+        content_withheld: !bound,
         nodes: data ?? [],
       });
     } catch (e: unknown) {
