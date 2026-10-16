@@ -11,12 +11,18 @@
  *   GET /api/v1/receipt/latest        -> newest REAL settled exchange (HTML)
  *   GET /api/v1/receipt/:id           -> that exchange (HTML)
  *   GET /api/v1/receipt/:id.json      -> the same data, machine-readable
+ *   GET /api/v1/receipt/:id/proof/:job -> one linked Plonky3 proof: bytes, statement, and a
+ *                                         server-side verification. No API key.
  *
  * Hand-rendered HTML with inline CSS on purpose: no build step, no framework,
  * no CDN. It loads on anything and cannot break because a dependency moved.
  */
 import { Router, Request, Response } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../../middleware/client-ip';
 import { buildTrustReceipt, latestRealSettledContractId, type TrustReceipt } from '../../services/trust-receipt';
+import { db } from '../../db';
+import { verifyRangeCheck } from '../../zkp/range-check-verify';
 
 const router = Router();
 const esc = (s: unknown) =>
@@ -115,8 +121,13 @@ function render(r: TrustReceipt): string {
 
   const zk = r.zk_proofs.length
     ? step(7, 'Zero-knowledge proof attached',
-        `<p class="muted">${esc(r.zk_proofs[0]!.scheme)} · real=${r.zk_proofs[0]!.is_real}</p>
-         <p>Proves a reputation threshold. The score, threshold and agent id are public inputs bound by the proof — tamper-evident, not hidden.</p>`)
+        `<ul>${r.zk_proofs
+          .map((p) => `<li>${esc(p.agent)} · ${esc(p.scheme)} · real=${p.is_real}${
+            p.proof_url ? ` · <a href="${esc(p.proof_url)}">verify</a>` : ''
+          }</li>`)
+          .join('')}</ul>
+         <p>Proves a reputation threshold. The score, threshold and agent id are public inputs bound by the proof — tamper-evident, not hidden.</p>
+         <p class="muted">Each verify link returns the proof bytes and statement and checks them on our server. No API key. To check without trusting us, run them through <code>@hyperdag/proof-verifier</code>.</p>`)
     : '';
 
   const binding = r.work_statement_hash
@@ -202,6 +213,55 @@ router.get('/receipt/:id.json', async (req: Request, res: Response) => {
   const receipt = await buildTrustReceipt(String(req.params.id));
   if (!receipt) return res.status(404).json({ error: 'not_found' });
   return res.json(receipt);
+});
+
+/**
+ * One proof linked to this contract, with its bytes, its statement and a server-side verification.
+ * Keyless on purpose: the by-job route under /agents needs an API key, so a stranger reading a
+ * receipt could see a proof listed and not check it. Only a proof the receipt itself lists is served,
+ * so this cannot be used to browse proofs unrelated to the contract.
+ */
+// Keyless, and each call runs the receipt queries plus a WASM verify, so it is metered per network
+// address (trustedClientIp, as bounties.ts does). CodeQL js/missing-rate-limiting.
+export const PROOF_CHECK_LIMIT_PER_MIN = 30;
+const proofCheckLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: PROOF_CHECK_LIMIT_PER_MIN,
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'too_many_requests' },
+});
+
+router.get('/receipt/:id/proof/:jobId', proofCheckLimiter, async (req: Request, res: Response) => {
+  const receipt = await buildTrustReceipt(String(req.params.id));
+  if (!receipt) return res.status(404).json({ error: 'not_found' });
+  const jobId = String(req.params.jobId);
+  const linked = receipt.zk_proofs.find((p) => p.job_id === jobId);
+  if (!linked) return res.status(404).json({ error: 'proof_not_linked', message: 'No proof with this job id is linked to this contract.' });
+
+  // Newest row for the job, the same row linkedProofs picked for the receipt.
+  const { data: row } = await db
+    .from('repid_zkp_proofs')
+    .select('proof_bytes, statement, scheme')
+    .eq('job_id', jobId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const proofBytes = typeof row?.proof_bytes === 'string' && row.proof_bytes ? row.proof_bytes : null;
+  const statement = row?.statement && typeof row.statement === 'object' && !Array.isArray(row.statement)
+    ? (row.statement as Record<string, unknown>)
+    : null;
+  const verification = row?.scheme === 'plonky3_range_check' && proofBytes && statement
+    ? verifyRangeCheck(proofBytes, statement)
+    : { verified: false, error: 'not a plonky3_range_check row with proof bytes and a statement' };
+
+  return res.json({
+    contract_id: receipt.contract_id,
+    ...linked,
+    proof_bytes: proofBytes,
+    verification,
+  });
 });
 
 router.get('/receipt/:id', async (req: Request, res: Response) => {

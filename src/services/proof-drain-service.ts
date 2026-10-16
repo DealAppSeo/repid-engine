@@ -287,6 +287,24 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         console.warn(`[ProofDrain] tier lookup threw for ${args.agentId}:`, e instanceof Error ? e.message : e);
       }
 
+      // The contract's work-statement hash, copied so the receipt can show which agreed work this
+      // proof was recorded against. The queue has no column for it, so it is read here, by the
+      // contract_id the queue row carries. PROVENANCE ONLY: the proof's statement is a RepID range
+      // ({agent_id, repid_score, threshold, tier}); it does not commit to this hash.
+      let workStatementHash: string | null = null;
+      if (args.contractId) {
+        try {
+          const { data: c } = await config.supabase
+            .from('service_contracts')
+            .select('work_statement_hash')
+            .eq('id', args.contractId)
+            .maybeSingle();
+          workStatementHash = (c as { work_statement_hash?: string | null } | null)?.work_statement_hash ?? null;
+        } catch (e) {
+          console.warn(`[ProofDrain] work_statement_hash lookup threw for contract ${args.contractId}:`, e instanceof Error ? e.message : e);
+        }
+      }
+
       // S-ONCHAIN Phase 3: log routing decision for this proof (even for drain output)
       const decision = await routeProof('POSTCARD', { agentRepId: tierProven === 'VETERAN' ? 8000 : 1000 });
       console.log(`[ProofDrain] routing for proof: ${decision.route_to} (${decision.reason})`);
@@ -325,6 +343,7 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         // is additive) — deliberately NOT bundled here, because a production column-type change
         // is a decision, and this fix should not wait on it.
         ...(args.contractId ? { contract_id: args.contractId } : {}),
+        ...(workStatementHash ? { work_statement_hash: workStatementHash } : {}),
         proof_type: 'POSTCARD',
         tier_proven: tierProven,
         merkle_root: args.merkleRoot,

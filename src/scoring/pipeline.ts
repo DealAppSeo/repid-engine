@@ -783,6 +783,8 @@ export async function runScoreEvent(
         job_id: zk_proof_id,
         agent_id: input.agent_id,
         event_id: score_event_id,
+        // The proof drain copies this onto repid_zkp_proofs; the public receipt reads it there.
+        contract_id: insertPayload.contract_id ?? null,
         status: 'pending',
         zkp_service_url: proverBaseUrl(),
       })
@@ -1065,6 +1067,10 @@ export async function applyValidationEvent(
         job_id: zk_proof_id,
         agent_id,
         event_id: (eventRow as any).id,
+        // Never written before 2026-10-16: the only queue rows with a contract_id were the one-time
+        // 2026-08-01 backfill, so no daily-exchange proof could reach its receipt. The drain copies
+        // it onto repid_zkp_proofs, which is where the receipt looks.
+        contract_id: insertPayload.contract_id,
         status: 'pending',
         zkp_service_url: proverBaseUrl(),
       })
