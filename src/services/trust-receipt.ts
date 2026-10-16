@@ -99,7 +99,27 @@ export interface TrustReceipt {
   onchain_url: string | null;
   onchain_repid: number | null;
   onchain_link_is_proven: boolean;
-  zk_proofs: Array<{ scheme: string | null; is_real: boolean | null; statement: unknown }>;
+  /**
+   * The Plonky3 proofs minted for this exchange's score events. Linked two ways, both exact:
+   * `repid_zkp_proofs.contract_id`, or the job id the score event recorded
+   * (`repid_score_events.zk_proof_id` = `repid_zkp_proofs.job_id`). The second is what links every
+   * proof minted before 2026-10-16, when nothing carried contract_id onto the proof row.
+   *
+   * What a proof proves: the agent's RepID was at least `threshold` (a range check over
+   * `statement`). It does NOT prove the work was done or correct. `work_statement_hash` is the
+   * contract hash recorded beside the proof (provenance), not an input the proof commits to.
+   * `proof_url` serves the bytes and a server-side verification with no API key.
+   */
+  zk_proofs: Array<{
+    job_id: string | null;
+    agent: string | null;
+    scheme: string | null;
+    is_real: boolean | null;
+    statement: unknown;
+    eas_attestation_uid: string | null;
+    work_statement_hash: string | null;
+    proof_url: string | null;
+  }>;
   /**
    * ZK BIND T1. Commits this exchange's immutable facts. Recomputable by anyone
    * from the receipt (see services/work-statement.ts) — a mismatch means the
@@ -221,7 +241,7 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
 
   const { data: events } = await db
     .from('repid_score_events')
-    .select('agent_id, event_type, delta, repid_before, repid_after, metadata')
+    .select('agent_id, event_type, delta, repid_before, repid_after, metadata, zk_proof_id')
     .eq('contract_id', contractId)
     .order('created_at');
 
@@ -242,11 +262,7 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
     caveats.push('No ERC-8004 write is provably linked to this contract. Writes made before 2026-08-01 did not record which contract caused them.');
   }
 
-  const { data: proofs } = await db
-    .from('repid_zkp_proofs')
-    .select('scheme, is_real, statement')
-    .eq('contract_id', contractId)
-    .limit(3);
+  const proofs = await linkedProofs(contractId, (events ?? []).map((e) => (e as { zk_proof_id?: string | null }).zk_proof_id));
 
   return {
     contract_id: c.id,
@@ -293,7 +309,16 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
     onchain_url: onchain?.tx_hash ? scan(onchain.tx_hash) : null,
     onchain_repid: onchain?.repid_value ?? null,
     onchain_link_is_proven: !!onchain,
-    zk_proofs: (proofs ?? []).map((p) => ({ scheme: p.scheme, is_real: p.is_real, statement: p.statement })),
+    zk_proofs: proofs.map((p) => ({
+      job_id: p.job_id ?? null,
+      agent: p.agent_id ? names[p.agent_id] ?? String(p.agent_id).slice(0, 8) : null,
+      scheme: p.scheme ?? null,
+      is_real: p.is_real ?? null,
+      statement: p.statement ?? null,
+      eas_attestation_uid: p.eas_attestation_uid ?? null,
+      work_statement_hash: p.work_statement_hash ?? null,
+      proof_url: p.job_id ? `/api/v1/receipt/${c.id}/proof/${p.job_id}` : null,
+    })),
     work_statement_hash: c.work_statement_hash ?? null,
     work_statement: (c as any).work_statement ?? null,
     criterion_ratings: (c as any).criterion_ratings ?? null,
@@ -303,6 +328,35 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
         : Number((c as any).buyer_satisfaction_score),
     caveats,
   };
+}
+
+const PROOF_COLS = 'id, job_id, agent_id, scheme, is_real, statement, eas_attestation_uid, work_statement_hash, created_at';
+type LinkedProof = {
+  id: number; job_id: string | null; agent_id: string | null; scheme: string | null; is_real: boolean | null;
+  statement: unknown; eas_attestation_uid: string | null; work_statement_hash: string | null; created_at: string | null;
+};
+
+/**
+ * Proofs linked to a contract: by `contract_id` on the proof row, or by the job ids its score events
+ * recorded. Two parameterised queries rather than one `.or()` string, because the contract id comes
+ * from the URL and must never be spliced into a PostgREST filter. One row per job (a retried job can
+ * leave two rows; the newest wins). Oldest first, matching the reputation events.
+ */
+async function linkedProofs(contractId: string, jobIds: Array<string | null | undefined>): Promise<LinkedProof[]> {
+  const ids = [...new Set(jobIds.filter((j): j is string => typeof j === 'string' && j.length > 0))];
+  const [byContract, byJob] = await Promise.all([
+    db.from('repid_zkp_proofs').select(PROOF_COLS).eq('contract_id', contractId).limit(20),
+    ids.length
+      ? db.from('repid_zkp_proofs').select(PROOF_COLS).in('job_id', ids).limit(20)
+      : Promise.resolve({ data: [] as LinkedProof[] }),
+  ]);
+  const byKey = new Map<string, LinkedProof>();
+  for (const p of [...((byContract.data ?? []) as LinkedProof[]), ...((byJob.data ?? []) as LinkedProof[])]) {
+    const key = p.job_id ?? `row:${p.id}`;
+    const prev = byKey.get(key);
+    if (!prev || String(p.created_at ?? '') > String(prev.created_at ?? '')) byKey.set(key, p);
+  }
+  return [...byKey.values()].sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
 }
 
 /** The most recent exchange that genuinely completed with real money. */
