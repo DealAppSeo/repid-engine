@@ -3,7 +3,7 @@
  *
  * Repurposes the existing UptimeRobot monitors (free, 5-min pings) as our cron system
  * for the telemetry runners. Three POST endpoints, each:
- *   - require header `X-Cron-Token` === env `CRON_TRIGGER_TOKEN` (else 401)
+ *   - require header `X-Cron-Token` to match env `CRON_TRIGGER_TOKEN` (secretEquals; else 401)
  *   - are idempotent: a run within the trigger's min-interval is skipped (no double-write)
  *   - log each actual run to repid_telemetry_snapshots (metric_family='cron_trigger';
  *     snapshot_type='cron_trigger' carried in metadata — the table has no snapshot_type col)
@@ -13,6 +13,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
+import { secretEquals } from '../../auth/api-keys';
 import { captureTelemetry, healthSummary24h, runAuditProbe } from '../../observability/cron-runners';
 import { runStatusDigest } from '../../services/status-digest';
 import { retuneAnfisRoutingRunner } from '../../services/anfis-retune';
@@ -41,8 +42,8 @@ async function lastRun(trigger: string): Promise<{ at: string; summary: any } | 
 
 function handle(trigger: string, runner: (sb: any, opts: any) => Promise<any>) {
   return async (req: Request, res: Response) => {
-    const token = process.env.CRON_TRIGGER_TOKEN;
-    if (!token || req.header('X-Cron-Token') !== token) {
+    // r32: constant-time, through the one verifier. Unset CRON_TRIGGER_TOKEN refuses every call.
+    if (!secretEquals(req.header('X-Cron-Token'), process.env.CRON_TRIGGER_TOKEN)) {
       return res.status(401).json({ error: 'invalid_or_missing_cron_token' });
     }
     // Idempotency: skip if a run happened within this trigger's window.
