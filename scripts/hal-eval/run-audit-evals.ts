@@ -1,36 +1,40 @@
+/**
+ *   npx ts-node scripts/hal-eval/run-audit-evals.ts [--ruler hal-sealed-v1] [--source <tag>] [--sweep]
+ *
+ * Measures HAL on the 5 audit categories of a named ruler (default: the newest hal-sealed-v<N>, see
+ * src/hal/sealed-ruler.ts) at the configured HAL_VETO_THRESHOLD. A category/source filter is a
+ * subset of the ruler, so it is reported as `<ruler>/subset` with its own hash.
+ *
+ * --sweep prints F1 across thresholds. That is TUNING: a threshold picked on sealed items makes every
+ * later score on that ruler optimistic, so it is off by default and prints a warning when on.
+ */
 import 'dotenv/config';
 import { db } from '../../src/db';
 import { halService } from '../../src/hal/service';
+import { buildFactCheckProviders } from '../../src/hal/fact-check';
+import { describeCorpus } from '../../src/hal/corpus-manifest';
+import { caseFamilies, harnessWidth, loadRulerSelection, ruledReport, rulerFromArgv } from '../../src/hal/sealed-ruler';
 import crypto from 'crypto';
 
 const VETO_THRESHOLD = Number(process.env.HAL_VETO_THRESHOLD ?? '0.5');
+const envTrue = (k: string) => /^(1|true|yes|on)$/i.test(process.env[k] ?? '');
 
 async function main() {
   console.log("🚀 Starting HAL Validation Audit & Sweep...");
   const runId = crypto.randomUUID();
 
-  // 1. Fetch test cases for the 5 target categories.
-  //    CC3: --source <tag> restricts to a corpus version (e.g. the T12-cleaned set
-  //    'source=t12-2026-06-08') so GA measures on the VALIDATED corpus, not the contaminated one
-  //    (W6). Omit --source to run all. The chosen corpus tag is logged for reproducibility.
+  // 1. The ruler's cases in the 5 target categories.
+  //    CC3: --source <tag> restricts to a corpus version (logged for reproducibility).
   const categories = ['math', 'code', 'opinion', 'creative', 'time-sensitive'];
   const srcIdx = process.argv.indexOf('--source');
   const sourceFilter = srcIdx >= 0 && srcIdx + 1 < process.argv.length ? process.argv[srcIdx + 1] : undefined;
-  let q = db
-    .from('hal_test_cases')
-    .select('id, prompt_text, category, expected_decision, expected_hallucination, difficulty, source')
-    .in('category', categories);
-  if (sourceFilter) q = q.eq('source', sourceFilter);
-  const { data: cases, error } = await q;
+  const sel = await loadRulerSelection<{ id: string; prompt_text: string; expected_hallucination: boolean; source?: string | null; category?: string | null }>(
+    db, rulerFromArgv(), ['category'],
+  );
+  const cases = sel.rows.filter((c) => categories.includes(String(c.category)) && (!sourceFilter || c.source === sourceFilter));
+  console.log(`Selected ${cases.length} of ${describeCorpus(sel.manifest)}${sourceFilter ? ` (source='${sourceFilter}')` : ''}.`);
 
-  if (error || !cases) {
-    console.error("Failed to fetch test cases:", error?.message);
-    process.exit(1);
-  }
-
-  console.log(`Fetched ${cases.length} test cases${sourceFilter ? ` (corpus source='${sourceFilter}')` : ' (all sources)'}.`);
-
-  const results: any[] = [];
+  const results: { case_id: string; category: string; expected_hallucination: boolean; hal_score: number; families: number }[] = [];
 
   // 2. Evaluate each case
   let count = 0;
@@ -38,24 +42,23 @@ async function main() {
     count++;
     process.stdout.write(`Evaluating case ${count}/${cases.length} (${c.category})... `);
     const t0 = Date.now();
-    
+
     let response;
     try {
       response = await halService.evaluate({
         text: c.prompt_text,
-        context: { domain: c.category, certainty: 0.8 },
+        context: { domain: String(c.category), certainty: 0.8 },
         strictness: 2
       });
     } catch (err: any) {
       console.log(`❌ Error: ${err.message}`);
       continue;
     }
-    
+
     const latency = Date.now() - t0;
     console.log(`✅ score=${response.hal_score.toFixed(3)} decision=${response.decision}`);
 
-    // Map response models and providers
-    const providers = response.provider_responses 
+    const providers = response.provider_responses
       ? (response.provider_responses as any[]).map(r => r.provider).join(',')
       : 'unknown';
     const models = response.provider_responses
@@ -76,99 +79,57 @@ async function main() {
       provider: providers,
       model: models,
       run_at: new Date().toISOString(),
-      // v1.1: rebased onto main, where provider_responses[].model is populated, so `model`
-      // is the real per-provider model string (not 'unknown'). Free-tier family-diverse quorum.
-      harness_version: 't12-audit-v1.1'
+      harness_version: 't12-audit-v1.2'
     });
-
-    if (insertErr) {
-      console.error(`Failed to insert validation run:`, insertErr.message);
-    }
+    if (insertErr) console.error(`Failed to insert validation run:`, insertErr.message);
 
     results.push({
-      case_id: c.id,
-      category: c.category,
-      expected_decision: c.expected_decision,
+      case_id: String(c.id),
+      category: String(c.category),
       expected_hallucination: c.expected_hallucination,
       hal_score: response.hal_score,
-      hal_decision: response.decision,
-      providers
+      families: caseFamilies(2, response.signals),
     });
 
     // Cooldown to prevent rate limit triggers
     await new Promise(resolve => setTimeout(resolve, 1500));
   }
 
-  // 3. Perform Threshold Sweep (FALSE/veto is the positive condition we want to catch)
-  console.log("\n=== THRESHOLD SWEEP ANALYSIS ===");
-  const sweep: any[] = [];
-  
-  for (let t = 0.05; t <= 0.951; t += 0.05) {
-    let TP = 0, FP = 0, FN = 0, TN = 0;
-    for (const r of results) {
-      const predictedVeto = r.hal_score >= t;
-      const actualVeto = r.expected_decision === 'veto';
-      
-      if (actualVeto) {
-        predictedVeto ? TP++ : FN++;
-      } else {
-        predictedVeto ? FP++ : TN++;
+  // 3. Ruled metrics at the configured threshold, split public-benchmark vs internal and by category.
+  const width = harnessWidth({
+    strictness: 2,
+    familiesConfigured: new Set(buildFactCheckProviders().map((p) => p.family ?? p.name)).size,
+    perCaseFamilies: results.map((r) => r.families),
+    decisionRequiresQuorum: envTrue('HAL_DECISION_REQUIRES_QUORUM'),
+    penaltyRequiresQuorum: envTrue('HAL_PENALTY_REQUIRES_QUORUM'),
+  });
+  const report = ruledReport(
+    sel,
+    results.map((r) => ({ id: r.case_id, predictedHallucination: r.hal_score >= VETO_THRESHOLD })),
+    width,
+    { breakdowns: { category: (r) => r.category } },
+  );
+  console.log(`\n=== RULED METRICS (veto threshold ${VETO_THRESHOLD}) ===`);
+  for (const line of report.lines) console.log(line);
+
+  // 4. Optional threshold sweep (tuning).
+  if (process.argv.includes('--sweep')) {
+    const on = describeCorpus(report.overall.ruler.corpus);
+    console.log(`\n=== THRESHOLD SWEEP on ${on} ===`);
+    console.log(`WARNING: choosing a threshold here tunes on ${sel.rulerId}; a threshold adopted from it makes later ${sel.rulerId} scores optimistic.`);
+    for (let t = 0.05; t <= 0.951; t += 0.05) {
+      let TP = 0, FP = 0, FN = 0, TN = 0;
+      for (const r of results) {
+        const predictedVeto = r.hal_score >= t;
+        if (r.expected_hallucination) predictedVeto ? TP++ : FN++;
+        else predictedVeto ? FP++ : TN++;
       }
+      const precision = TP / (TP + FP || 1);
+      const recall = TP / (TP + FN || 1);
+      const f1 = (2 * precision * recall) / (precision + recall || 1);
+      const castrationCost = FP / (FP + TN || 1); // False Veto Rate
+      console.log(`t=${t.toFixed(2)} F1=${f1.toFixed(4)} P=${precision.toFixed(4)} R=${recall.toFixed(4)} FVR=${castrationCost.toFixed(4)} tp=${TP} fp=${FP} fn=${FN} tn=${TN} on ${on}`);
     }
-    const precision = TP / (TP + FP || 1);
-    const recall = TP / (TP + FN || 1);
-    const f1 = (2 * precision * recall) / (precision + recall || 1);
-    const castrationCost = FP / (FP + TN || 1); // False Veto Rate / False Positive Rate
-    
-    sweep.push({
-      threshold: +t.toFixed(2),
-      TP, FP, FN, TN,
-      precision: +precision.toFixed(4),
-      recall: +recall.toFixed(4),
-      f1: +f1.toFixed(4),
-      castrationCost: +castrationCost.toFixed(4)
-    });
-  }
-
-  // Find best threshold by F1
-  const best = sweep.reduce((max, s) => s.f1 > max.f1 ? s : max, sweep[0]);
-
-  console.log(`\nOptimal Veto Threshold (Max F1):`);
-  console.log(`- Threshold: ${best.threshold}`);
-  console.log(`- F1 Score:  ${best.f1.toFixed(4)}`);
-  console.log(`- Precision: ${best.precision.toFixed(4)}`);
-  console.log(`- Recall:    ${best.recall.toFixed(4)}`);
-  console.log(`- Castration Cost (False Veto Rate): ${(best.castrationCost * 100).toFixed(2)}%`);
-  console.log(`- Confusion Matrix: TP=${best.TP}, FP=${best.FP}, FN=${best.FN}, TN=${best.TN}`);
-
-  // 4. Print Per-Category Table under Optimal Threshold
-  console.log("\n=== PER-CATEGORY METRICS (At Optimal Threshold) ===");
-  const categoriesList = Array.from(new Set(results.map(r => r.category)));
-  
-  console.log(`| Category | Precision | Recall | F1 | Castration Cost |`);
-  console.log(`| --- | --- | --- | --- | --- |`);
-  
-  for (const cat of categoriesList) {
-    const catResults = results.filter(r => r.category === cat);
-    let TP = 0, FP = 0, FN = 0, TN = 0;
-    
-    for (const r of catResults) {
-      const predictedVeto = r.hal_score >= best.threshold;
-      const actualVeto = r.expected_decision === 'veto';
-      
-      if (actualVeto) {
-        predictedVeto ? TP++ : FN++;
-      } else {
-        predictedVeto ? FP++ : TN++;
-      }
-    }
-    
-    const precision = TP / (TP + FP || 1);
-    const recall = TP / (TP + FN || 1);
-    const f1 = (2 * precision * recall) / (precision + recall || 1);
-    const castrationCost = FP / (FP + TN || 1);
-    
-    console.log(`| ${cat.padEnd(14)} | ${precision.toFixed(4)} | ${recall.toFixed(4)} | ${f1.toFixed(4)} | ${(castrationCost * 100).toFixed(2)}% |`);
   }
 
   console.log(`\nRun completed. run_id: ${runId}`);

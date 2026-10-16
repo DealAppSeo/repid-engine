@@ -3,7 +3,8 @@
  * labeled rows to hal_runner_results. MEASURE-ONLY — no scoring/threshold/penalty
  * change. Fixes the disconnect that left hal_runner_results unlinked to ground truth.
  *
- *   Reads hal_test_cases (109: prompt_text + expected_hallucination)
+ *   Reads a named ruler of hal_test_cases (`--ruler`, default the newest hal-sealed-v<N>; see
+ *   src/hal/sealed-ruler.ts). Console output carries no case id or text; metric lines carry the ruler.
  *   For each: runs BOTH paths —
  *     fact-check (halService strictness 2, cross-LLM = the canonical hal_runner pipeline)
  *     extractor  (evaluate strictness 1 = the LIVE score-event path, for the PR#77 diagnosis)
@@ -16,6 +17,11 @@ import { db } from '../../src/db';
 import { halService } from '../../src/hal/service';
 import { evaluate } from '../../src/hal/lib/evaluate';
 import { execSync } from 'child_process';
+import { buildFactCheckProviders } from '../../src/hal/fact-check';
+import { caseFamilies, harnessWidth, loadRulerSelection, ruledReport, rulerFromArgv } from '../../src/hal/sealed-ruler';
+import { describeCorpus } from '../../src/hal/corpus-manifest';
+
+const envTrue = (k: string) => /^(1|true|yes|on)$/i.test(process.env[k] ?? '');
 
 const VETO = Number(process.env.HAL_VETO_THRESHOLD ?? '0.43');
 
@@ -26,19 +32,19 @@ function commit(): string { try { return execSync('git rev-parse HEAD').toString
   const eng = commit();
   console.log(`[run] run_id=${runId} commit=${eng} veto=${VETO}`);
 
-  const { data: cases, error } = await db
-    .from('hal_test_cases')
-    .select('id, prompt_text, expected_hallucination, category, difficulty')
-    .order('id');
-  if (error || !cases) { console.error('read hal_test_cases failed:', error?.message); process.exit(1); }
-  console.log(`[run] ${cases.length} labeled cases`);
+  const sel = await loadRulerSelection(db, rulerFromArgv(), ['category', 'difficulty']);
+  const cases = sel.rows;
+  console.log(`[run] ${cases.length} labeled cases of ${describeCorpus(sel.manifest)}`);
+  const fcScored: { id: string; predictedHallucination: boolean }[] = [];
+  const exScored: { id: string; predictedHallucination: boolean }[] = [];
+  const fcFamilies: number[] = [];
 
   // confusion accumulators (positive = hallucination)
   const fc = { tp: 0, fp: 0, fn: 0, tn: 0, fail: 0 };
   const ex = { tp: 0, fp: 0, fn: 0, tn: 0 };
   const extractorRows: any[] = [];
 
-  for (const c of cases as any[]) {
+  for (const [i, c] of (cases as any[]).entries()) {
     const gt = c.expected_hallucination === true; // ground truth
     let halScore = 0.5, vetoed = false, vetoClass: string | null = null, commaGap: number | null = null;
     let providers: string[] = [], signals: any = {}, genFailed = false, failReason: string | null = null;
@@ -55,6 +61,8 @@ function commit(): string { try { return execSync('git rev-parse HEAD').toString
     } catch (e: any) {
       genFailed = true; failReason = e?.message ?? String(e);
     }
+    fcFamilies.push(caseFamilies(2, signals));
+    fcScored.push({ id: String(c.id), predictedHallucination: vetoed });
     const latency = Date.now() - t0;
 
     const wasCaught = gt && vetoed;
@@ -70,6 +78,7 @@ function commit(): string { try { return execSync('git rev-parse HEAD').toString
       exVeto = !!er.vetoed || exScore >= VETO;
     } catch { /* extractor is pure; ignore */ }
     if (gt) (exVeto ? ex.tp++ : ex.fn++); else (exVeto ? ex.fp++ : ex.tn++);
+    exScored.push({ id: String(c.id), predictedHallucination: exVeto });
     extractorRows.push({ id: c.id, gt, exScore: +exScore.toFixed(4), exVeto });
 
     // veto_class CHECK constraint allows {BFT_CONTRADICTION, FACTUAL_ERROR, UNKNOWN, null}
@@ -86,17 +95,20 @@ function commit(): string { try { return execSync('git rev-parse HEAD').toString
       ground_truth_is_hallucination: gt, was_caught: wasCaught, false_positive: falsePositive,
       gen_failed: genFailed, gen_failure_reason: failReason, providers_attempted: providers,
     });
-    if (insErr) console.error(`  insert FAILED #${c.id}: ${insErr.message}`);
-    process.stdout.write(`#${c.id} gt=${gt ? 'H' : 'C'} fc=${halScore.toFixed(3)}/${vetoed ? 'VETO' : 'pass'} ex=${exScore.toFixed(3)}/${exVeto ? 'VETO' : 'pass'}${genFailed ? ' [FAIL:' + failReason?.slice(0, 20) + ']' : ''}\n`);
+    if (insErr) console.error(`  insert FAILED [${i + 1}/${cases.length}]: ${insErr.message}`);
+    process.stdout.write(`[${i + 1}/${cases.length}] gt=${gt ? 'H' : 'C'} fc=${halScore.toFixed(3)}/${vetoed ? 'VETO' : 'pass'} ex=${exScore.toFixed(3)}/${exVeto ? 'VETO' : 'pass'}${genFailed ? ' [FAIL:' + failReason?.slice(0, 20) + ']' : ''}\n`);
   }
 
-  const f1 = (m: any) => { const p = m.tp / (m.tp + m.fp || 1), r = m.tp / (m.tp + m.fn || 1); return { p: +p.toFixed(3), r: +r.toFixed(3), f1: +((2 * p * r) / (p + r || 1)).toFixed(3) }; };
-  console.log(`\n=== FACT-CHECK (current full HAL) === run_id=${runId}`);
-  console.log(`TP=${fc.tp} FP=${fc.fp} FN=${fc.fn} TN=${fc.tn} provider_fail=${fc.fail}`, f1(fc));
+  const quorum = { decisionRequiresQuorum: envTrue('HAL_DECISION_REQUIRES_QUORUM'), penaltyRequiresQuorum: envTrue('HAL_PENALTY_REQUIRES_QUORUM') };
+  const familiesConfigured = new Set(buildFactCheckProviders().map((p) => p.family ?? p.name)).size;
+  const fcWidth = harnessWidth({ strictness: 2, familiesConfigured, perCaseFamilies: fcFamilies, ...quorum });
+  const exWidth = harnessWidth({ strictness: 1, familiesConfigured: 1, perCaseFamilies: exScored.map(() => 1), ...quorum });
+  console.log(`\n=== FACT-CHECK (current full HAL) === run_id=${runId} provider_fail=${fc.fail}`);
+  for (const l of ruledReport(sel, fcScored, fcWidth, { engineCommit: eng }).lines) console.log(l);
   console.log(`=== EXTRACTOR (live score-event path) ===`);
-  console.log(`TP=${ex.tp} FP=${ex.fp} FN=${ex.fn} TN=${ex.tn}`, f1(ex));
+  for (const l of ruledReport(sel, exScored, exWidth, { engineCommit: eng }).lines) console.log(l);
   const exH = extractorRows.filter(r => r.gt).map(r => r.exScore), exC = extractorRows.filter(r => !r.gt).map(r => r.exScore);
   const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / (a.length || 1);
-  console.log(`extractor separation: meanH=${mean(exH).toFixed(4)} meanC=${mean(exC).toFixed(4)} gap=${(mean(exH) - mean(exC)).toFixed(4)}`);
+  console.log(`extractor separation: meanH=${mean(exH).toFixed(4)} meanC=${mean(exC).toFixed(4)} gap=${(mean(exH) - mean(exC)).toFixed(4)} on ${describeCorpus(sel.manifest)}`);
   console.log(`\nRUN_ID=${runId}`);
 })().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });

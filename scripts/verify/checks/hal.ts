@@ -10,11 +10,15 @@
  *   - >50% of samples had provider failures → SKIP('provider-degraded NN%')  [HAL is provider-fragile]
  *   - clean run, F1<thr or sep≤0      → FAIL (real regression)
  *
- * Tunables: HAL_CHECK_SAMPLE (default 30; 0=all 109), HAL_VETO_THRESHOLD (0.43),
- *           HAL_CHECK_MIN_F1 (0.70).
+ * Tunables: HAL_CHECK_SAMPLE (default 30; 0=all), HAL_VETO_THRESHOLD (0.43),
+ *           HAL_CHECK_MIN_F1 (0.70), HAL_RULER (default: newest hal-sealed-v<N>).
+ *
+ * The cases come from a named ruler (src/hal/sealed-ruler.ts), never the readable table, and the
+ * F1 is reported with that ruler's id, hash and N (a sample is minted `<ruler>/subset`).
  */
 import { CheckResult, pass, fail, skip } from '../lib/types';
 import { getDb } from '../lib/db';
+import { DEFAULT_RULER_ID, caseFamilies, harnessWidth, loadRulerSelection, ruledReport } from '../../../src/hal/sealed-ruler';
 
 const ID = 'hal';
 const TITLE = 'HAL discrimination on labeled corpus (F1 + separation)';
@@ -55,16 +59,19 @@ export async function halCheck(): Promise<CheckResult> {
     return skip(ID, TITLE, `could not load halService: ${e?.message ?? e}`, true);
   }
 
-  const { data: all, error } = await db
-    .from('hal_test_cases')
-    .select('id, prompt_text, expected_hallucination')
-    .order('id');
-  if (error || !all?.length) return skip(ID, TITLE, `read hal_test_cases failed: ${error?.message ?? 'empty'}`, true);
+  let sel;
+  try {
+    sel = await loadRulerSelection(db, process.env.HAL_RULER || DEFAULT_RULER_ID);
+  } catch (e: any) {
+    return skip(ID, TITLE, `ruler refused: ${e?.message ?? e}`, true);
+  }
 
-  const cases = sampleCases(all as any[], SAMPLE);
+  const cases = sampleCases(sel.rows, SAMPLE);
   const m = { tp: 0, fp: 0, fn: 0, tn: 0 };
   let failed = 0;
   const scoresH: number[] = [], scoresC: number[] = [];
+  const scored: { id: string; predictedHallucination: boolean }[] = [];
+  const families: number[] = [];
 
   for (const c of cases) {
     const gt = c.expected_hallucination === true;
@@ -75,10 +82,13 @@ export async function halCheck(): Promise<CheckResult> {
       vetoed = r.decision === 'vetoed' || score >= VETO;
       const s = r.signals ?? {};
       if (s.degraded || s.providers_used === 0 || s.providers_used === 1) degraded = true;
+      families.push(caseFamilies(2, s));
     } catch {
       degraded = true;
+      families.push(0);
     }
     if (degraded) failed++;
+    scored.push({ id: String(c.id), predictedHallucination: vetoed });
     (gt ? scoresH : scoresC).push(score);
     if (gt) (vetoed ? m.tp++ : m.fn++); else (vetoed ? m.fp++ : m.tn++);
   }
@@ -88,11 +98,19 @@ export async function halCheck(): Promise<CheckResult> {
   const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
   const meanH = mean(scoresH), meanC = mean(scoresC);
   const separation = meanH - meanC;
-  const p = m.tp / (m.tp + m.fp || 1), rec = m.tp / (m.tp + m.fn || 1);
-  const f1 = (2 * p * rec) / (p + rec || 1);
+  const report = ruledReport(sel, scored, harnessWidth({
+    strictness: 2,
+    familiesConfigured: keys,
+    perCaseFamilies: families,
+    decisionRequiresQuorum: /^(1|true|yes|on)$/i.test(process.env.HAL_DECISION_REQUIRES_QUORUM ?? ''),
+    penaltyRequiresQuorum: /^(1|true|yes|on)$/i.test(process.env.HAL_PENALTY_REQUIRES_QUORUM ?? ''),
+  }));
+  const p = report.overall.metrics.precision ?? 0, rec = report.overall.metrics.recall ?? 0;
+  const f1 = report.overall.metrics.f1 ?? 0;
+  const cite = report.overall.citation;
 
   const detail = {
-    sampled: n, veto_threshold: VETO, provider_keys: keys,
+    sampled: n, veto_threshold: VETO, provider_keys: keys, ruler: report.lines,
     confusion: m, precision: +p.toFixed(3), recall: +rec.toFixed(3), f1: +f1.toFixed(3),
     mean_score_hallucination: +meanH.toFixed(3), mean_score_correct: +meanC.toFixed(3), separation: +separation.toFixed(3),
     provider_fail_rate: +failRate.toFixed(2), min_f1: MIN_F1,
@@ -106,7 +124,7 @@ export async function halCheck(): Promise<CheckResult> {
     return fail(ID, TITLE, `BLIND: separation ${separation.toFixed(3)} ≤ 0 (mean H ${meanH.toFixed(2)} vs C ${meanC.toFixed(2)})`, true, detail);
   }
   if (f1 < MIN_F1) {
-    return fail(ID, TITLE, `F1 ${f1.toFixed(3)} < ${MIN_F1} (sep ${separation.toFixed(3)} ok)`, true, detail);
+    return fail(ID, TITLE, `${cite} < ${MIN_F1} (sep ${separation.toFixed(3)} ok)`, true, detail);
   }
-  return pass(ID, TITLE, `F1 ${f1.toFixed(3)} ≥ ${MIN_F1}, separation +${separation.toFixed(3)} (n=${n}, ${Math.round(failRate * 100)}% provider-fail)`, true, detail);
+  return pass(ID, TITLE, `${cite} ≥ ${MIN_F1}, separation +${separation.toFixed(3)} (n=${n}, ${Math.round(failRate * 100)}% provider-fail)`, true, detail);
 }

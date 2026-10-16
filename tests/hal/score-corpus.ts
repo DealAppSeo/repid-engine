@@ -3,6 +3,8 @@ import { HalService } from '../../src/hal/service';
 import { buildFactCheckProviders } from '../../src/hal/fact-check';
 import { evaluate } from '../../src/hal/lib/evaluate';
 import * as crypto from 'crypto';
+import { HalStrictness } from '../../src/hal/measurement-ruler';
+import { caseFamilies, harnessWidth, loadRulerSelection, ruledReport, rulerFromArgv } from '../../src/hal/sealed-ruler';
 
 // Ensure env variables are loaded
 import * as dotenv from 'dotenv';
@@ -27,66 +29,30 @@ interface EvaluationResult {
   signals: any;
 }
 
-interface Metrics {
-  tp: number;
-  fp: number;
-  tn: number;
-  fn: number;
-  accuracy: number;
-  precision: number;
-  recall: number;
-  f1: number;
-}
-
-function calculateMetrics(results: EvaluationResult[]): Metrics {
-  let tp = 0, fp = 0, tn = 0, fn = 0;
-  
-  for (const r of results) {
-    const isVetoed = r.predictedDecision === 'vetoed';
-    if (r.expected === true) {
-      if (isVetoed) tp++;
-      else fn++;
-    } else {
-      if (isVetoed) fp++;
-      else tn++;
-    }
-  }
-  
-  const accuracy = (tp + tn) / (tp + fp + tn + fn || 1);
-  const precision = tp / (tp + fp || 1);
-  const recall = tp / (tp + fn || 1);
-  const f1 = (2 * precision * recall) / (precision + recall || 1);
-  
-  return { tp, fp, tn, fn, accuracy, precision, recall, f1 };
-}
+const envTrue = (k: string) => /^(1|true|yes|on)$/i.test(process.env[k] ?? '');
 
 async function main() {
   console.log('=== Starting HAL External Scoring Harness ===\n');
   
-  // 1. Fetch test cases
-  console.log('Fetching external test cases from database...');
-  const { data: testCases, error: fetchErr } = await db
-    .from('hal_test_cases')
-    .select('id, prompt_text, expected_decision, expected_hallucination, source, notes')
-    .in('source', ['external-truthfulqa-20260606', 'external-fever-20260606', 'external-halueval-20260606']);
-    
-  if (fetchErr || !testCases) {
-    console.error('Failed to fetch test cases:', fetchErr?.message);
-    process.exit(1);
-  }
-  
-  const cases = testCases as TestCase[];
-  console.log(`Loaded ${cases.length} test cases.`);
-  
-  // Separate by source
-  const truthfulQACases = cases.filter(c => c.source === 'external-truthfulqa-20260606');
-  const feverCases = cases.filter(c => c.source === 'external-fever-20260606');
-  const haluEvalCases = cases.filter(c => c.source === 'external-halueval-20260606');
-  
-  console.log(`  TruthfulQA: ${truthfulQACases.length}`);
-  console.log(`  FEVER: ${feverCases.length}`);
-  console.log(`  HaluEval: ${haluEvalCases.length}\n`);
-  
+  // 1. The ruler's cases (default: the newest hal-sealed-v<N>; `--ruler` to pick another version).
+  const sel = await loadRulerSelection(db, rulerFromArgv(), ['expected_decision', 'notes']);
+  const cases = sel.rows as unknown as TestCase[];
+  console.log(`Loaded ${cases.length} cases of ${sel.rulerId}@${sel.manifest.contentHash}.\n`);
+
+  /** Every metric line carries the ruler id, hash and N, split public-benchmark vs internal. */
+  const report = (label: string, rs: EvaluationResult[], strictness: HalStrictness, providers: { name: string; family?: string }[]) => {
+    const width = harnessWidth({
+      strictness,
+      familiesConfigured: new Set(providers.map((p) => p.family ?? p.name)).size,
+      perCaseFamilies: rs.map((r) => caseFamilies(strictness, r.signals)),
+      decisionRequiresQuorum: envTrue('HAL_DECISION_REQUIRES_QUORUM'),
+      penaltyRequiresQuorum: envTrue('HAL_PENALTY_REQUIRES_QUORUM'),
+    });
+    const lines = ruledReport(sel, rs.map((r) => ({ id: r.testCaseId, predictedHallucination: r.predictedDecision === 'vetoed' })), width).lines;
+    return [`--- ${label} ---`, ...lines];
+  };
+  const summary: string[] = [];
+
   // Get all available providers
   const allProviders = buildFactCheckProviders();
   console.log('Available Fact Check Providers:');
@@ -125,8 +91,7 @@ async function main() {
       signals: r.signals
     });
   }
-  const extractorMetrics = calculateMetrics(extractorResults);
-  console.log(`Extractor F1: ${(extractorMetrics.f1 * 100).toFixed(2)}%\n`);
+  summary.push(...report('Extractor (strictness 1)', extractorResults, 1, [{ name: 'local-extractor' }]));
   
   // 3. Evaluate Configuration B: Groq Only (strictness 2)
   console.log('--- Evaluating Groq Only (Strictness 2) ---');
@@ -167,8 +132,7 @@ async function main() {
     await delay(PACE_MS);
   }
   console.log();
-  const groqMetrics = calculateMetrics(groqResults);
-  console.log(`Groq Only F1: ${(groqMetrics.f1 * 100).toFixed(2)}%\n`);
+  summary.push(...report('Groq only (strictness 2)', groqResults, 2, groqProviders));
   
   // 4. Evaluate Configuration C: Cerebras Only (strictness 2)
   console.log('--- Evaluating Cerebras Only (Strictness 2) ---');
@@ -209,8 +173,7 @@ async function main() {
     await delay(PACE_MS);
   }
   console.log();
-  const cerebrasMetrics = calculateMetrics(cerebrasResults);
-  console.log(`Cerebras Only F1: ${(cerebrasMetrics.f1 * 100).toFixed(2)}%\n`);
+  summary.push(...report('Cerebras only (strictness 2)', cerebrasResults, 2, cerebrasProviders));
   
   // 5. Evaluate Configuration D: Full Quorum (Groq + Cerebras)
   console.log('--- Evaluating Full Quorum (Strictness 2) ---');
@@ -266,8 +229,7 @@ async function main() {
     await delay(PACE_MS);
   }
   console.log();
-  const quorumMetrics = calculateMetrics(quorumResults);
-  console.log(`Full Quorum F1: ${(quorumMetrics.f1 * 100).toFixed(2)}%\n`);
+  summary.push(...report('Full quorum (strictness 2)', quorumResults, 2, allProviders));
   
   // 6. Save results to hal_external_validation_runs
   console.log('Saving quorum validation runs to database...');
@@ -281,35 +243,10 @@ async function main() {
     console.log(`Successfully saved ${insertPayloads.length} runs. Run ID: ${runId}`);
   }
   
-  // 7. Print Sensitivity Table and Summary
-  console.log('\n========================================================================');
-  console.log('                    HAL ACCURACY & SENSITIVITY SUMMARY');
-  console.log('========================================================================');
-  console.log(`Date: ${new Date().toISOString().split('T')[0]}`);
-  console.log(`Corpus Size: ${cases.length} provenanced external items`);
-  console.log('------------------------------------------------------------------------');
-  console.log('| Configuration             | F1 Score | Precision | Recall  | Accuracy |');
-  console.log('------------------------------------------------------------------------');
-  console.log(`| Extractor (Strictness 1)  | ${(extractorMetrics.f1*100).toFixed(1).padStart(7)}% | ${(extractorMetrics.precision*100).toFixed(1).padStart(8)}% | ${(extractorMetrics.recall*100).toFixed(1).padStart(6)}% | ${(extractorMetrics.accuracy*100).toFixed(1).padStart(7)}% |`);
-  console.log(`| Groq-Only (Strictness 2)  | ${(groqMetrics.f1*100).toFixed(1).padStart(7)}% | ${(groqMetrics.precision*100).toFixed(1).padStart(8)}% | ${(groqMetrics.recall*100).toFixed(1).padStart(6)}% | ${(groqMetrics.accuracy*100).toFixed(1).padStart(7)}% |`);
-  console.log(`| Cerebras-Only (Str. 2)    | ${(cerebrasMetrics.f1*100).toFixed(1).padStart(7)}% | ${(cerebrasMetrics.precision*100).toFixed(1).padStart(8)}% | ${(cerebrasMetrics.recall*100).toFixed(1).padStart(6)}% | ${(cerebrasMetrics.accuracy*100).toFixed(1).padStart(7)}% |`);
-  console.log(`| Quorum (Str. 2, 2-of-2)   | ${(quorumMetrics.f1*100).toFixed(1).padStart(7)}% | ${(quorumMetrics.precision*100).toFixed(1).padStart(8)}% | ${(quorumMetrics.recall*100).toFixed(1).padStart(6)}% | ${(quorumMetrics.accuracy*100).toFixed(1).padStart(7)}% |`);
-  console.log('========================================================================\n');
-  
-  // Break down Quorum F1 per dataset
-  console.log('Quorum Performance per Dataset:');
-  const datasets = [
-    { name: 'TruthfulQA', filter: 'external-truthfulqa-20260606' },
-    { name: 'FEVER', filter: 'external-fever-20260606' },
-    { name: 'HaluEval', filter: 'external-halueval-20260606' }
-  ];
-  
-  for (const ds of datasets) {
-    const dsResults = quorumResults.filter((_, idx) => cases[idx]!.source === ds.filter);
-    const dsMetrics = calculateMetrics(dsResults);
-    console.log(`  - ${ds.name.padEnd(12)}: F1=${(dsMetrics.f1*100).toFixed(1)}% (TP=${dsMetrics.tp}, FP=${dsMetrics.fp}, TN=${dsMetrics.tn}, FN=${dsMetrics.fn})`);
-  }
-  
+  // 7. Summary: ruled lines only (the per-dataset table is the public-benchmark/internal split now).
+  console.log('\n=== HAL ACCURACY & SENSITIVITY SUMMARY ===');
+  for (const line of summary) console.log(line);
+
   // 8. Analyze Fail-safe (FPR under Quorum)
   const isQuorumMet = (res: EvaluationResult) => {
     // In our quorum service, since we have 2 providers, did both succeed?
