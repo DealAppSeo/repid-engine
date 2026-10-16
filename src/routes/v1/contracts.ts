@@ -1070,6 +1070,18 @@ router.post('/:id/outcome', async (req: Request, res: Response) => {
     if (rater_agent_id !== contract.buyer_agent_id) {
       return res.status(403).json({ error: 'not_buyer', message: 'Only the buyer of this contract may rate its outcome' });
     }
+    // 3b. ...and the buyer must be WHO IS ASKING, not a name in the body. `rater_agent_id` is not an
+    //     identity field the auth middleware binds, so before 2026-10-16 any key could rate as the
+    //     buyer: the PROVIDER's own bound key (a contract party, so it passes the party check) could
+    //     post { rating: 'good', rater_agent_id: <buyer> } and award itself up to +120 weighted by the
+    //     buyer's RepID, and a shared tier key could do it on any contract. Same rule as /satisfy.
+    const callerAgentId = (req as any).agent_id as string | undefined;
+    if (!callerAgentId) {
+      return res.status(403).json({ error: 'unbound_caller', message: 'rating an outcome moves RepID; it requires an agent-bound API key' });
+    }
+    if (callerAgentId !== rater_agent_id) {
+      return res.status(403).json({ error: 'rater_not_caller', message: 'rater_agent_id must be the agent this API key is bound to' });
+    }
 
     // 4. Provenance binding — the contract must have actually settled (via x402).
     if (!contract.settled_at) {

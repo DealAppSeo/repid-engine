@@ -80,15 +80,22 @@ import request from 'supertest';
 import express from 'express';
 import contractsRouter from '../src/routes/v1/contracts';
 
+const BUYER = 'buyer-uuid';
+const PROVIDER = 'provider-uuid';
+
+// Stands in for authMiddleware's binding: x-test-agent names the key's bound agent, 'none' = an
+// unbound (shared tier) key. Default is the buyer, so the existing cases keep their meaning.
 function makeApp() {
   const app = express();
   app.use(express.json());
+  app.use((req, _res, next) => {
+    const a = req.header('x-test-agent');
+    if (a !== 'none') (req as any).agent_id = a ?? BUYER;
+    next();
+  });
   app.use('/api/v1/contracts', contractsRouter);
   return app;
 }
-
-const BUYER = 'buyer-uuid';
-const PROVIDER = 'provider-uuid';
 
 function baseContract(settledOffsetMs: number | null) {
   return {
@@ -128,6 +135,21 @@ describe('POST /contracts/:id/outcome — validation + auth', () => {
     const res = await request(app).post('/api/v1/contracts/c-1/outcome').send({ rating: 'good', rater_agent_id: 'someone-else' });
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('not_buyer');
+    expect(applyOutcomeMock).not.toHaveBeenCalled();
+  });
+
+  // 2026-10-16: the rater named in the body must be the authenticated principal.
+  test("403 when the PROVIDER's own key rates its outcome by naming the buyer", async () => {
+    const res = await request(app).post('/api/v1/contracts/c-1/outcome').set('x-test-agent', PROVIDER).send({ rating: 'good', rater_agent_id: BUYER });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('rater_not_caller');
+    expect(applyOutcomeMock).not.toHaveBeenCalled();
+  });
+
+  test('403 when an unbound (shared tier) key rates as the buyer', async () => {
+    const res = await request(app).post('/api/v1/contracts/c-1/outcome').set('x-test-agent', 'none').send({ rating: 'bad', rater_agent_id: BUYER });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('unbound_caller');
     expect(applyOutcomeMock).not.toHaveBeenCalled();
   });
 
