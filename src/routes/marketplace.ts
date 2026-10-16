@@ -23,7 +23,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { computeTier } from '../engine/repid-update';
 import { verifyFullAccountToken } from '../services/auth-token';
-import { validateAgentApiKey } from '../auth/api-keys';
+import { matchEnvOperatorKey, validateAgentApiKey } from '../auth/api-keys';
 
 const KINDS = ['have', 'want'] as const;
 const MODES = ['buy', 'rent'] as const;
@@ -63,12 +63,7 @@ export async function resolvePosterIdentity(req: Request): Promise<PosterIdentit
 
   // 2a) env REPID_API_KEYS allowlist (key or key:tier). Unbound identity →
   // the agent must declare which agent it posts as via body.poster_id.
-  const envKeys = (process.env.REPID_API_KEYS || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((k) => k.split(':')[0]);
-  if (envKeys.includes(candidateKey)) {
+  if (matchEnvOperatorKey(candidateKey)) {
     const declared = typeof req.body?.poster_id === 'string' ? req.body.poster_id.trim() : '';
     if (!declared) return null; // handled as 400 by caller (poster_id required for env keys)
     return { poster_type: 'agent', poster_id: declared };

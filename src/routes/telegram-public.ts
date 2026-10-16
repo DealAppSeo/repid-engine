@@ -23,6 +23,7 @@
 import { createHash } from 'node:crypto';
 import { Router, json, type Request, type Response } from 'express';
 import { classifyText, type ClassifyLabel } from './classify';
+import { secretEquals } from '../auth/api-keys';
 
 export const PUBLIC_WEBHOOK_PATH = '/api/v1/telegram-public/webhook';
 const PRODUCTION_BASE = 'https://repid-engine-production.up.railway.app';
@@ -104,7 +105,7 @@ export function createTelegramPublicRouter(): Router {
       res.status(200).json({ ok: true, inert: true });
       return;
     }
-    if (req.get('x-telegram-bot-api-secret-token') !== webhookSecret(token)) {
+    if (!secretEquals(req.get('x-telegram-bot-api-secret-token'), webhookSecret(token))) {
       res.status(403).json({ ok: false });
       return;
     }
