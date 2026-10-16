@@ -32,6 +32,8 @@
  * trust_evidence. Trust signals (conduct, never the chess result) go to arena_trust_signals, shadow.
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../middleware/client-ip';
 import { db } from '../db';
 import { authMiddleware } from '../middleware/auth';
 import { accountOfWallet, provenWallet } from './v1/byok';
@@ -236,8 +238,15 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
   // ── the API ────────────────────────────────────────────────────────────────
   const api = Router();
   api.use(flagGate, tablesGate);
+  // Every write authenticates (a signature check or a key lookup), so each one is braked per network
+  // on top of the global /api/v1 limiter. 120 a minute is far above a person or a bot playing chess.
+  const writeLimiter = rateLimit({
+    windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false,
+    keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
+    message: { error: 'too_many_requests', message: 'Too many arena writes from this network. Try again in a minute.' },
+  });
 
-  api.post('/challenges', async (req, res) => {
+  api.post('/challenges', writeLimiter, async (req, res) => {
     const me = await principal(req, res);
     if (!me) return;
     const body = onlyFields(req, res, ['white', 'black', 'stake_usd', 'time_control', 'speed', 'stake_on']);
@@ -273,7 +282,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     res.status(201).json({ challenge: publicGame(g, now()), stake_on: me.ref, note: 'Testnet and shadow: no money moves, and the chess rating never feeds RepID.' });
   });
 
-  api.post('/challenges/:id/accept', async (req, res) => {
+  api.post('/challenges/:id/accept', writeLimiter, async (req, res) => {
     const me = await principal(req, res);
     if (!me) return;
     if (!onlyFields(req, res, [])) return;
@@ -314,7 +323,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     res.json({ ...publicGame(g, now()), predictions: { count: preds.length, mean_brier: scored.length ? +(scored.reduce((a, x) => a + x, 0) / scored.length).toFixed(4) : null } });
   });
 
-  api.post('/games/:id/move', async (req, res) => {
+  api.post('/games/:id/move', writeLimiter, async (req, res) => {
     const me = await principal(req, res);
     if (!me) return;
     const body = onlyFields(req, res, ['uci']);
@@ -347,7 +356,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     res.json({ game: publicGame(updated, now()) });
   });
 
-  api.post('/games/:id/predict', async (req, res) => {
+  api.post('/games/:id/predict', writeLimiter, async (req, res) => {
     const me = await principal(req, res);
     if (!me) return;
     const body = onlyFields(req, res, ['side', 'probability']);

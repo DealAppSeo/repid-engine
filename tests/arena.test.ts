@@ -299,6 +299,14 @@ describe('stakes: own win only, no side bets', () => {
   });
 });
 
+describe('write brake', () => {
+  it('a network gets 120 arena writes a minute, then 429', async () => {
+    const app = appWith(memStore().store);
+    for (let i = 0; i < 120; i++) expect((await request(app).post('/api/v1/arena/challenges').send({})).status).toBe(401);
+    expect((await request(app).post('/api/v1/arena/challenges').send({})).status).toBe(429);
+  });
+});
+
 describe('owner_distinct', () => {
   it('a same-owner pair is allowed but marked owner_distinct=false and never trust evidence', async () => {
     const app = appWith(memStore().store);
