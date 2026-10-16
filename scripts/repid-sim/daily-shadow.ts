@@ -27,9 +27,11 @@
  * (challenge, decay, prediction, ecosystem-need) live in Railway env, have no committed default, and
  * are deliberately NOT in the grid: a candidate value for them committed here would pre-burn it.
  *
- * CORPUS = the fixed A2A scenario set (a2a-ring-sim: honest, fabricator, same-owner ring, Sybil,
- * volume farmer) + day D's real contract outcomes. Its sha256 is the ruler (CLAUDE_RULES r24): a
- * proposal line without one is refused, and numbers on different hashes are not comparable.
+ * CORPUS = everything that determines the proposals: the fixed A2A scenario set (a2a-ring-sim: honest,
+ * fabricator, same-owner ring, Sybil, volume farmer; seed and sizes), the sha256 of the sim and verdict code
+ * (rates, PRNG streams, rules), the base tariff, RATER_WEIGHT, the clamp, the grid, and day D's real contract
+ * outcomes. Its sha256 is the ruler (CLAUDE_RULES r24): a proposal line without one is refused, a different body
+ * under the same hash is refused, and numbers on different hashes are not comparable.
  *
  * OBJECTIVES (reports/2026-10-09/REPID-TUNING-ANALYSIS.md):
  *   P3_narrow        a provider-at-fault reversal exceeds the satisfied gain
@@ -44,16 +46,21 @@ import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } fr
 import { dirname, join } from 'path';
 import { runA2ARingSim, COMMITTED_TARIFF, type Tariff } from './a2a-ring-sim';
 import { RATER_WEIGHT } from '../../src/services/validation-repid-delta';
+import { REPID_MIN, REPID_MAX } from '../../src/scoring/repid-deltas';
 
 export const CORPUS_VERSION = 'repid-daily-sim-v1';
 export const SCENARIOS = { seed: 12345, days: 30, ringTradesPerPairPerDay: 2 } as const;
-const MINT_GUARD = 1.5;
+const MINT_GUARD = 1.5; // a candidate may not mint more than 1.5x the base on D's real contracts
 const RULE_FIX = {
   fabrication: 'the detector has to catch it (dispute rate), not the tariff',
   collusion: 'owner-distinct counterparties (a2a-ring-sim shadow counterfactual)',
   sybil: 'owner-distinct counterparties (a2a-ring-sim shadow counterfactual)',
   farming: 'per-window diminishing returns on same-type positives (tuning analysis rec 5)',
-} as const; // a candidate may not mint more than 1.5x the base on D's real contracts
+} as const;
+/** The sim's rates, PRNG streams and verdict rules are code: hash the source (line endings normalised) so any change to them is a new ruler. */
+const CODE_SHA256 = createHash('sha256')
+  .update(['a2a-ring-sim.ts', 'daily-shadow.ts'].map((f) => readFileSync(join(__dirname, f), 'utf8').replace(/\r/g, '')).join('\n'))
+  .digest('hex');
 
 export interface RealOutcome {
   contract_id: string;
@@ -94,11 +101,21 @@ function normalize(r: any): RealOutcome {
   };
 }
 
-/** The corpus and its sha256. Same rows (in any order) => same hash. */
-export function buildCorpus(date: string, rows: any[]) {
+/**
+ * The corpus and its sha256: everything that determines the proposals. Scenario seed and sizes, the sim and
+ * verdict code (rates, streams, rules), the base tariff, RATER_WEIGHT, the clamp, the grid, and D's rows.
+ * Same inputs in any row order => same hash; change any of them => new hash. `base` is a parameter only so
+ * a test can prove the tariff is bound.
+ */
+export function buildCorpus(date: string, rows: any[], base: Tariff = COMMITTED_TARIFF) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`date must be YYYY-MM-DD, got ${date}`);
-  const real = rows.map(normalize).sort((a, b) => a.contract_id.localeCompare(b.contract_id));
-  const corpus = { version: CORPUS_VERSION, date, scenarios: SCENARIOS, real };
+  // Code-unit order, not localeCompare: the hash must not depend on the runtime locale.
+  const real = rows.map(normalize).sort((a, b) => (a.contract_id < b.contract_id ? -1 : a.contract_id > b.contract_id ? 1 : 0));
+  const corpus = {
+    version: CORPUS_VERSION, date, scenarios: SCENARIOS, code_sha256: CODE_SHA256,
+    tariff: base, rater_weight: { min: RATER_WEIGHT.min, pivot: RATER_WEIGHT.pivot }, clamp: [REPID_MIN, REPID_MAX],
+    grid: GRID, real,
+  };
   return { corpus, hash: 'sha256:' + createHash('sha256').update(JSON.stringify(corpus)).digest('hex') };
 }
 
@@ -192,16 +209,26 @@ export interface ProposalLine {
   reason: string;
 }
 
-function verdictOf(ob: ProposalLine['objective_before'], oa: ProposalLine['objective_after'], ab: ProposalLine['anti_gaming_before'], aa: ProposalLine['anti_gaming_after']) {
-  const regressedObj = Object.keys(ob.checks).filter((k) => ob.checks[k]!.pass === true && oa.checks[k]!.pass !== true);
-  const regressedAg = (Object.keys(ab.margins) as Array<keyof typeof ab.margins>).filter((k) => ab.margins[k] > 0 && aa.margins[k] <= 0);
-  if (regressedObj.length || regressedAg.length) return { verdict: 'reject' as const, reason: `regresses ${[...regressedObj, ...regressedAg].join(', ')}` };
-  if (aa.same_owner_mint > ab.same_owner_mint) return { verdict: 'reject' as const, reason: 'mints more on same-owner real contracts' };
-  if (ob.real_mint > 0 && oa.real_mint > MINT_GUARD * ob.real_mint) return { verdict: 'reject' as const, reason: `real-day mint ${oa.real_mint} > ${MINT_GUARD}x base ${ob.real_mint}` };
-  const gainedObj = Object.keys(ob.checks).filter((k) => ob.checks[k]!.pass !== true && oa.checks[k]!.pass === true);
-  const gainedAg = (Object.keys(ab.margins) as Array<keyof typeof ab.margins>).filter((k) => ab.margins[k] <= 0 && aa.margins[k] > 0);
-  if (gainedObj.length || gainedAg.length) return { verdict: 'propose' as const, reason: `newly meets ${[...gainedObj, ...gainedAg].join(', ')}; nothing regresses` };
-  return { verdict: 'reject' as const, reason: 'no objective or anti-gaming check newly met' };
+/**
+ * propose ONLY when something is newly met AND no objective regresses AND no anti-gaming margin falls at all
+ * (an already-negative margin falling further still counts) AND neither mint guard trips. Every reject names
+ * what fell; the propose reason states only what was computed.
+ */
+export function verdictOf(ob: ProposalLine['objective_before'], oa: ProposalLine['objective_after'], ab: ProposalLine['anti_gaming_before'], aa: ProposalLine['anti_gaming_after']) {
+  const keys = Object.keys(ab.margins) as Array<keyof typeof ab.margins>;
+  const problems = [
+    ...Object.keys(ob.checks).filter((k) => ob.checks[k]!.pass === true && oa.checks[k]!.pass !== true).map((k) => `objective ${k} regresses`),
+    ...keys.filter((k) => aa.margins[k] < ab.margins[k]).map((k) => `anti-gaming margin falls: ${k} ${ab.margins[k]} -> ${aa.margins[k]} (${aa.margins[k] - ab.margins[k]})`),
+    ...(aa.same_owner_mint > ab.same_owner_mint ? [`same-owner real-day mint rises ${ab.same_owner_mint} -> ${aa.same_owner_mint}`] : []),
+    ...(ob.real_mint > 0 && oa.real_mint > MINT_GUARD * ob.real_mint ? [`real-day mint ${oa.real_mint} > ${MINT_GUARD}x base ${ob.real_mint}`] : []),
+  ];
+  if (problems.length) return { verdict: 'reject' as const, reason: problems.join('; ') };
+  const gained = [
+    ...Object.keys(ob.checks).filter((k) => ob.checks[k]!.pass !== true && oa.checks[k]!.pass === true),
+    ...keys.filter((k) => ab.margins[k] <= 0 && aa.margins[k] > 0),
+  ];
+  if (!gained.length) return { verdict: 'reject' as const, reason: 'no objective or anti-gaming check newly met (no margin fell)' };
+  return { verdict: 'propose' as const, reason: `newly meets ${gained.join(', ')}; computed: 0 objectives regress, 0 of ${keys.length} anti-gaming margins fall` };
 }
 
 /** Deterministic: no wall clock, no PRNG outside the seeded sim. Same corpus => same lines. */
@@ -222,15 +249,30 @@ export function runDaily(date: string, rows: any[]) {
   return { corpus, hash, objective_before, anti_gaming_before, lines };
 }
 
-/** Refuses the whole batch if any line lacks a corpus hash. Skips lines already written for the same date+hash+id. */
+/**
+ * Refuses the whole batch if any line lacks a corpus hash. A line identical to one already written is skipped
+ * (a rerun adds nothing); a DIFFERENT body under the same date|hash|id refuses the whole batch loudly, because it
+ * means the hash failed to bind the result.
+ */
 export function appendProposals(path: string, lines: ProposalLine[]): number {
   const bad = lines.filter((l) => !/^sha256:[0-9a-f]{64}$/.test(String(l?.corpus_hash ?? '')));
   if (bad.length) throw new Error(`refusing to write ${bad.length} proposal line(s) without a corpus hash — a delta without its ruler is not a result (CLAUDE_RULES r24)`);
   const key = (l: { date: string; corpus_hash: string; id: string }) => `${l.date}|${l.corpus_hash}|${l.id}`;
-  const seen = new Set(existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean).map((s) => key(JSON.parse(s))) : []);
-  const fresh = lines.filter((l) => !seen.has(key(l)));
+  const written = new Map<string, string>();
+  if (existsSync(path)) for (const s of readFileSync(path, 'utf8').split('\n').filter(Boolean)) written.set(key(JSON.parse(s)), s);
+  const fresh: string[] = [];
+  const conflicts: string[] = [];
+  for (const l of lines) {
+    const s = JSON.stringify(l);
+    const prev = written.get(key(l));
+    if (prev === undefined) fresh.push(s);
+    else if (prev !== s) conflicts.push(key(l));
+  }
+  if (conflicts.length) {
+    throw new Error(`refusing to write: ${conflicts.length} line(s) already in ${path} under the same date|hash|id with a DIFFERENT body (${conflicts.join(', ')}) — the corpus hash did not bind the result`);
+  }
   mkdirSync(dirname(path), { recursive: true });
-  if (fresh.length) appendFileSync(path, fresh.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  if (fresh.length) appendFileSync(path, fresh.join('\n') + '\n');
   return fresh.length;
 }
 
@@ -244,7 +286,7 @@ export function renderReport(run: ReturnType<typeof runDaily>, source: string): 
   return [
     `# RepID daily sim — ${corpus.date}`,
     '',
-    `**Corpus:** \`${CORPUS_VERSION}@${hash}\` — fixed scenarios (seed ${SCENARIOS.seed}, ${SCENARIOS.days} days, ring ${SCENARIOS.ringTradesPerPairPerDay} trades/pair/day) + ${real.length} real contract outcome(s) on ${corpus.date} (${source}).`,
+    `**Corpus:** \`${CORPUS_VERSION}@${hash}\` — fixed scenarios (seed ${SCENARIOS.seed}, ${SCENARIOS.days} days, ring ${SCENARIOS.ringTradesPerPairPerDay} trades/pair/day) + ${real.length} real contract outcome(s) on ${corpus.date} (${source}). The hash also binds the sim and verdict code (sha256 \`${corpus.code_sha256.slice(0, 12)}…\`), the base tariff, RATER_WEIGHT (min ${corpus.rater_weight.min}, pivot ${corpus.rater_weight.pivot}), the clamp [${corpus.clamp.join(', ')}] and the ${corpus.grid.length}-entry grid.`,
     '',
     '**Weights base: COMMITTED DEFAULTS, not prod.** The live tuned weights live in Railway env and were not read. Every delta below is relative to the committed constants in `src/services/validation-repid-delta.ts`. No live weight was changed; these are SHADOW proposals. Applying any of them is MAJOR (rule 31, Sean).',
     '',
@@ -267,6 +309,7 @@ export function renderReport(run: ReturnType<typeof runDaily>, source: string): 
     '',
     '## Read this before quoting',
     '- MODELLED: scenario demand, quality, dispute rates and attacker volume (scripts/repid-sim/a2a-ring-sim.ts). REAL: the tariff arithmetic and D\'s outcomes.',
+    '- Verdict rule: **propose** only when something is newly met AND no objective regresses AND no anti-gaming margin falls at all (an already-negative margin falling further counts) AND neither mint guard trips. A margin is honest net minus attacker net over the scenario days.',
     ...(['fabrication', 'collusion', 'sybil', 'farming'] as const)
       .filter((k) => ab.margins[k] <= 0 && lines.every((l) => l.anti_gaming_after.margins[k] <= 0))
       .map((k) => `- No single-weight delta in this grid makes honest out-earn **${k}** (best margin ${Math.max(...lines.map((l) => l.anti_gaming_after.margins[k]))}). A rule problem, not a weight problem: ${RULE_FIX[k]}.`),
@@ -276,35 +319,58 @@ export function renderReport(run: ReturnType<typeof runDaily>, source: string): 
   ].join('\n');
 }
 
-async function liveRows(date: string): Promise<RealOutcome[]> {
+/**
+ * SELECT-only. Every read asks for an exact count and is refused if it came back short or paginated: a partial
+ * day is not a corpus, and a hash over it would be a ruler for a number nobody measured. Returns the per-table
+ * row counts so the report records what was read.
+ */
+async function liveRows(date: string): Promise<{ rows: RealOutcome[]; reads: Record<string, number> }> {
   const { db } = await import('../../src/db');
-  const { contractRowIsSimulated } = await import('../../src/services/validation-repid-delta');
+  const { hasTruthySimFlag } = await import('../../src/utils/truthy');
   const next = new Date(Date.parse(`${date}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
   const win = (c: string) => `and(${c}.gte.${date},${c}.lt.${next})`;
-  const { data: cs, error } = await db.from('service_contracts')
-    .select('id, provider_agent_id, buyer_agent_id, buyer_satisfaction_score, dispute_verdict, fulfilled_at, metadata, payload, x402_payment_id')
-    .or([win('settled_at'), win('disputed_at'), win('resolved_at')].join(','));
-  if (error) throw new Error(`SELECT service_contracts failed: ${error.message}`);
-  const contracts = cs ?? [];
+  const reads: Record<string, number> = {};
+  const whole = (table: string, res: { data: any[] | null; error: any; count: number | null }, expected?: number) => {
+    if (res.error) throw new Error(`SELECT ${table} failed: ${res.error.message}`);
+    const got = (res.data ?? []).length;
+    const want = expected ?? res.count;
+    if (want === null || want === undefined || got !== want || (res.count !== null && res.count !== got)) {
+      throw new Error(`refusing: ${table} returned ${got} row(s), count ${res.count}, expected ${want} — short or paginated read, corpus would be partial`);
+    }
+    reads[table] = got;
+    return res.data ?? [];
+  };
+  const none = { data: [], error: null, count: 0 };
+
+  const contracts = whole('service_contracts', await db.from('service_contracts')
+    .select('id, provider_agent_id, buyer_agent_id, buyer_satisfaction_score, dispute_verdict, fulfilled_at, metadata, payload, x402_payment_id', { count: 'exact' })
+    .or([win('settled_at'), win('disputed_at'), win('resolved_at')].join(',')));
   const agentIds = [...new Set(contracts.flatMap((c: any) => [c.provider_agent_id, c.buyer_agent_id]))];
-  const { data: ags, error: e2 } = agentIds.length ? await db.from('repid_agents').select('id, builder_id').in('id', agentIds) : { data: [], error: null };
-  if (e2) throw new Error(`SELECT repid_agents failed: ${e2.message}`);
-  const builder = new Map<string, string | null>((ags ?? []).map((a: any) => [a.id, a.builder_id]));
+  // Every party must resolve, or same_owner is unknown rather than false.
+  const agents = whole('repid_agents', agentIds.length
+    ? await db.from('repid_agents').select('id, builder_id', { count: 'exact' }).in('id', agentIds) : none, agentIds.length);
   const ids = contracts.map((c: any) => c.id);
-  const { data: outs, error: e3 } = ids.length
-    ? await db.from('service_outcomes').select('id, contract_id, rating, rater_repid_at_rating').in('contract_id', ids).order('id')
-    : { data: [], error: null };
-  if (e3) throw new Error(`SELECT service_outcomes failed: ${e3.message}`);
-  const outcome = new Map<string, any>((outs ?? []).map((o: any) => [o.contract_id, o])); // ordered by id, so the latest wins
-  return Promise.all(contracts.map(async (c: any) => {
+  const outs = whole('service_outcomes', ids.length
+    ? await db.from('service_outcomes').select('id, contract_id, rating, rater_repid_at_rating', { count: 'exact' }).in('contract_id', ids).order('id') : none);
+  const payIds = [...new Set(contracts.map((c: any) => c.x402_payment_id).filter(Boolean))];
+  const pays = whole('x402_settlements', payIds.length
+    ? await db.from('x402_settlements').select('id, is_simulated', { count: 'exact' }).in('id', payIds) : none);
+
+  const builder = new Map<string, string | null>(agents.map((a: any) => [a.id, a.builder_id]));
+  const outcome = new Map<string, any>(outs.map((o: any) => [o.contract_id, o])); // ordered by id, so the latest wins
+  const simPay = new Map<string, boolean>(pays.map((x: any) => [x.id, x.is_simulated === true]));
+  const rows = contracts.map((c: any) => {
     const pb = builder.get(c.provider_agent_id);
     const o = outcome.get(c.id);
     return normalize({
       contract_id: c.id, fulfilled: c.fulfilled_at !== null, satisfaction: c.buyer_satisfaction_score, dispute_verdict: c.dispute_verdict,
       self_deal: c.provider_agent_id === c.buyer_agent_id, same_owner: pb != null && pb === builder.get(c.buyer_agent_id),
-      simulated: await contractRowIsSimulated(c), outcome_rating: o?.rating ?? null, rater_repid: o?.rater_repid_at_rating ?? null,
+      // Same rule as contractRowIsSimulated (sim flag on metadata/payload, or the linked settlement), minus its fail-open fetch.
+      simulated: hasTruthySimFlag(c.metadata ?? {}) || hasTruthySimFlag(c.payload ?? {}) || simPay.get(c.x402_payment_id) === true,
+      outcome_rating: o?.rating ?? null, rater_repid: o?.rater_repid_at_rating ?? null,
     });
-  }));
+  });
+  return { rows, reads };
 }
 
 async function main(): Promise<number> {
@@ -312,16 +378,21 @@ async function main(): Promise<number> {
   const date = arg('--date') ?? new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
   const rowsPath = arg('--rows');
   let rows: any[];
+  let source = `rows from ${rowsPath}`;
   if (rowsPath) rows = JSON.parse(readFileSync(rowsPath, 'utf8'));
-  else if (process.argv.includes('--live')) rows = await liveRows(date);
+  else if (process.argv.includes('--live')) {
+    const live = await liveRows(date);
+    rows = live.rows;
+    source = `live SELECT, rows read: ${Object.entries(live.reads).map(([t, n]) => `${t} ${n}`).join(', ')}`;
+  }
   else { console.error('usage: (--rows rows.json | --live) [--date YYYY-MM-DD] [--reports-dir DIR] [--proposals FILE]'); return 2; }
 
   const run = runDaily(date, rows);
-  const report = renderReport(run, rowsPath ? `rows from ${rowsPath}` : 'live SELECT');
+  const report = renderReport(run, source);
   const reportPath = join(arg('--reports-dir') ?? 'E:/dev/reports', date, `REPID_DAILY_SIM_${date}.md`);
+  const written = appendProposals(arg('--proposals') ?? 'E:/dev/ops/loop/repid-weight-proposals.jsonl', run.lines); // may refuse: then no report either
   mkdirSync(dirname(reportPath), { recursive: true });
   writeFileSync(reportPath, report);
-  const written = appendProposals(arg('--proposals') ?? 'E:/dev/ops/loop/repid-weight-proposals.jsonl', run.lines);
   console.log(report);
   console.log(`corpus ${run.hash} · report ${reportPath} · proposal lines written ${written} (${run.lines.length - written} already present)`);
   return 0;
