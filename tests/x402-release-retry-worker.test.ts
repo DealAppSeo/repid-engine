@@ -96,6 +96,13 @@ describe('what counts as stranded — never invent an acceptance', () => {
     expect(isStranded({ ...base, verdict: null })).toBe(false);
   });
 
+  // verdict states the claim's truth since 2026-10-15; the sweep pays what /satisfy pays.
+  it('a confident FAIL ("the claim is false") is payable; UNDETERMINED and a legacy FAIL are not', () => {
+    expect(isStranded({ ...base, verdict: 'FAIL', confident: true })).toBe(true);
+    expect(isStranded({ ...base, verdict: 'FAIL' })).toBe(false);
+    expect(isStranded({ ...base, verdict: 'UNDETERMINED', confident: false })).toBe(false);
+  });
+
   it('is NOT stranded once the settlement already moved', () => {
     expect(isStranded({ ...base, settlement_status: 'settled' })).toBe(false);
     expect(isStranded({ ...base, settlement_status: 'voided' })).toBe(false);

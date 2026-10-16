@@ -49,6 +49,7 @@ import { releaseHeldPayment, SETTLEMENT_STATUS } from './x402-deferred-settlemen
 import { finalizeSettledContract } from './contract-settlement-finalize';
 import { x402Facilitator } from './x402-facilitator';
 import { isPayableAddress } from './payee-guard';
+import { isSoundDeliverable } from './verdict';
 import { sendTelegramMessage } from '../routes/telegram';
 
 export type RetryMode = 'off' | 'shadow' | 'enforce';
@@ -107,11 +108,14 @@ export function isStranded(row: {
   contract_status: string;
   settlement_status: string;
   verdict: string | null;
+  /** result.confident; absent on rows written before 2026-10-15. See src/services/verdict.ts. */
+  confident?: boolean | null;
   buyer_satisfaction_score: number | null;
 }): boolean {
   if (row.contract_status !== 'fulfilled') return false;
   if (row.settlement_status !== SETTLEMENT_STATUS.AUTHORIZED) return false;
-  if (String(row.verdict ?? '').toUpperCase() !== 'PASS') return false;
+  // The same rule /satisfy pays on, so the sweep never releases what satisfy would void.
+  if (!isSoundDeliverable(row)) return false;
   return typeof row.buyer_satisfaction_score === 'number' && row.buyer_satisfaction_score > 0;
 }
 
@@ -247,6 +251,7 @@ async function findStranded(): Promise<StrandedContract[]> {
         contract_status: String(r.status),
         settlement_status: settle.status,
         verdict: (r.result as any)?.verdict ?? null,
+        confident: (r.result as any)?.confident ?? null,
         buyer_satisfaction_score: r.buyer_satisfaction_score ?? null,
       })
     ) {

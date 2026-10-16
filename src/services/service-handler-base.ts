@@ -2,6 +2,7 @@ import { db } from '../db';
 import { applyServiceFulfilledDeltas } from './validation-repid-delta';
 import { recordServiceQuality } from './service-quality-hook';
 import type { ServiceContractRow } from '../types';
+import { routesToDispute } from './verdict';
 
 /**
  * Phase 2.10 — Service Handler Base Class (production)
@@ -251,12 +252,17 @@ export abstract class ServiceHandlerBase {
       // PASS/APPROVE — or a handler that returns no `verdict` at all (the
       // Phase 2.11 storage/reputation handlers) — takes the fulfilled path,
       // so there is zero regression for verdict-less handlers.
+      //
+      // 2026-10-15: `verdict` now states the claim's truth, so a FAIL carrying `confident: true`
+      // is a delivered answer ("the claim is false"), not a provider failure, and is NOT routed
+      // here. UNDETERMINED is filed as delivered and /satisfy will not pay for it. The rule lives
+      // in src/services/verdict.ts so the dispute gate and the payment gates cannot drift.
       const verdict =
         typeof (result as any)?.verdict === 'string'
           ? ((result as any).verdict as string).toUpperCase()
           : undefined;
 
-      if (verdict === 'VETO' || verdict === 'FAIL') {
+      if (routesToDispute(result as any)) {
         const { data: dq, error: dqErr } = await db
           .from('dispute_validation_queue')
           .insert({
@@ -319,7 +325,7 @@ export abstract class ServiceHandlerBase {
         return { processed: true, contract_id: contract.id };
       }
 
-      // PASS / APPROVE / verdict-less handler → existing fulfilled path.
+      // PASS / confident FAIL / UNDETERMINED / verdict-less handler → fulfilled path.
       const { error: updateErr } = await db
         .from('service_contracts')
         .update({

@@ -25,9 +25,11 @@ process.env['SUPABASE_SERVICE_KEY'] = process.env['SUPABASE_SERVICE_KEY'] || 'du
 
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { deriveSatisfyScore } from '../src/routes/v1/contracts';
 
-const MODULE = join(__dirname, '..', 'scripts', 'cron', 'rate-deliverable.mjs');
+// A file:// URL, not a bare path: ESM rejects a `C:` path on Windows.
+const MODULE = pathToFileURL(join(__dirname, '..', 'scripts', 'cron', 'rate-deliverable.mjs')).href;
 
 interface Rating { n: number; met: boolean }
 
@@ -106,7 +108,7 @@ describe('the cron and the route agree on what a rating is', () => {
   });
 
   it('the accepted score clears the release gate, so payment actually moves', () => {
-    // `passed = verdict === 'PASS' && derived.score > 0` in the satisfy route.
+    // `passed = isSoundDeliverable(pre.result) && derived.score > 0` in the satisfy route.
     // Acceptance alone is not settlement; this is the assertion that says the
     // six-day stranding actually ends.
     const { criteria, ratings } = fromCron(REAL_0909);

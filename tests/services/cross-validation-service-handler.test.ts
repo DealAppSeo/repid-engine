@@ -52,4 +52,15 @@ describe('CrossValidationServiceHandler (P-003)', () => {
     expect(out.verdict).toBe('PASS'); // PCP+judge only, comma inactive
     expect(out.patent_marker).toBe('P-003');
   });
+
+  // PASS must mean the content was judged TRUE. Validators confident it is FALSE (score < 0.5) are
+  // not overruled into a PASS by a judge APPROVE. Before 2026-10-15 this returned PASS.
+  it('confident validators who judged it false (pcp_score < 0.5) → FAIL, even with a judge APPROVE', async () => {
+    runPCP.mockResolvedValue({ score: 0, confidence: 1, validators: ['a', 'b', 'c'] });
+    runAdversarialJudge.mockResolvedValue({ verdict: 'APPROVE', confidence: 0.9, critique: '' });
+    checkPythagoreanComma.mockReturnValue({ severity: 'none', comma_gap: 0.1, comma_veto: false });
+    const out = await (new CrossValidationServiceHandler() as any).fulfill(contract);
+    expect(out.verdict).toBe('FAIL');
+    expect(out.pcp_score).toBe(0);
+  });
 });
