@@ -24,7 +24,9 @@
  *   X-HyperDAG-Verdict         clean | flagged | vetoed | unscored
  *   X-HyperDAG-HAL-Score       0..1, when scored
  *   X-HyperDAG-Provider        who actually served it
- *   X-HyperDAG-Family          resolved model family, or 'unverified'
+ *   X-HyperDAG-Model           the model the vendor reports serving (broker `model_served`)
+ *   X-HyperDAG-Model-Source    'vendor', or 'requested' when the vendor named no model
+ *   X-HyperDAG-Family          that model's registry family, or 'unverified'
  *   X-HyperDAG-Cost-USD        what it cost us
  *   X-HyperDAG-Receipt         URL, when the call produced one
  *
@@ -241,7 +243,9 @@ openaiCompatRouter.post('/chat/completions', async (req: Request, res: Response)
 
   const text = String(brokerJson.completion ?? brokerJson.text ?? brokerJson.answer ?? '');
   const provider = String(brokerJson.provider ?? brokerJson.chosen_provider ?? 'unknown');
-  const upstreamModel = String(brokerJson.model ?? 'unknown');
+  // The model the vendor says served (F2). This read `brokerJson.model`, a field the broker
+  // never returned, so until 2026-10-16 every call reported 'unknown' and Family 'unverified'.
+  const upstreamModel = String(brokerJson.model_served ?? 'unknown');
 
   // Resolve the family on OUR side, never from an upstream header.
   //
@@ -249,8 +253,7 @@ openaiCompatRouter.post('/chat/completions', async (req: Request, res: Response)
   // register-first by design, and exactly the property we want: an unrecognised
   // model is reported 'unverified' rather than guessed into a family. A claim we
   // cannot check is not a claim we make, so this never counts toward quorum
-  // diversity. Model and provider are tried independently, because the first
-  // throwing must not skip the second.
+  // diversity. Model only: the registry is not keyed by provider.
   const family = resolveFamilyOrUnverified(upstreamModel, provider);
 
   const scored = wantsVerification && brokerJson.hal_score != null;
@@ -259,9 +262,11 @@ openaiCompatRouter.post('/chat/completions', async (req: Request, res: Response)
   res.set('X-HyperDAG-Verdict', verdict);
   if (scored) res.set('X-HyperDAG-HAL-Score', String(brokerJson.hal_score));
   res.set('X-HyperDAG-Provider', provider);
+  res.set('X-HyperDAG-Model', upstreamModel);
+  res.set('X-HyperDAG-Model-Source', String(brokerJson.model_served_source ?? 'unknown'));
   res.set('X-HyperDAG-Family', family);
   if (brokerJson.cost_usd != null) res.set('X-HyperDAG-Cost-USD', String(brokerJson.cost_usd));
-  res.set('Access-Control-Expose-Headers', 'X-HyperDAG-Verdict, X-HyperDAG-HAL-Score, X-HyperDAG-Provider, X-HyperDAG-Family, X-HyperDAG-Cost-USD');
+  res.set('Access-Control-Expose-Headers', 'X-HyperDAG-Verdict, X-HyperDAG-HAL-Score, X-HyperDAG-Provider, X-HyperDAG-Model, X-HyperDAG-Model-Source, X-HyperDAG-Family, X-HyperDAG-Cost-USD');
 
   const payload: Record<string, unknown> = {
     id: `chatcmpl-${brokerJson.call_id ?? Math.random().toString(36).slice(2)}`,
