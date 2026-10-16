@@ -17,6 +17,7 @@ import { db } from '../../src/db';
 import { halService } from '../../src/hal/service';
 import { evaluate } from '../../src/hal/lib/evaluate';
 import { execSync } from 'child_process';
+import { createHash } from 'crypto';
 import { buildFactCheckProviders } from '../../src/hal/fact-check';
 import { caseFamilies, harnessWidth, loadRulerSelection, ruledReport, rulerFromArgv } from '../../src/hal/sealed-ruler';
 import { describeCorpus } from '../../src/hal/corpus-manifest';
@@ -88,7 +89,8 @@ function commit(): string { try { return execSync('git rev-parse HEAD').toString
       prompt_id: String(c.id),
       benchmark_source: 'hal_test_cases',
       repid_engine_commit: eng,
-      gen_provider: 'corpus', gen_model: 'labeled-claim', generated_answer: c.prompt_text,
+      // A sealed case's text stays in hal_test_cases only: this table gets its digest, never the text.
+      gen_provider: 'corpus', gen_model: 'labeled-claim', generated_answer: `sha256:${createHash('sha256').update(String(c.prompt_text), 'utf8').digest('hex')}`,
       hal_mode: 'fact-check-s2', hal_threshold: VETO,
       hal_score: halScore, hal_vetoed: vetoed, veto_class: vc, comma_gap: commaGap,
       signals: { ...signals, decision: vetoClass, ex_score: +exScore.toFixed(4), ex_veto: exVeto }, hal_latency_ms: latency, hal_providers_used: providers, estimated_cost_usd: 0,

@@ -395,6 +395,56 @@ export function rulerKey(r: MeasurementRuler): string {
   );
 }
 
+/** Inverse of `rulerKey`. Null for anything that is not exactly that format. */
+export function parseRulerKey(key: string): {
+  corpusId: string;
+  contentHash: string;
+  familiesMin: number;
+  familiesMax: number;
+  strictness: HalStrictness;
+  decisionRequiresQuorum: boolean;
+  penaltyRequiresQuorum: boolean;
+} | null {
+  const m = /^([^@|]+)@([a-z0-9]+:[0-9a-f]{64})\|w(\d+)-(\d+)\|s([12])\|dq([01])\|pq([01])$/.exec(key);
+  if (!m) return null;
+  return {
+    corpusId: m[1]!,
+    contentHash: m[2]!,
+    familiesMin: Number(m[3]),
+    familiesMax: Number(m[4]),
+    strictness: Number(m[5]) as HalStrictness,
+    decisionRequiresQuorum: m[6] === '1',
+    penaltyRequiresQuorum: m[7] === '1',
+  };
+}
+
+/**
+ * Decide whether a stored run may be published as a sealed-ruler measurement.
+ *
+ * `tags` are the run rows' harness_version values (`<harness version>|<rulerKey>`), `caseIds`
+ * the cases it scored. Publishable only if every row carries the same tag, the tag names a
+ * registered sealed version with its pinned hash, and the run scored exactly that version's N
+ * distinct sealed cases. Anything else returns the reason, so the caller withholds the number.
+ */
+export function sealedRunRuler(
+  tags: readonly (string | null | undefined)[],
+  caseIds: readonly string[],
+  versions: readonly SealedRulerVersion[] = SEALED_RULER_VERSIONS,
+): { ok: true; rulerId: string; parsed: NonNullable<ReturnType<typeof parseRulerKey>> } | { ok: false; reason: string } {
+  const distinctTags = new Set(tags.map((t) => t ?? ''));
+  if (distinctTags.size !== 1) return { ok: false, reason: 'run rows carry different ruler tags' };
+  const tag = [...distinctTags][0]!;
+  const parsed = parseRulerKey(tag.slice(tag.indexOf('|') + 1));
+  if (tag.indexOf('|') < 0 || !parsed) return { ok: false, reason: 'run carries no ruler' };
+  const v = versions.find((x) => rulerIdFor(x.version) === parsed.corpusId && x.pin.contentHash === parsed.contentHash);
+  if (!v) return { ok: false, reason: `${parsed.corpusId} is not a registered sealed ruler with that hash` };
+  const ids = new Set(caseIds);
+  if (ids.size !== caseIds.length || ids.size !== v.pin.caseCount || ![...ids].every(isSealedId)) {
+    return { ok: false, reason: `run did not score exactly the ${v.pin.caseCount} cases of ${parsed.corpusId}` };
+  }
+  return { ok: true, rulerId: parsed.corpusId, parsed };
+}
+
 export interface KeyedValue {
   value: number | null;
   /** rulerKey() of the measurement; null/undefined for a number with no recorded ruler. */

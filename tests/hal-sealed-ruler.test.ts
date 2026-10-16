@@ -28,6 +28,7 @@ import {
   itemSplit,
   keyed,
   loadRulerSelection,
+  parseRulerKey,
   ruledReport,
   rulerFromArgv,
   rulerKey,
@@ -339,5 +340,33 @@ describe('source hygiene', () => {
     expect(src).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
     // and the exclusion digest is salted, so it is not sha256(id)
     expect(exclusionDigest('x')).not.toBe(createHash('sha256').update('x').digest('hex'));
+  });
+});
+
+describe('parseRulerKey', () => {
+  it('inverts rulerKey and rejects anything else', () => {
+    const sel = selectRuler(fixtureRows(), 'hal-sealed-v1', versions([]));
+    const m = recordMeasurement({ matrix: { tp: 1, fp: 0, fn: 0, tn: 1 }, ruler: { corpus: sel.manifest, width: W } });
+    expect(parseRulerKey(rulerKey(m.ruler))).toEqual({
+      corpusId: 'hal-sealed-v1',
+      contentHash: sel.manifest.contentHash,
+      familiesMin: 3,
+      familiesMax: 3,
+      strictness: 2,
+      decisionRequiresQuorum: true,
+      penaltyRequiresQuorum: false,
+    });
+    expect(parseRulerKey('1.0.0')).toBeNull();
+    expect(parseRulerKey(`${rulerKey(m.ruler)}|extra`)).toBeNull();
+    expect(parseRulerKey(rulerKey(m.ruler).replace(/[0-9a-f]{64}/, 'abc'))).toBeNull();
+  });
+});
+
+describe('run-labeled-corpus never copies case text into hal_runner_results', () => {
+  it('stores a sha256 digest in generated_answer, not prompt_text', () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'scripts', 'hal-eval', 'run-labeled-corpus.ts'), 'utf8');
+    const values = [...src.matchAll(/generated_answer:\s*([^\n]+)/g)].map((x: RegExpMatchArray) => x[1]!.trim());
+    expect(values.length).toBe(1);
+    expect(values[0]).toMatch(/^`sha256:\$\{createHash\('sha256'\)\.update\(String\(c\.prompt_text\), 'utf8'\)\.digest\('hex'\)\}`,$/);
   });
 });
