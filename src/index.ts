@@ -250,6 +250,17 @@ const accountConnectLimiter = rateLimit({
   },
 });
 app.use(helmet());
+// L0 gate 0.4 — GLOBAL EMERGENCY HALT (kill switch). Mounted FIRST, ahead of every router.
+// [S3-5, 2026-10-16] It used to sit after classify and telegram-public, so those two public POST
+// doors kept running during a halt. The guard reads only req.method and req.path, so it needs no
+// body parser or CORS before it. When trinity_system_config.emergency_halt is true no mutating
+// request reaches a handler. GET/HEAD/OPTIONS are untouched: /health, dashboards and every read
+// surface stay up so the operator can watch the system come to rest.
+// The guard is SYNCHRONOUS and never queries: mounting it also starts a background refresher that
+// reads the flag once per ~5s for the whole process. In production it fails CLOSED: while the
+// state has never been read or the latest read failed, writes get 503 emergency_halt_unknown.
+// See src/middleware/emergency-halt.ts and src/services/emergency-halt.ts.
+app.use(emergencyHaltMiddleware(db));
 // POST /api/v1/classify — the public pass|veto|not-checked label every door calls
 // (extension, phone bot, terminal). Mounted HERE, ahead of the global CORS
 // allow-list, body parser, rate limiter and SQL-keyword sanitizer, on purpose:
@@ -312,17 +323,6 @@ app.use((err: any, req: any, res: any, next: any) => {
   next(err);
 });
 
-// L0 gate 0.4 — GLOBAL EMERGENCY HALT (kill switch). Mounted here, ahead of
-// EVERY API router including full-account, so that when
-// trinity_system_config.emergency_halt is true no mutating request reaches a
-// handler. GET/HEAD are untouched: /health, dashboards and every read surface
-// stay up so the operator can watch the system come to rest.
-// The guard is SYNCHRONOUS and never queries: mounting it also starts a
-// background refresher that reads the flag once per ~5s for the whole process,
-// so this adds no per-request latency and no per-request DB dependency.
-// Inert by default (the column defaults to false) and fail-open on read error.
-// See src/services/emergency-halt.ts for the failure semantics.
-app.use(emergencyHaltMiddleware(db));
 
 // Full-account routes (signup/login/mint/agent/trade/dashboard) are mounted
 // BEFORE the SQL-keyword sanitizer because passwords and trade rationales

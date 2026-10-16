@@ -24,9 +24,15 @@
  * unavailable right now, come back later", which is exactly what a kill switch
  * is. Documented here rather than silently swapped.
  *
- * FAIL-OPEN: if the state has never been read (refresher not started, or its
- * first read has not returned), requests proceed — and that is said out loud
- * once, rather than the guard silently protecting nothing.
+ * FAIL-CLOSED IN PRODUCTION [S3-5, 2026-10-16]: if the state has never been read
+ * (refresher not started, or its first read has not returned) or the latest read
+ * failed, a mutating request gets 503 `emergency_halt_unknown` with a short
+ * Retry-After. This used to let writes through, so the switch protected nothing
+ * exactly while the database was unreachable or slow. Cost, stated: a read that
+ * fails or overruns EMERGENCY_HALT_TIMEOUT_MS (1 s) refuses writes until the next
+ * good read (one refresh, ~5 s). Outside production (tests, local dev) the old
+ * behaviour stays: writes proceed and the guard says so once. `failClosed`
+ * overrides the default. Shadow mode never refuses; `off` skips the guard.
  */
 
 import type { NextFunction, Request, Response } from 'express';
@@ -37,6 +43,8 @@ const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /** Retry-After seconds advertised while halted. */
 const RETRY_AFTER_SECONDS = 30;
+/** Retry-After while the state is unknown: about one refresh interval. */
+const UNKNOWN_RETRY_AFTER_SECONDS = 5;
 
 let warnedUninitialized = false;
 
@@ -53,6 +61,8 @@ export interface EmergencyHaltMiddlewareOptions {
    * future entrypoint cannot accidentally mount a guard with nothing feeding it.
    */
   autoStartRefresher?: boolean;
+  /** Refuse writes while the halt state is unknown. Defaults to NODE_ENV === 'production'. */
+  failClosed?: boolean;
 }
 
 export function emergencyHaltMiddleware(
@@ -60,19 +70,32 @@ export function emergencyHaltMiddleware(
   options: EmergencyHaltMiddlewareOptions = {},
 ) {
   const allow = new Set(options.allowPaths ?? []);
+  const failClosed = options.failClosed ?? process.env.NODE_ENV === 'production';
   if (options.autoStartRefresher !== false) startEmergencyHaltRefresher(client);
+  console.log(
+    `[EmergencyHalt] HTTP guard mounted: unknown halt state ${failClosed ? 'REFUSES writes (fail-closed)' : 'allows writes (fail-open, non-production)'}`,
+  );
 
   return function emergencyHaltGuard(req: Request, res: Response, next: NextFunction): void {
     if (!MUTATING.has(req.method)) return next();
     if (allow.has(req.path)) return next();
 
     const state = peekHaltState();
-    if (!state.initialized) {
+    if (!state.halted && (!state.initialized || state.readFailing)) {
+      if (failClosed && state.mode === 'enforce') {
+        res.setHeader('Retry-After', String(UNKNOWN_RETRY_AFTER_SECONDS));
+        res.status(503).json({
+          error: 'emergency_halt_unknown',
+          message: 'The kill-switch state could not be read, so writes are refused until it can. Reads remain available.',
+          retry_after_seconds: UNKNOWN_RETRY_AFTER_SECONDS,
+        });
+        return;
+      }
       if (!warnedUninitialized) {
         warnedUninitialized = true;
         console.warn(
-          '[EmergencyHalt] guard reached before any successful state read — allowing writes. ' +
-            'The kill switch is NOT protecting this surface yet (refresher not started, or first read pending).',
+          '[EmergencyHalt] halt state unknown (never read, or the latest read failed) — allowing writes. ' +
+            'The kill switch is NOT protecting this surface right now (fail-open outside production, or shadow mode).',
         );
       }
       return next();
