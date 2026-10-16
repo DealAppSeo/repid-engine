@@ -21,12 +21,20 @@ import { operationalCostClass, declaredFree, defaultBlendedPrice } from './cost-
 import { buildRoutingRecord, summarizeRoutingRecord, RoutingRecord } from '../decisioning/routing-record';
 import { shadowCascadeDecision } from './speculative-cascade-shadow'; // item 8 shadow — inert unless CASCADE_SPECULATION_ENABLED=true
 import { shadowFreeTierQuota } from './free-tier-quota-shadow'; // item 9 shadow — inert unless FREE_TIER_QUOTA_SHADOW_ENABLED=true
+import { FAMILY_REGISTRY_SEED, resolveFamily } from '../decisioning/family-registry';
 
 export interface RouteRequest {
   prompt: string;
   tier_preference: 'tier0_only' | 'tier0_first' | 'tier1_only' | 'auto';
   user_paid_keys?: { openai?: string; anthropic?: string };
   task_hint?: string;
+  /**
+   * Family pin (F1): a model id from the family registry. Absent = routing exactly as before.
+   * Until 2026-10-16 this field was declared and never read, so a pin was silently ignored.
+   * Now resolvePin() refuses an unregistered or unroutable id (PinRefusedError), a healthy
+   * pin is served by its own provider, and an unservable one falls back with the reason
+   * recorded on `RouteDecision.pin`.
+   */
   model_override?: string;
   maxTokens?: number;
   temperature?: number;
@@ -35,8 +43,30 @@ export interface RouteRequest {
 export interface RouteDecision {
   chosen_provider: string;
   chosen_tier: '0a' | '1' | 'none' | 'slm';
-  reason: 'priority_healthy' | 'fallback_after_failure' | 'tier1_required' | 'all_exhausted' | 'cap_hit' | 'slm_low_complexity' | 'anfis_escalation' | 'anfis_lateral';
+  reason: 'priority_healthy' | 'fallback_after_failure' | 'tier1_required' | 'all_exhausted' | 'cap_hit' | 'slm_low_complexity' | 'anfis_escalation' | 'anfis_lateral' | 'pinned';
   tried: string[];
+  /** Present only when the request pinned a model, so an unpinned decision is unchanged. */
+  pin?: PinRecord;
+}
+
+export interface PinRecord {
+  model_requested: string;
+  family: string;
+  outcome: 'honoured' | 'fallback';
+  /** Why each provider of the pinned model could not serve it, e.g. "deepseek: unhealthy". */
+  fallback_reason?: string;
+}
+
+export class PinRefusedError extends Error {
+  name = 'PinRefusedError';
+}
+
+export interface PinTarget {
+  /** The registry's spelling of the id; vendor ids are case-sensitive. */
+  model: string;
+  family: string;
+  /** Providers in this process's chain that serve the model, in chain order. */
+  providers: string[];
 }
 
 const slmAdapters: ProviderAdapter[] = [
@@ -227,6 +257,65 @@ export function routingChain(includeSlm: boolean): { provider: string; tier: '0a
 }
 
 /**
+ * Resolve a pinned model to the providers that serve it (F1). Registry-only, like
+ * resolveFamily: a pin is never matched by substring or provider prefix, so a model the
+ * registry does not know, or knows only under providers this deployment has not wired
+ * (mistral, fireworks, litellm), is REFUSED here rather than quietly routed elsewhere.
+ * Tier-0a and tier-1 only: the SLM adapters ignore the requested model.
+ */
+export function resolvePin(model: string): PinTarget {
+  let family: string;
+  try {
+    family = resolveFamily(model);
+  } catch {
+    throw new PinRefusedError(
+      `model "${String(model)}" is not in the family registry (src/decisioning/family-registry.ts); register it before pinning`,
+    );
+  }
+  const key = model.toLowerCase();
+  const entries = FAMILY_REGISTRY_SEED.filter((e) => e.model.toLowerCase() === key);
+  const providers = [...tier0aAdapters, ...tier1Adapters]
+    .map((a) => a.name)
+    .filter((name) => entries.some((e) => e.provider === name));
+  if (providers.length === 0) {
+    throw new PinRefusedError(
+      `model "${model}" (family ${family}) is registered under ${entries.map((e) => e.provider).join(', ')}, ` +
+        `and none of those providers is in this deployment's routing chain`,
+    );
+  }
+  return { model: entries[0]!.model, family, providers };
+}
+
+/**
+ * Try the pinned model's providers in chain order, under the same gates the chain walk
+ * applies: exclusions (no key, disabled, keyless-caller limits, failed earlier in this
+ * request), tier_preference, tier-1 key, health and spend cap. Returns the adapter, or the
+ * reason none could serve. A pin never bypasses a gate: a keyless caller forced to
+ * tier0_only cannot pin a paid tier-1 model onto our key.
+ */
+async function tryPin(pin: PinTarget, req: RouteRequest, excludeProviders: string[]): Promise<ProviderAdapter | string> {
+  const why: string[] = [];
+  for (const name of pin.providers) {
+    const adapter = [...tier0aAdapters, ...tier1Adapters].find((a) => a.name === name)!;
+    const tierBlocked = adapter.tier === 1 ? req.tier_preference === 'tier0_only' : req.tier_preference === 'tier1_only';
+    const reason = excludeProviders.includes(name)
+      ? 'excluded (no key, disabled, or already failed this request)'
+      : tierBlocked
+        ? `tier_preference ${req.tier_preference}`
+        : adapter.tier === 1 && !resolveTier1Key(name, req.user_paid_keys)
+          ? 'no key'
+          : !isHealthy(name)
+            ? 'unhealthy'
+            : !(await checkCap(name)).allowed
+              ? 'cap_hit'
+              : null;
+    if (!reason) return adapter;
+    why.push(`${name}: ${reason}`);
+  }
+  return why.join('; ');
+}
+
+/**
  * Resolve the API key for an adapter — THE ONE PLACE that knows how.
  *
  * This logic used to live only inside the routing loop in routes/route.ts, so
@@ -412,6 +501,11 @@ export interface RouteResult {
   anfisTier: string;
   anfisConfidence: number;
   /**
+   * The model id to send the adapter. Set only when a pin was honoured; absent means the
+   * adapter's own default, exactly as before pins existed.
+   */
+  model?: string;
+  /**
    * Observability record for this decision — the candidate chain, each candidate's cost
    * class, and why each one lost. Always computed (it is a pure map over ~10 names);
    * only LOGGED when ROUTER_DECISION_RECORD=true, so log volume is unchanged by default.
@@ -434,7 +528,21 @@ export async function routeRequest(
   req: RouteRequest,
   excludeProviders: string[] = [],
 ): Promise<RouteResult> {
-  const result = await selectRoute(req, excludeProviders);
+  // Throws PinRefusedError for an unknown or unroutable pin: refused, never ignored.
+  const pin = req.model_override !== undefined ? resolvePin(req.model_override) : undefined;
+  const pinMiss: { reason?: string } = {};
+  const result = await selectRoute(req, excludeProviders, pin, pinMiss);
+  if (pin) {
+    const base = { model_requested: pin.model, family: pin.family };
+    if (result.decision.reason === 'pinned') {
+      result.decision.pin = { ...base, outcome: 'honoured' };
+    } else {
+      result.decision.pin = { ...base, outcome: 'fallback', fallback_reason: pinMiss.reason };
+      console.warn(
+        `[router] PIN FALLBACK model=${pin.model} family=${pin.family} (${pinMiss.reason}) -> ${result.decision.chosen_provider}`,
+      );
+    }
+  }
 
   let record: RoutingRecord;
   try {
@@ -505,15 +613,12 @@ export async function routeRequest(
   return { ...result, routingRecord: record };
 }
 
-async function selectRoute(req: RouteRequest, excludeProviders: string[] = []): Promise<{
-  adapter: ProviderAdapter | null;
-  decision: RouteDecision;
-  staticProvider: string;
-  staticTier: string;
-  anfisProvider: string;
-  anfisTier: string;
-  anfisConfidence: number;
-}> {
+async function selectRoute(
+  req: RouteRequest,
+  excludeProviders: string[] = [],
+  pin?: PinTarget,
+  pinMiss: { reason?: string } = {},
+): Promise<RouteResult> {
   const tried: string[] = [...excludeProviders];
 
   // 1. Compute ANFIS choice
@@ -602,6 +707,23 @@ async function selectRoute(req: RouteRequest, excludeProviders: string[] = []): 
     }
   } catch (e) {
     // tolerant for no key / no table yet
+  }
+
+  // F1 family pin: the caller named the model, so it outranks ANFIS and the chain walk.
+  // Placed after the static/shadow computation so the shadow still records what the chain
+  // would have picked. When no provider can serve the pin, the reason goes to `pinMiss`
+  // (routeRequest records it on the decision) and the request walks the chain below.
+  if (pin) {
+    const hit = await tryPin(pin, req, excludeProviders);
+    if (typeof hit !== 'string') {
+      return {
+        adapter: hit,
+        model: pin.model,
+        decision: { chosen_provider: hit.name, chosen_tier: hit.tier === 1 ? '1' : '0a', reason: 'pinned', tried },
+        staticProvider, staticTier, anfisProvider, anfisTier, anfisConfidence,
+      };
+    }
+    pinMiss.reason = hit;
   }
 
   // 2026-07-30 — escalation-only ANFIS authority (PR #281 gate, wired here).

@@ -21,8 +21,21 @@ export interface CompletionResponse {
   tokensOut: number;
   latencyMs: number;
   provider: string;
+  /** The model id the adapter REQUESTED. What the vendor actually served: servedModel(). */
   model: string;
   rawResponse?: any;
+}
+
+/**
+ * The model the vendor says answered, read from its own response body (F2): `model` for
+ * OpenAI-compatible vendors and Anthropic, `modelVersion` for Gemini. It can differ from
+ * the id requested (a dated snapshot, a gateway's substitution), and until 2026-10-16
+ * every log recorded only the requested id. Falls back to that id when the vendor names
+ * nothing (cohere, the SLMs).
+ */
+export function servedModel(r: CompletionResponse): string {
+  const raw = r.rawResponse?.model ?? r.rawResponse?.modelVersion;
+  return typeof raw === 'string' && raw.trim() ? raw : r.model;
 }
 
 export class RateLimitError extends Error {

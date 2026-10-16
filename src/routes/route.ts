@@ -1,12 +1,13 @@
 import { Router, Request, Response } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { trustedClientIp } from '../middleware/client-ip';
-import { routeRequest, RouteRequest, resolveTier1Key, keylessProviders, resolveAdapterKey, envKeyedTier1 } from '../providers/router';
+import { routeRequest, RouteRequest, RouteDecision, resolveTier1Key, keylessProviders, resolveAdapterKey, envKeyedTier1, resolvePin, PinRefusedError } from '../providers/router';
+import { resolveFamilyOrUnverified } from './v1/openai-compat';
 import { hasValidEnvApiKey } from '../middleware/env-api-key';
 import { budgetLimitFrom, createSharedBudget } from '../middleware/shared-budget';
 import { logToolCall } from '../utils/tool-call-logger';
 import { markFailure, markSuccess, markRateLimit, getAllHealthStates } from '../providers/health';
-import { RateLimitError, AuthError, defaultModelFor } from '../providers/types';
+import { RateLimitError, AuthError, defaultModelFor, servedModel } from '../providers/types';
 import { ADAPTER_DEFAULT_MODELS } from '../providers/cost-class';
 import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
@@ -174,10 +175,38 @@ function inferCategory(prompt: string, taskHint?: string): string {
   return 'general';
 }
 
+/**
+ * The four fields every routed response carries (F1, F2): the model asked for (the pin, or
+ * the adapter's own id), the model the vendor says served, that model's registry family
+ * ('unverified' when unregistered), and whether a pin was honoured. `served` is null when
+ * nothing answered.
+ */
+function modelFields(decision: RouteDecision | null, requested: string | null, served: string | null) {
+  return {
+    model_requested: decision?.pin?.model_requested ?? requested,
+    model_served: served,
+    family: served ? resolveFamilyOrUnverified(served) : null,
+    decision: !decision?.pin ? 'routed' : decision.pin.outcome === 'honoured' ? 'pinned' : 'pin_fallback',
+  };
+}
+
 llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Response): Promise<void> => {
   const call_id = crypto.randomUUID();
   try {
-    const { prompt, tier_preference = 'auto', task_hint, user_paid_keys, max_tokens, temperature, agent_id, idempotency_key } = req.body;
+    const { prompt, tier_preference = 'auto', task_hint, user_paid_keys, max_tokens, temperature, agent_id, idempotency_key, model } = req.body;
+
+    // F1 family pin. Checked before the gate meters a run, so a refused pin costs the caller
+    // nothing. An unknown or unroutable model is refused here, never silently ignored.
+    if (model != null) {
+      try {
+        if (typeof model !== 'string') throw new PinRefusedError('model must be a string naming a registered model');
+        resolvePin(model);
+      } catch (e) {
+        if (!(e instanceof PinRefusedError)) throw e;
+        res.status(400).json({ error: 'model_not_pinnable', message: e.message });
+        return;
+      }
+    }
 
     // T0.5 agent gate (spec §9.1): anonymous callers get a small daily
     // taste of hosted runs; a verified-email gate token raises the cap.
@@ -306,7 +335,9 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       task_hint,
       user_paid_keys,
       maxTokens: max_tokens,
-      temperature
+      temperature,
+      // Only when pinned, so an unpinned RouteRequest is exactly what it was.
+      ...(model != null ? { model_override: model } : {})
     };
 
     // Redact from req.body immediately to ensure downstream error loggers never see it
@@ -341,7 +372,8 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         anfisProvider,
         anfisTier,
         anfisConfidence,
-        routingRecord
+        routingRecord,
+        model: pinnedModel
       } = await routeRequest(routeReq, excludeProviders);
       lastDecision = decision;
 
@@ -368,7 +400,8 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       void logToolCall({
         agentName: 'anfis-router',
         toolName: 'provider-selection',
-        toolInput: { tier_preference },
+        // tool_input is the stored column (output is only hashed), so the pin record goes here.
+        toolInput: { tier_preference, ...(decision.pin ? { pin: decision.pin } : {}) },
         toolOutput: { chosen_provider: decision.chosen_provider, chosen_tier: decision.chosen_tier, reason: decision.reason },
         repidAtCall: 0,
         confidenceAtCall: 0.9,
@@ -376,7 +409,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       });
 
       if (!adapter || decision.reason === 'all_exhausted') {
-        res.status(503).json({ error: 'All available providers exhausted', router_decision: decision });
+        res.status(503).json({ error: 'All available providers exhausted', router_decision: decision, ...modelFields(decision, null, null) });
         return;
       }
 
@@ -416,19 +449,41 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           prompt,
           maxTokens: max_tokens,
           temperature,
-          apiKey
+          apiKey,
+          // Only when a pin was honoured, so an unpinned adapter call is exactly what it was.
+          ...(pinnedModel ? { model: pinnedModel } : {})
         });
 
+        // Cost stays on the REQUESTED id (`result.model`), as before: a served dated snapshot
+        // (gpt-4o-mini-2024-07-18) has no pricing row and would price at 0, and caps read this.
         const cost_usd = calculateCost(adapter.name, result.model || 'default', result.tokensIn, result.tokensOut);
-        
+        // F2: every "model used" record below names what the vendor says served, which can
+        // differ from what we asked for. Until 2026-10-16 they all recorded the requested id.
+        const modelServed = servedModel(result) || 'unknown';
+        const routed = modelFields(decision, result.model || 'unknown', modelServed);
+
         markSuccess(adapter.name);
         incrementSpend(adapter.name, cost_usd).catch(console.error);
+
+        void logToolCall({
+          agentName: 'llm-broker',
+          toolName: 'provider-call',
+          toolInput: {
+            provider: adapter.name,
+            ...routed,
+            ...(decision.pin?.fallback_reason ? { fallback_reason: decision.pin.fallback_reason } : {}),
+          },
+          toolOutput: routed,
+          repidAtCall: 0,
+          confidenceAtCall: 0.9,
+          autonomyTier: 'just_do_it',
+        });
 
         logLlmCall({
           call_id,
           provider: adapter.name,
           tier: adapter.tier === 0 ? '0a' : '1', // Or chosen_tier
-          model: result.model || 'unknown',
+          model: modelServed,
           prompt_tokens: result.tokensIn,
           completion_tokens: result.tokensOut,
           cost_usd,
@@ -453,7 +508,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
             category: cat,
             // selected_model is NOT NULL in the table; omitting it silently failed every insert
             // (the success-path logger had written 0 rows). Record the model actually used.
-            selected_model: result.model || getDefaultModelForProvider(adapter.name),
+            selected_model: modelServed,
             static_provider: staticProvider,
             static_tier: staticTier,
             static_reason: 'static',
@@ -484,7 +539,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
               answer: result.answer,
               provider_used: adapter.name,
               tier_used: String(decision.chosen_tier),
-              model_used: result.model || 'unknown',
+              model_used: modelServed,
               llm_call_id: call_id,
               idempotency_key: typeof idempotency_key === 'string' ? idempotency_key : undefined,
             });
@@ -513,7 +568,8 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           latency_ms: result.latencyMs,
           cost_estimate_usd: cost_usd,
           router_decision: decision,
-          hal_evaluation
+          hal_evaluation,
+          ...routed
         });
         return;
 
@@ -544,8 +600,8 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           await db.from('anfis_routing_logs').insert({
             prompt_preview: prompt.substring(0, 200),
             category: cat,
-            // selected_model is NOT NULL; on the failure path use the attempted provider's default model.
-            selected_model: getDefaultModelForProvider(adapter.name),
+            // selected_model is NOT NULL; on the failure path use the model attempted (the pin, else the default).
+            selected_model: pinnedModel ?? getDefaultModelForProvider(adapter.name),
             static_provider: staticProvider,
             static_tier: staticTier,
             static_reason: 'static',
@@ -579,10 +635,11 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           // shape. The fallback is `ADAPTER_DEFAULT_MODELS`, which is drift-tested
           // against the adapter sources by tests/routing-cost-class.test.ts.
           //
-          // Still the DEFAULT, not necessarily what the adapter sent: a caller may
-          // pass an explicit model this catch block cannot see. Approximate and
-          // useful beats precise and absent.
-          model: getDefaultModelForProvider(adapter.name),
+          // The model the adapter was asked for: the pin when one was honoured, else
+          // the default. (This used to say a caller's explicit model was invisible
+          // here; a pin now arrives as `pinnedModel`, so it is not.) A failed call has
+          // no vendor body, so there is no served id to record.
+          model: pinnedModel ?? getDefaultModelForProvider(adapter.name),
           prompt_tokens: 0,
           completion_tokens: 0,
           cost_usd: 0,
@@ -595,7 +652,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       }
     }
 
-    res.status(503).json({ error: 'Max routing attempts reached', router_decision: lastDecision });
+    res.status(503).json({ error: 'Max routing attempts reached', router_decision: lastDecision, ...modelFields(lastDecision, null, null) });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
