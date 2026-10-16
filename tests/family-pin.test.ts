@@ -13,6 +13,7 @@
  * request and that call is the real code: compat route -> HTTP -> broker -> router -> adapter.
  */
 process.env.OPENAI_COMPAT_ENABLED = 'true'; // read at module load by openai-compat.ts
+process.env.OPENROUTER_API_KEY = 'test-openrouter-key-not-real'; // openrouter joins the tier-0 chain at module load
 
 jest.mock('../src/db', () => {
   const makeChain = () => {
@@ -47,6 +48,7 @@ const { openaiCompatRouter } = require('../src/routes/v1/openai-compat');
 const { routeRequest, resolvePin, PinRefusedError } = require('../src/providers/router');
 const { GroqAdapter } = require('../src/providers/groq');
 const { DeepSeekAdapter } = require('../src/providers/deepseek');
+const { OpenRouterAdapter } = require('../src/providers/openrouter');
 const { isHealthy } = require('../src/providers/health');
 const { logLlmCall } = require('../src/billing/log-call');
 const { logToolCall } = require('../src/utils/tool-call-logger');
@@ -61,6 +63,7 @@ app.use('/v1', openaiCompatRouter);
 // Registry ids (src/decisioning/family-registry.ts) so the family is provable, not 'unverified'.
 const GROQ_CONFIGURED = 'openai/gpt-oss-20b'; // family openai
 const GROQ_SERVED = 'llama-3.3-70b-versatile'; // family llama
+const QWEN = 'qwen/qwen-2.5-72b-instruct'; // openrouter: FREE_PROVIDERS, but paid from a prepaid balance
 
 // A shared env key (REPID_API_KEYS): a KEYED caller, the only kind that may pin a paid model.
 const ENV_KEY = 'test-env-key-not-real';
@@ -76,6 +79,7 @@ const toolLog = (toolName: string) =>
 
 let groq: jest.SpyInstance;
 let deepseek: jest.SpyInstance;
+let openrouter: jest.SpyInstance;
 let server: Server;
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -101,6 +105,7 @@ beforeEach(() => {
   (isHealthy as jest.Mock).mockImplementation(() => true);
   groq = jest.spyOn(GroqAdapter.prototype, 'complete').mockResolvedValue(vendor('groq', GROQ_CONFIGURED, GROQ_SERVED));
   deepseek = jest.spyOn(DeepSeekAdapter.prototype, 'complete').mockResolvedValue(vendor('deepseek', 'deepseek-chat', 'deepseek-chat'));
+  openrouter = jest.spyOn(OpenRouterAdapter.prototype, 'complete').mockResolvedValue(vendor('openrouter', QWEN, QWEN));
   jest.spyOn(console, 'warn').mockImplementation(() => undefined);
   jest.spyOn(console, 'log').mockImplementation(() => undefined);
   jest.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -118,6 +123,11 @@ describe('resolvePin: registry-only, priced or free, refuses rather than guesses
   it('freeOnly (a keyless caller) refuses a paid model and allows a declared-free one', () => {
     expect(() => resolvePin('deepseek-chat', { freeOnly: true })).toThrow(/none served free \(keyless caller\)/);
     expect(resolvePin('llama-3.3-70b-versatile', { freeOnly: true }).providers).toEqual(['groq']);
+  });
+
+  it('freeOnly refuses a declared-free provider paid from a prepaid balance (openrouter); keyed pins are unchanged', () => {
+    expect(() => resolvePin(QWEN, { freeOnly: true })).toThrow(/none served free \(keyless caller\)/);
+    expect(resolvePin(QWEN).providers).toEqual(['openrouter']);
   });
 
   it('refuses an unpriced model that is not declared free: its calls would never move the spend cap', () => {
@@ -215,6 +225,21 @@ describe('POST /api/v1/llm/complete: pin end to end', () => {
     expect(deepseek).not.toHaveBeenCalled();
     expect(groq).not.toHaveBeenCalled();
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('none served free (keyless caller)'));
+  });
+
+  it('a keyless caller cannot pin openrouter (prepaid balance): the generic 400, no provider called', async () => {
+    const res = await post({ model: QWEN });
+    expect(res.status).toBe(400);
+    expect(res.body).toStrictEqual(REFUSED);
+    expect(openrouter).not.toHaveBeenCalled();
+    expect(groq).not.toHaveBeenCalled();
+  });
+
+  it('a keyed caller may still pin openrouter', async () => {
+    const res = await post({ model: QWEN }, KEYED);
+    expect(res.status).toBe(200);
+    expect(openrouter).toHaveBeenCalledWith(expect.objectContaining({ model: QWEN }));
+    expect(res.body).toMatchObject({ decision: 'pinned', family: 'qwen' });
   });
 
   it('a keyless caller may pin a declared-free model', async () => {
