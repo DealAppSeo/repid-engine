@@ -10,7 +10,13 @@ import express from 'express';
 import { llmRouter } from '../src/routes/route';
 import { validateAgentApiKey } from '../src/auth/api-keys';
 
-jest.mock('../src/auth/api-keys');
+// The REPID_API_KEYS compare runs the real verifier (r32); only the DB-backed key functions are mocked.
+jest.mock('../src/auth/api-keys', () => ({
+  ...jest.requireActual('../src/auth/api-keys'),
+  validateAgentApiKey: jest.fn(),
+  issueAgentApiKey: jest.fn(),
+  revokeAgentApiKey: jest.fn(),
+}));
 jest.mock('../src/db', () => ({
   db: {
     from: jest.fn().mockReturnThis(),

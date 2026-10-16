@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { db } from '../db';
+import { secretEquals } from '../auth/api-keys';
 
 export const adminCapsRouter = Router();
 
@@ -9,8 +10,7 @@ adminCapsRouter.use((req: Request, res: Response, next: NextFunction) => {
     res.status(503).json({ error: 'Admin not configured' });
     return;
   }
-  const reqKey = req.headers['x-admin-key'];
-  if (reqKey !== adminKey) {
+  if (!secretEquals(req.headers['x-admin-key'], adminKey)) {
     res.status(401).json({ error: 'Unauthorized: Invalid admin key' });
     return;
   }

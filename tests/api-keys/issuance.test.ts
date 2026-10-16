@@ -6,7 +6,7 @@
  * exercised end-to-end after Sean applies it.
  */
 jest.mock('../../src/db', () => ({ db: { from: () => ({ insert: async () => ({ error: null }) }) } }));
-jest.mock('../../src/auth/api-keys', () => ({ validateAgentApiKey: jest.fn() }));
+jest.mock('../../src/auth/api-keys', () => ({ ...jest.requireActual('../../src/auth/api-keys'), validateAgentApiKey: jest.fn() }));
 
 import { validateApiKeyRequestBody, RATE_LIMIT_WINDOW_MS } from '../../src/routes/v1/api-key-requests';
 import { authMiddleware } from '../../src/middleware/auth';

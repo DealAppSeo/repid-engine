@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
-import { validateAgentApiKey } from '../auth/api-keys';
+import { matchEnvOperatorKey, validateAgentApiKey } from '../auth/api-keys';
 import { logAgentEvent } from '../engine/agent-log';
 import {
   assessUnboundContractAccess,
@@ -265,25 +265,13 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     return res.status(401).json({ error: 'Unauthorized: API key required' });
   }
 
-  const rawKeys = process.env.REPID_API_KEYS || '';
-  const keyList = rawKeys.split(',').map(s => s.trim()).filter(Boolean);
-  
-  let valid = false;
-  let tier = 'free';
+  // REPID_API_KEYS, compared in constant time by the one verifier (r32).
+  const envMatch = matchEnvOperatorKey(apiKey);
+  let valid = Boolean(envMatch);
+  let tier = envMatch?.tier ?? 'free';
   // WHICH allowlist entry matched. A non-secret handle for an env key, so per-key state (the
   // /peer-verify/respond limiter bucket) never has to be keyed on the key itself.
-  let envIndex: number | undefined;
-
-  for (const [i, k] of keyList.entries()) {
-    // allow key:tier or just key format
-    const [key, keyTier] = k.split(':');
-    if (key === apiKey) {
-      valid = true;
-      if (keyTier) tier = keyTier;
-      envIndex = i;
-      break;
-    }
-  }
+  const envIndex = envMatch?.index;
 
   // API key issuance V0 (2026-05-24): if the env-var allowlist didn't match, fall through to a
   // DB-issued key (agent_api_keys, hashed). Backward compatible — env keys still win first, and the

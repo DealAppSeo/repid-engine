@@ -6,6 +6,7 @@ import { parseRetryMode } from '../services/x402-release-retry-worker';
 import { executionFloorEnabled } from '../hal/execution-floor';
 import { stakeAuthorityShadowEnabled } from '../services/stake-authority-shadow';
 import { typedVerdictShadowEnabled } from '../services/typed-verdict-shadow';
+import { secretEquals } from '../auth/api-keys';
 
 export const adminFlagsRouter = Router();
 
@@ -15,8 +16,7 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
     res.status(503).json({ error: 'Admin not configured' });
     return;
   }
-  const reqKey = req.headers['x-admin-key'];
-  if (reqKey !== adminKey) {
+  if (!secretEquals(req.headers['x-admin-key'], adminKey)) {
     res.status(401).json({ error: 'Unauthorized: Invalid admin key' });
     return;
   }

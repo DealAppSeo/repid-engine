@@ -8,6 +8,9 @@
  * The retired legacy token (`legacyTokenMatches`, `api_key_sha256`) is banned EVERYWHERE, the verifier
  * included: it authorizes nothing now, so any code touching it is the old path coming back.
  *
+ * In src/auth and src/middleware, `.includes(` / `.indexOf(` on a key or token array is also banned: it is
+ * a `===` per element. Use `keys.some((k) => secretEquals(k, presented))`.
+ *
  * If this fails on your change: route the check through src/auth/api-keys.ts (constant-time compare
  * there), or, if the hit is not a credential, add an allowlist entry with the exact snippet and why.
  */
@@ -21,8 +24,12 @@ const SECRET_NAME = /(^|[a-z0-9_])(token|key|secret|password|passphrase|mnemonic
 const OPERAND = String.raw`(?:process\.env\.)?[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*`;
 const EQUALITY = new RegExp(`(${OPERAND})\\s*[!=]==?\\s*(${OPERAND})`, 'g');
 const NOT_A_VALUE = /^(null|undefined|true|false|NaN|typeof)$/;
+// A COLLECTION of secrets (`keys`, `apiTokens`, `adminKeyList`); a singular `key.includes(':')` is a string op.
+const SECRET_LIST = /(keys|tokens|secrets|passwords|passphrases|(key|token|secret|password)(list|set|array))$/i;
+const MEMBERSHIP = new RegExp(`(${OPERAND})\\s*\\??\\.\\s*(?:includes|indexOf)\\s*\\(`, 'g');
 
-type Rule = { everywhere?: boolean; find: (line: string) => string[] };
+/** `scope` omitted = every runtime file under src/. */
+type Rule = { everywhere?: boolean; scope?: RegExp; find: (line: string) => string[] };
 const RULES: Record<string, Rule> = {
   'constitution.api_key': {
     find: (l) => l.match(/constitution\s*(?:\?\.|\.)\s*api_key\w*|constitution\s*(?:\?\.)?\[\s*['"`]api_key\w*/g) ?? [],
@@ -36,17 +43,17 @@ const RULES: Record<string, Rule> = {
         .filter(([, a, b]) => SECRET_NAME.test(a.split('.').pop()!) || SECRET_NAME.test(b.split('.').pop()!))
         .map((m) => m[0]),
   },
+  // `keys.includes(presented)` is a `===` per element: not constant-time. Where credentials are checked.
+  'secret-membership': {
+    scope: /^src\/(auth|middleware)\//,
+    find: (l) => [...l.matchAll(MEMBERSHIP)].filter(([, recv]) => SECRET_LIST.test(recv.split('.').pop()!)).map((m) => m[0]),
+  },
   'retired-legacy-token': { everywhere: true, find: (l) => l.match(/\blegacyTokenMatches\b|\bapi_key_sha256\b/g) ?? [] },
 };
 
 /** `snippet` omitted = the whole rule is allowed in that file. Keep entries exact; debt is paid by deleting them. */
 const ALLOW: Array<{ file: string; rule: string; snippet?: string; why: string }> = [
   { file: 'src/routes/agents.ts', rule: 'privateId', why: 'POST /agents/human generates it, stores only privateId_sha256, returns it once' },
-  // DEBT (r32 wants one constant-time verifier): operator / admin keys compared with ===. Follow-up PR.
-  { file: 'src/middleware/auth.ts', rule: 'secret-equality', snippet: 'key === apiKey', why: 'DEBT: REPID_API_KEYS parsed inline' },
-  { file: 'src/routes/route.ts', rule: 'secret-equality', snippet: 'key === token', why: 'DEBT: REPID_API_KEYS parsed inline' },
-  { file: 'src/routes/admin-caps.ts', rule: 'secret-equality', snippet: 'reqKey !== adminKey', why: 'DEBT: x-admin-key compare' },
-  { file: 'src/routes/admin-flags.ts', rule: 'secret-equality', snippet: 'reqKey !== adminKey', why: 'DEBT: x-admin-key compare' },
   // Not credentials: the names only look like it.
   { file: 'src/routes/belts.ts', rule: 'secret-equality', snippet: 'row.name === key', why: 'a belt row name' },
   { file: 'src/services/peer-verify-consensus.ts', rule: 'secret-equality', snippet: 'now.closure_reason === token', why: 'a closure-reason marker' },
@@ -61,6 +68,7 @@ function scan(file: string, text: string): Hit[] {
     if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
     for (const [rule, r] of Object.entries(RULES)) {
       if (file === VERIFIER && !r.everywhere) continue;
+      if (r.scope && !r.scope.test(file)) continue;
       for (const snippet of r.find(line)) hits.push({ file, line: i + 1, rule, snippet });
     }
   });
@@ -108,7 +116,34 @@ describe('credential safety: one verifier (D-108, r32)', () => {
   });
 
   it('the allowlist is per snippet: a NEW secret compare in an allowlisted file is still caught', () => {
-    expect(scan('src/middleware/auth.ts', 'if (header === secret) next();').filter((h) => !allowedBy(h))).toHaveLength(1);
+    expect(scan('src/routes/belts.ts', 'if (header === secret) next();').filter((h) => !allowedBy(h))).toHaveLength(1);
+  });
+
+  // The r32 debt #1408 allowlisted is paid: these four compares now go through secretEquals in the
+  // verifier. Re-adding any one of them, verbatim, in its old file fails the build.
+  it.each([
+    ['src/middleware/auth.ts', '    if (key === apiKey) {'],
+    ['src/routes/route.ts', '        if (key === token) {'],
+    ['src/routes/admin-caps.ts', '  if (reqKey !== adminKey) {'],
+    ['src/routes/admin-flags.ts', '  if (reqKey !== adminKey) {'],
+  ])('paid debt stays paid: a direct compare re-added in %s is caught', (file, planted) => {
+    expect(scan(file, planted).filter((h) => !allowedBy(h)).map((h) => h.rule)).toEqual(['secret-equality']);
+  });
+
+  it.each([
+    ['src/middleware/env-api-key.ts', '  return keys.includes(presented);'],
+    ['src/middleware/planted.ts', 'if (apiKeys.indexOf(token) >= 0) next();'],
+    ['src/middleware/planted.ts', 'const ok = cfg.allowedTokens?.includes(t);'],
+    ['src/auth/planted.ts', 'if (adminKeyList.includes(k)) ok();'],
+  ])('catches .includes/.indexOf membership on a key or token array in %s: %s', (file, planted) => {
+    expect(scan(file, planted).filter((h) => !allowedBy(h)).map((h) => h.rule)).toEqual(['secret-membership']);
+  });
+
+  it('membership is scoped: a key array in src/middleware is caught; a non-secret list, a string op on one key, and src/routes are not', () => {
+    expect(scan('src/middleware/planted.ts', 'return keys.includes(presented);').map((h) => h.rule)).toEqual(['secret-membership']);
+    expect(scan('src/middleware/planted.ts', 'if (scopes.includes(s)) x();')).toEqual([]);
+    expect(scan('src/middleware/planted.ts', "if (key.includes(':')) x();")).toEqual([]);
+    expect(scan('src/routes/planted.ts', 'return keys.includes(presented);')).toEqual([]);
   });
 
   it('the retired legacy token is banned in the verifier too', () => {

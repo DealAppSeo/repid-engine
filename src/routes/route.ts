@@ -14,7 +14,7 @@ import { incrementSpend } from '../billing/caps';
 import { runScoreEvent, NotFoundError } from '../scoring/pipeline';
 import { persistRoutingRecord } from '../decisioning/routing-record-persist';
 import crypto from 'crypto';
-import { validateAgentApiKey } from '../auth/api-keys';
+import { matchEnvOperatorKey, validateAgentApiKey } from '../auth/api-keys';
 import { db } from '../db';
 import { gateEnabled, meterRun } from '../services/email-otp';
 
@@ -239,16 +239,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         res.status(401).json({ error: 'Missing API key for agent_id' });
         return;
       }
-      const rawKeys = process.env.REPID_API_KEYS || '';
-      const keyList = rawKeys.split(',').map(s => s.trim()).filter(Boolean);
-      let isEnvKey = false;
-      for (const k of keyList) {
-        const [key] = k.split(':');
-        if (key === token) {
-          isEnvKey = true;
-          break;
-        }
-      }
+      const isEnvKey = Boolean(matchEnvOperatorKey(token));
 
       // Agent-scoped keys are validated for existence + scope; shared env keys carry no agent binding.
       const validKey = isEnvKey ? null : await validateAgentApiKey(token);

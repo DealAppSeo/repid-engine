@@ -31,18 +31,19 @@ description: >
 | Layer | Where |
 |---|---|
 | The one agent-key verifier | `src/auth/api-keys.ts` (`validateAgentApiKey`; keys hashed in `agent_api_keys.key_hash`) |
+| The one secret compare | `src/auth/api-keys.ts` (`secretEquals`: both sides zero-padded to a fixed 1024 bytes, `timingSafeEqual`, then the lengths; not hashed, since CodeQL flags a fast hash of an API key; false on non-string/empty/over-width). `matchEnvOperatorKey` (REPID_API_KEYS), `hasValidEnvApiKey` and the `x-admin-key` guards call it |
 | Public constitution allowlist | `src/auth/api-keys.ts` (`publicConstitution`) |
 | Architecture test (CI `test` job) | `tests/credential-safety-architecture.test.ts`: fails if any other `src/` file reads `constitution.api_key`, `->>'api_key'`, `privateId`, or compares a secret with `===`. Allowlist is per snippet; DEBT entries are paid by deleting them |
 | Retired legacy token | `tests/legacy-token-retired.test.ts`: `constitution.api_key` no longer authenticates anywhere |
 | DB CHECK constraint | `repid_agents_no_plaintext_credentials` (review SQL: `E:\dev\reports\2026-10-15\D108_CREDENTIAL_CHECK_CONSTRAINT.sql`) |
 | Rule text | `E:\dev\living-docs\CLAUDE_RULES.md` rule 32; decision D-108 |
 
-## Known debt (allowlisted in the architecture test, fix in a follow-up)
+## Known debt
 
-`===` compares on operator/admin keys: `src/middleware/auth.ts` and `src/routes/route.ts`
-(REPID_API_KEYS parsed inline), `src/routes/admin-caps.ts` and `src/routes/admin-flags.ts`
-(`x-admin-key`). `matchEnvOperatorKey` in the verifier also uses `===`. Route all of them through
-one constant-time check in `src/auth/api-keys.ts`, then delete their allowlist entries.
+None allowlisted. The four operator/admin `===` compares #1408 listed, and the rate-limit bypass
+check's `keys.includes(presented)` (`src/middleware/env-api-key.ts`), now go through `secretEquals`.
+The architecture test also bans `.includes(` / `.indexOf(` on a key or token array in `src/auth` and
+`src/middleware`: use `keys.some((k) => secretEquals(k, presented))`.
 
 ## Before you claim it is done
 
