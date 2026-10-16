@@ -42,7 +42,8 @@
  * NOT_CHECKED (scoring v2-no-agreement-is-not-checked, 2026-10-15). An abstain, an extractor
  * fallback, an error, or a VETO NO CHECKER VOTED FALSE FOR is HAL not judging the row. The smoke on
  * 2026-10-15 scored a TP from two UNCERTAIN votes at halScore 0.5; under v1 that read as a catch.
- * Every headline number in the output is v2, checked rows only. The old all-scored-rows numbers
+ * Scoring v3 (2026-10-16) adds a row decided on fewer than two model families (HAL held it, it did not
+ * judge it). Every headline number in the output is the current SCORING, checked rows only. The old all-scored-rows numbers
  * (abstain counted as a pass) sit under `legacy_all_scored` with their own scoring name. Numbers
  * on different scorings are never compared.
  *
@@ -60,7 +61,7 @@ import * as dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { isHallucination, confusionMatrix, prf1, rocAuc, perClass, evalOrder, isNotCheckedV2, isNoAgreementVeto, SCORING } from './metrics';
+import { isHallucination, confusionMatrix, prf1, rocAuc, perClass, evalOrder, isNotCheckedV3, isNoAgreementVeto, isUnderQuorum, SCORING } from './metrics';
 import {
   exitCodeFor,
   familiesRecord,
@@ -166,8 +167,19 @@ interface Scored {
   families?: string[];
   /** Each checker's verdict, counted (TRUE / FALSE / UNCERTAIN / ERROR). Scoring v2 reads it. */
   votes?: Record<string, number>;
+  /** Wall-clock ms of this row's halService.evaluate (in-process; provider waits dominate). */
+  ms?: number;
+  /** Each checker's answer: provider, verdict, confidence (0-100), latency, and a failure reason when it failed. */
+  providers?: Array<{ p: string; v: string; c?: number; ms?: number; e?: string }>;
   error?: string;
 }
+
+/** Nearest-rank percentile; null on an empty list. */
+const pctile = (xs: number[], p: number): number | null => {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.max(0, Math.ceil(p * s.length) - 1))]!;
+};
 
 (async () => {
   if (isPrivate) {
@@ -246,6 +258,7 @@ interface Scored {
         if (maxCalls > 0 && calls + costliestRow > maxCalls) break;
         const row = queue.shift()!;
         const before = calls;
+        const t0 = Date.now();
         try {
           const r: any = await halService.evaluate({
             text: row.candidate_answer,
@@ -268,12 +281,22 @@ interface Scored {
                   return a;
                 }, {})
               : undefined,
+            ms: Date.now() - t0,
+            providers: Array.isArray(r?.provider_responses)
+              ? (r.provider_responses as Array<Record<string, unknown>>).map((v) => ({
+                  p: String(v.provider),
+                  v: String(v.verdict ?? 'NONE'),
+                  ...(typeof v.confidence === 'number' ? { c: v.confidence } : {}),
+                  ...(typeof v.latency_ms === 'number' ? { ms: v.latency_ms } : {}),
+                  ...(v.error ? { e: String(v.error).slice(0, 60) } : {}),
+                }))
+              : undefined,
           });
         } catch (e: any) {
           // A provider failure is NOT a wrong answer. Recorded separately and
           // excluded from the matrix — the mistake that once reported a dead
           // key as a math regression.
-          results.push({ id: row.id, truth: row.label, error: String(e?.message ?? e).slice(0, 90) });
+          results.push({ id: row.id, truth: row.label, error: String(e?.message ?? e).slice(0, 90), ms: Date.now() - t0 });
         }
         costliestRow = Math.max(costliestRow, calls - before);
         done++;
@@ -287,18 +310,52 @@ interface Scored {
   const scored = results.filter((r) => !r.error && r.verdict);
   const attempted = results.length;
   const sample = attempted < splitRows ? ` first ${attempted} of ${splitRows} (evalOrder)` : '';
-  // SCORING v2: an abstain, a fallback, an error, or a veto no checker voted FALSE for is NOT_CHECKED.
-  const notCheckedN = results.filter(isNotCheckedV2).length;
+  // SCORING v3: an abstain, a fallback, an error, a veto no checker voted FALSE for, or a row decided on
+  // fewer than two families is NOT_CHECKED.
+  const notCheckedN = results.filter(isNotCheckedV3).length;
   const noAgreementVetoes = results.filter((r) => !r.error && isNoAgreementVeto(r)).length;
+  const underQuorum = results.filter((r) => !r.error && r.verdict && isUnderQuorum(r)).length;
   const notCheckedRate = attempted ? notCheckedN / attempted : 0;
   // ONE RULER PER ARTEFACT (XC1 on #1389). Every headline number below (confusion, precision,
   // recall, F1, accuracy, AUC, per class) is scoring v2: checked rows only. The old all-scored-rows
   // numbers are a different ruler and live under `legacy_all_scored`, named so they cannot be
   // read as the headline.
-  const checkedRows = scored.filter((r) => !isNotCheckedV2(r));
+  const checkedRows = scored.filter((r) => !isNotCheckedV3(r));
   const checkedConfusion = confusionMatrix(checkedRows);
   const perClassScores = perClass(checkedConfusion);
   const budget = { max_calls: maxCalls || null, provider_calls: calls, costliest_row_calls: concurrency === 1 ? costliestRow : null, not_run: rows.length - attempted };
+
+  // LATENCY: wall-clock per check over attempted rows (a failed check still made the caller wait).
+  const rowMs = results.map((r) => r.ms).filter((x): x is number => typeof x === 'number');
+  const latency = { p50_ms: pctile(rowMs, 0.5), p95_ms: pctile(rowMs, 0.95), n: rowMs.length, over: 'attempted rows; wall-clock of one in-process halService.evaluate' };
+  // PROVIDER FAILURES by provider and kind (a failure is transport, never quality).
+  const providerFailures: Record<string, Record<string, number>> = {};
+  for (const r of results)
+    for (const v of r.providers ?? [])
+      if (v.v === 'ERROR') {
+        const kind = /\b429\b/.test(v.e ?? '') ? '429' : /abort|timeout|timed out/i.test(v.e ?? '') ? 'timeout' : (v.e ?? 'unknown').slice(0, 24);
+        (providerFailures[v.p] ??= {})[kind] = (providerFailures[v.p]![kind] ?? 0) + 1;
+      }
+  // COST from the ledger this run wrote. Local mode only: there it is this machine's own store.
+  // cost_usd 0 on a paid model means UNPRICED (src/billing/pricing.ts), not free, so paid zero-cost calls are counted apart.
+  let cost: { usd_total: number; usd_per_100_checks: number | null; calls_logged: number; tokens_in: number; tokens_out: number; zero_cost_calls_by_model: Record<string, number> } | null = null;
+  if (ISOLATION.mode === 'local') {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { db } = require('../../src/db') as { db: any };
+    const { data } = await db.from('llm_call_log').select('*').gte('created_at', measuredAt);
+    const logged = (data ?? []) as Array<{ cost_usd?: number; prompt_tokens?: number; completion_tokens?: number; provider?: string; model?: string; status?: string }>;
+    const usd = logged.reduce((s, c) => s + (Number(c.cost_usd) || 0), 0);
+    const zero: Record<string, number> = {};
+    for (const c of logged) if (c.status === 'success' && !(Number(c.cost_usd) > 0)) zero[`${c.provider}:${c.model}`] = (zero[`${c.provider}:${c.model}`] ?? 0) + 1;
+    cost = {
+      usd_total: Math.round(usd * 1e6) / 1e6,
+      usd_per_100_checks: attempted ? Math.round((usd / attempted) * 100 * 1e6) / 1e6 : null,
+      calls_logged: logged.length,
+      tokens_in: logged.reduce((s, c) => s + (c.prompt_tokens ?? 0), 0),
+      tokens_out: logged.reduce((s, c) => s + (c.completion_tokens ?? 0), 0),
+      zero_cost_calls_by_model: zero,
+    };
+  }
 
   const { tp, fp, tn, fn } = checkedConfusion;
   const { precision, recall, f1, accuracy } = prf1(checkedConfusion);
@@ -347,6 +404,9 @@ interface Scored {
   console.log(`  accuracy  ${accuracy.toFixed(4)}`);
   console.log(`  scored ${scored.length}/${attempted} attempted   errors ${errors.length}   not run (budget) ${budget.not_run}`);
   console.log(`  provider calls ${calls}${maxCalls > 0 ? ` of max ${maxCalls}; costliest row ${costliestRow}` : ''}`);
+  console.log(`  latency p50 ${latency.p50_ms ?? 'n/a'} ms  p95 ${latency.p95_ms ?? 'n/a'} ms  (n=${latency.n}, ${latency.over})`);
+  console.log(`  cost ${cost ? `$${cost.usd_total} total, $${cost.usd_per_100_checks} per 100 checks, ${cost.calls_logged} calls ledgered, zero-cost successes ${JSON.stringify(cost.zero_cost_calls_by_model)}` : 'not read (--write-prod: the ledger is production)'}`);
+  console.log(`  provider failures ${JSON.stringify(providerFailures)}`);
   const verdicts = scored.reduce<Record<string, number>>(
     (a, r) => ((a[String(r.verdict)] = (a[String(r.verdict)] ?? 0) + 1), a),
     {},
@@ -374,7 +434,7 @@ interface Scored {
     console.log('======================================================================');
     fs.writeFileSync(
       path.join(outDir, `${isPrivate ? stem : `${stem}-${split}`}-${hashed.slice(0, 12)}.LOCAL.INCOMPLETE.json`),
-      JSON.stringify({ ruler: RULER, scoring: SCORING, never_compare: 'No F1: coverage (rows with any verdict, abstain and fallback included / attempted) is below the floor. This is a transport result, not a quality result.', isolation: ISOLATION, split, ...(isPrivate ? { holdout: 'private' } : retiredStamp()), coverage, scored: scored.length, rows: rows.length, attempted, errors: errors.length, error_kinds: kinds, budget, f1: null }, null, 2),
+      JSON.stringify({ ruler: RULER, scoring: SCORING, never_compare: 'No F1: coverage (rows with any verdict, abstain and fallback included / attempted) is below the floor. This is a transport result, not a quality result.', isolation: ISOLATION, split, ...(isPrivate ? { holdout: 'private' } : retiredStamp()), coverage, scored: scored.length, rows: rows.length, attempted, errors: errors.length, error_kinds: kinds, budget, latency, cost, provider_failures: providerFailures, providers_configured: providersConfigured, results: isPrivate ? [] : results, f1: null }, null, 2),
     );
     process.exit(3);
   }
@@ -383,13 +443,14 @@ interface Scored {
   const cls = (n: string, c: typeof pc.hallucination) =>
     `${n} P ${c.precision.toFixed(4)} R ${c.recall.toFixed(4)} F1 ${c.f1.toFixed(4)} (n=${c.support})`;
   console.log(`  F1 = ${f1.toFixed(4)} on ${RULER}${sample} [${split}] at ${Object.keys(familyParticipation).length} families, strictness 2, scoring ${SCORING} — checked rows only`);
-  console.log(`  NOT_CHECKED ${notCheckedN}/${attempted} (${(notCheckedRate * 100).toFixed(1)}%): errors, abstains, extractor fallbacks and ${noAgreementVetoes} veto(es) no checker voted FALSE for — left out of the F1 above`);
+  console.log(`  NOT_CHECKED ${notCheckedN}/${attempted} (${(notCheckedRate * 100).toFixed(1)}%): errors, abstains, extractor fallbacks, ${noAgreementVetoes} veto(es) no checker voted FALSE for and ${underQuorum} row(s) decided on fewer than two families — left out of the F1 above`);
   console.log(`  per class: ${cls('hallucination', pc.hallucination)} | ${cls('supported', pc.supported)}`);
   console.log(`  legacy_all_scored F1 = ${legacy.f1.toFixed(4)} (a different ruler: ${legacy.scoring}; never compare it with the line above)`);
   if (!isPrivate) console.log(`  ${retiredLine(`${stem} [${split}]`)}`);
   else console.log(`  PRIVATE HOLDOUT. checker families [${checkerPair.families.join(', ')}]: ${checkerPair.status}`);
   console.log(`  precision ${precision.toFixed(4)}  recall ${recall.toFixed(4)}  AUC ${auc == null ? 'n/a' : auc.toFixed(4)}`);
   console.log(`  coverage ${(coverage * 100).toFixed(1)}% (${scored.length}/${attempted})`);
+  console.log(`  latency p50/p95 ${latency.p50_ms ?? 'n/a'}/${latency.p95_ms ?? 'n/a'} ms   cost $${cost?.usd_per_100_checks ?? 'n/a'} per 100 checks`);
   console.log(`  families that answered: [${Object.keys(familyParticipation).join(', ')}]`);
   console.log('======================================================================');
 
@@ -415,8 +476,11 @@ interface Scored {
         isolation: ISOLATION,
         sample: { order: 'evalOrder: class-interleaved sha256(id)', attempted, of: splitRows },
         budget,
+        latency,
+        cost,
+        provider_failures: providerFailures,
         providers_configured: providersConfigured,
-        not_checked: { count: notCheckedN, rate: notCheckedRate, no_agreement_vetoes: noAgreementVetoes },
+        not_checked: { count: notCheckedN, rate: notCheckedRate, no_agreement_vetoes: noAgreementVetoes, under_quorum: underQuorum },
         split,
         ...(isPrivate ? { holdout: 'private' } : retiredStamp()),
         checker_pair: checkerPair,
@@ -450,7 +514,7 @@ interface Scored {
       2,
     ),
   );
-  console.log(`\n  written: reports/hal-eval/${outName}`);
+  console.log(`\n  written: ${path.join(outDir, outName)}`);
   if (isPrivate) {
     const n = recordCheckerPairs(perItemFamilies, runId, measuredAt);
     console.log(`  checker families recorded for ${n} item(s) in eval/holdout/manifest.jsonl`);

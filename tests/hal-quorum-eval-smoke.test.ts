@@ -35,6 +35,8 @@ import {
   evalOrder,
   isNoAgreementVeto,
   isNotCheckedV2,
+  isNotCheckedV3,
+  isUnderQuorum,
   SCORING,
 } from '../scripts/hal-eval/metrics';
 
@@ -170,8 +172,8 @@ describe('HAL quorum eval — harness machinery (deterministic, no provider call
   });
 
   describe('scoring v2: a veto no checker voted FALSE for is NOT_CHECKED', () => {
-    it('names itself, so outputs on v1 and v2 cannot be mixed up', () => {
-      expect(SCORING).toBe('v2-no-agreement-is-not-checked');
+    it('names itself, so outputs on different scorings cannot be mixed up', () => {
+      expect(SCORING).toBe('v3-two-families-or-not-checked');
     });
 
     it('two UNCERTAIN votes behind a veto is not a catch; one FALSE vote is', () => {
@@ -191,6 +193,29 @@ describe('HAL quorum eval — harness machinery (deterministic, no provider call
       expect(isNotCheckedV2({ verdict: 'clean', mode: 'fact-check', votes: { TRUE: 2 } })).toBe(false);
       expect(isNotCheckedV2({ verdict: 'abstain', mode: 'fact-check' })).toBe(true);
       expect(isNotCheckedV2({ error: 'HTTP 429' })).toBe(true);
+    });
+  });
+
+  describe('scoring v3: a row decided on fewer than two families is NOT_CHECKED', () => {
+    // Lane A baseline 2026-10-16: 9 of 40 rows were one-family holds ('flagged'), 7 on hallucinations.
+    // v2 read the hold as a negative answer, so each of those 7 scored as a miss.
+    it('a one-family hold is not an answer: v2 counted it, v3 does not', () => {
+      const hold = { verdict: 'flagged', mode: 'fact-check', familiesUsed: 1, votes: { FALSE: 1, ERROR: 4 } };
+      expect(isNotCheckedV2(hold)).toBe(false);
+      expect(isNotCheckedV3(hold)).toBe(true);
+      expect(confusionMatrix([{ truth: 'FALSE', ...hold }].filter((r) => !isNotCheckedV3(r)))).toEqual({ tp: 0, fp: 0, tn: 0, fn: 0 });
+    });
+
+    it('two families decide; an unknown family count is conservative', () => {
+      expect(isNotCheckedV3({ verdict: 'vetoed', mode: 'fact-check', familiesUsed: 2, votes: { FALSE: 2 } })).toBe(false);
+      expect(isNotCheckedV3({ verdict: 'clean', mode: 'fact-check', familiesUsed: 3, votes: { TRUE: 3 } })).toBe(false);
+      expect(isUnderQuorum({})).toBe(true);
+      expect(isNotCheckedV3({ verdict: 'clean', mode: 'fact-check', votes: { TRUE: 2 } })).toBe(true);
+    });
+
+    it('everything v2 calls NOT_CHECKED stays NOT_CHECKED', () => {
+      expect(isNotCheckedV3({ verdict: 'vetoed', mode: 'fact-check', familiesUsed: 2, votes: { UNCERTAIN: 2 } })).toBe(true);
+      expect(isNotCheckedV3({ error: 'HTTP 429' })).toBe(true);
     });
   });
 });

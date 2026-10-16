@@ -1,14 +1,14 @@
 /**
- * Re-score a run-frozen-corpus-local output under both scorings, v1 and v2 (metrics.ts SCORING), so a
+ * Re-score a run-frozen-corpus-local output under every scoring, v1, v2 and v3 (metrics.ts SCORING), so a
  * number taken before v2 can be read on the new ruler instead of being compared across rulers.
  * Reads the JSON only; calls nothing.
  *
  *   npx ts-node scripts/hal-eval/rescore-local.ts reports/hal-eval/<run>.LOCAL.json
  */
 import fs from 'fs';
-import { confusionMatrix, prf1, isNotChecked, isNotCheckedV2, SCORING } from './metrics';
+import { confusionMatrix, prf1, isNotChecked, isNotCheckedV2, isNotCheckedV3, SCORING } from './metrics';
 
-type Row = { id: string; truth: string; verdict?: string; mode?: string; error?: string; votes?: Record<string, number> };
+type Row = { id: string; truth: string; verdict?: string; mode?: string; error?: string; votes?: Record<string, number>; familiesUsed?: number };
 
 const file = process.argv[2];
 if (!file) {
@@ -19,7 +19,8 @@ const run = JSON.parse(fs.readFileSync(file, 'utf8')) as { ruler?: string; resul
 const rows = run.results ?? [];
 for (const [name, notChecked] of [
   ['v1-not-checked-is-error-abstain-fallback', isNotChecked],
-  [SCORING, isNotCheckedV2],
+  ['v2-no-agreement-is-not-checked', isNotCheckedV2],
+  [SCORING, isNotCheckedV3],
 ] as const) {
   const checked = rows.filter((r) => !r.error && r.verdict && !notChecked(r));
   const c = confusionMatrix(checked);
