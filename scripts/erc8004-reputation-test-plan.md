@@ -84,7 +84,7 @@ SOPHIA=f3ef0bf8-5cdc-4fad-bce8-5144f01dc271
 curl https://repid-engine-production.up.railway.app/api/v1/agents/$SOPHIA/registration.json
 ```
 
-Expected (after SOPHIA is minted): spec-compliant JSON with `type:"erc8004-registration-v1"`, 5 services entries (http, http-verify, http-recall, http-card, http-feedback), `registrations:[{agentRegistry:"eip155:84532:0x8004A818...", agentId:"<token>"}]`, `supportedTrust:["reputation"]`, and HyperDAG extension block.
+Expected (after SOPHIA is minted): spec-compliant JSON with `type:"https://eips.ethereum.org/EIPS/eip-8004#registration-v1"`, 5 services entries as `{name, endpoint}` (agent-state, agent-card, recall, repid-proof-verify, reputation-feedback), `x402Support:false`, `active`, `registrations:[{agentId:<token as number>, agentRegistry:"eip155:84532:0x8004A818..."}]`, `supportedTrust:["reputation"]`, and HyperDAG extension block. The path accepts the agent UUID or its exact name.
 
 Before SOPHIA is minted: `404 {error: "agent_not_found_or_not_minted"}`.
 

@@ -3,7 +3,8 @@
 // Route (mounted at /api/v1 in src/index.ts):
 //   GET /api/v1/agents/:id/registration.json
 //     Spec-compliant ERC-8004 agent registration file (the off-chain JSON
-//     pointed to by the agent's tokenURI on IdentityRegistry).
+//     pointed to by the agent's tokenURI on IdentityRegistry). :id is the
+//     agent UUID or its exact agent_name (minted token URIs carry names).
 //     Public — no auth required. Bypass added in src/middleware/auth.ts.
 import { Router, type Request, type Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -18,11 +19,19 @@ export function createAgentRegistrationRouter(
     '/agents/:id/registration.json',
     async (req: Request, res: Response) => {
       try {
-        const file = await fetchAndGenerateRegistrationFile(
+        const result = await fetchAndGenerateRegistrationFile(
           supabase,
           String(req.params.id)
         );
-        if (!file) {
+        if (result.status === 'ambiguous') {
+          res.status(409).json({
+            error: 'ambiguous_name',
+            agent_id: req.params.id,
+            detail: 'More than one agent has this name. Use the agent UUID.',
+          });
+          return;
+        }
+        if (result.status === 'not_found') {
           res.status(404).json({
             error: 'agent_not_found_or_not_minted',
             agent_id: req.params.id,
@@ -33,7 +42,7 @@ export function createAgentRegistrationRouter(
         }
         // Encourage caching by ERC-8004 indexers.
         res.setHeader('Cache-Control', 'public, max-age=300');
-        res.status(200).json(file);
+        res.status(200).json(result.file);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error('[agents-registration] failed:', msg);
