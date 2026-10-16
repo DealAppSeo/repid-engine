@@ -17,11 +17,17 @@ import { db } from '../db';
  *   VERSION_PERSIST_ENABLED=false  → disable the DB write entirely (pure in-memory version pin).
  *   VERSION_CACHE_TTL_MS=<ms>      → re-write a key at most once per TTL even if unchanged
  *                                    (default 0 = write-once-per-process, never re-write on no-change).
+ *
+ * [S2-3, 2026-10-16] The row is keyed by WHO is calling, never by the key itself. This used to
+ * write `req.apiKey.key`, so api_key_versions held 169 live-shaped plaintext keys (r32: no second
+ * form of a secret). Now: `agent:<agent_id>` for an agent-bound key, `env:<n>` for the n-th
+ * REPID_API_KEYS entry, else `anonymous`. Nothing derived from the secret is stored or cached.
+ * The table is not created here any more (no runtime DDL through run_sql); it already exists.
  */
 
 const DEFAULT_VERSION = '2026-04-17';
 
-// apiKey -> { version, writtenAt } of the last value we persisted this process.
+// caller handle -> { version, writtenAt } of the last value we persisted this process.
 const persistedVersions = new Map<string, { version: string; writtenAt: number }>();
 
 const persistEnabled = process.env.VERSION_PERSIST_ENABLED !== 'false';
@@ -30,7 +36,15 @@ const cacheTtlMs = Number(process.env.VERSION_CACHE_TTL_MS ?? 0);
 /** Exposed for tests — clears the in-process cache. */
 export function _resetVersionCache(): void {
   persistedVersions.clear();
-  (global as any)._api_key_versions_table_checked = false;
+}
+
+/** The non-secret handle a version pin is stored under. authMiddleware sets both fields it reads. */
+export function versionPinHandle(req: Request): string {
+  const agentId = (req as any).agent_id;
+  if (typeof agentId === 'string' && agentId) return `agent:${agentId}`;
+  const envIndex = (req as any).apiKey?.envIndex;
+  if (Number.isInteger(envIndex)) return `env:${envIndex}`;
+  return 'anonymous';
 }
 
 /**
@@ -53,8 +67,7 @@ export function shouldPersistVersion(
 
 export const versioningMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   const providedVersion = req.headers['x-repid-version'] as string;
-  const apiKeyObj = (req as any).apiKey;
-  const key = apiKeyObj?.key || 'anonymous';
+  const key = versionPinHandle(req);
 
   const resolvedVersion = providedVersion || DEFAULT_VERSION;
   (req as any).apiVersion = resolvedVersion;
@@ -62,13 +75,6 @@ export const versioningMiddleware = async (req: Request, res: Response, next: Ne
   // Fast path: version already pinned for this key in-process and unchanged → no DB work at all.
   if (!persistEnabled || !shouldPersistVersion(persistedVersions, key, resolvedVersion, Date.now(), cacheTtlMs)) {
     return next();
-  }
-
-  // Ensure table exists on first run (once per process).
-  if (!(global as any)._api_key_versions_table_checked) {
-    (global as any)._api_key_versions_table_checked = true;
-    const { error: rpcError } = await db.rpc('run_sql', { sql: 'CREATE TABLE IF NOT EXISTS api_key_versions (api_key TEXT PRIMARY KEY, version TEXT NOT NULL, created_at TIMESTAMP DEFAULT NOW());' });
-    if (rpcError) console.error(rpcError);
   }
 
   // Best-effort persist of the version pin. Only reached on a genuine change (new key or new version).

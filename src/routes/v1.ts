@@ -314,9 +314,6 @@ router.post('/dag/verify-node', async (req: Request, res: Response) => {
   const { node_id, parent_hash, agent_id, payload } = req.body;
   if (!node_id || !parent_hash || !agent_id || !payload) return res.status(400).json({ error: 'Missing req fields' });
   
-  const { error: rpcError } = await db.rpc('run_sql', { sql: 'CREATE TABLE IF NOT EXISTS hyperdag_nodes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), node_id TEXT, parent_hash TEXT, agent_id TEXT, payload JSONB, created_at TIMESTAMP DEFAULT NOW());' });
-    if (rpcError) console.error(rpcError);
-
   const node_hash = createHash('sha256').update(`${node_id}${parent_hash}${agent_id}${JSON.stringify(payload)}`).digest('hex');
   
   const { error } = await db.from('trinity_agent_logs').insert(buildAgentLogRow({ action: 'dag_node_verified', agent: agent_id, metadata: { node_id, parent_hash, agent_id } }));
@@ -896,9 +893,6 @@ router.post('/demo/run-round-anonymous', async (req: Request, res: Response) => 
 router.post('/webhooks/register', async (req: Request, res: Response) => {
   const { url, events, api_key } = req.body;
   if (!url || !events) return res.status(400).json({ error: 'url and events required' });
-
-  const { error: rpcError } = await db.rpc('run_sql', { sql: 'CREATE TABLE IF NOT EXISTS repid_webhooks (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), url TEXT NOT NULL, events TEXT[], api_key TEXT, created_at TIMESTAMP DEFAULT NOW(), active BOOLEAN DEFAULT true);' });
-    if (rpcError) console.error(rpcError);
 
   const { data, error } = await db.from('repid_webhooks').insert({ url, events, api_key }).select().single();
   if (error) return res.status(500).json({ error: 'Failed' });
