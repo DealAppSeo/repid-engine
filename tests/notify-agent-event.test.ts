@@ -29,6 +29,12 @@ jest.mock('../src/db', () => ({
   },
 }));
 jest.mock('../src/services/audit-emit', () => ({ emitAuditEvent: jest.fn(async () => undefined) }));
+// [S2-4] Delivery refuses http and loopback (SSRF guard). This file measures delivery over a real
+// local socket, so it stubs the target check; tests/secfix-s2-4-webhooks.test.ts tests the guard.
+jest.mock('../src/services/erc8004-feedback-verify', () => ({
+  ...jest.requireActual<typeof import('../src/services/erc8004-feedback-verify')>('../src/services/erc8004-feedback-verify'),
+  resolvedTargetProblem: async () => null,
+}));
 
 import { notifyAgentEvent, isSubscribed, NOTIFY_EVENTS } from '../src/services/notify';
 import { emitAuditEvent } from '../src/services/audit-emit';

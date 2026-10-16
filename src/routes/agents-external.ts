@@ -31,6 +31,7 @@ import { publicIdentityFields } from '../identity/public-fields';
 import { checkAndRecordDedup, __resetLocalDedupForTests } from '../services/register-dedup';
 import { trustedClientIp } from '../middleware/client-ip';
 import { proverBaseUrl, proverAuthHeaders } from '../config/prover';
+import { deliverSignedWebhook } from '../services/webhook-delivery';
 
 const router = Router();
 
@@ -922,12 +923,9 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
         hal_approved: halApproved,
         vdr_count: vdrCount + 1
       };
-      const sig = crypto.createHmac('sha256', (agent as any).webhook_secret || '').update(JSON.stringify(payload)).digest('hex');
-      fetch((agent as any).webhook_url, {
-        method: 'POST',
-        headers: { 'X-RepID-Signature': sig, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      }).catch(console.error);
+      // [S2-4] Signed with the agent's webhook_secret (refused when empty, never HMAC under ''),
+      // public https only. The header is X-Webhook-Signature, as for every other delivery.
+      void deliverSignedWebhook((agent as any).webhook_url, (agent as any).webhook_secret, JSON.stringify(payload));
     }
 
     // Trust Harness P1 KEYSTONE (M3): fire-and-forget SHADOW deception scoring.

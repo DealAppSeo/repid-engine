@@ -8,6 +8,7 @@
  * we could not reach). It is never folded into VERIFIED: the overall verdict is VERIFIED only when
  * every leg is.
  */
+import { lookup } from 'node:dns/promises';
 import { ethers } from 'ethers';
 
 export type Outcome = 'VERIFIED' | 'NOT_CHECKED' | 'FAILED';
@@ -153,6 +154,26 @@ export function fetchTargetProblem(raw: string): string | null {
   if (BLOCKED_HOSTS.has(host) || host.endsWith('.localhost') || host.endsWith('.internal')) return `host ${host} is not public`;
   if (isIpLiteral(host) && !isPublicAddress(host)) return `address ${host} is not public`;
   return null;
+}
+
+/**
+ * fetchTargetProblem, then DNS: every address the host resolves to must be public. Null when the URL
+ * may be fetched. Call it again for every redirect hop. Shared by the feedback-file verifier and
+ * outbound webhooks (S2-4).
+ * ponytail: fetch resolves the name again, so a DNS-rebinding window remains; pin the checked
+ * address with an undici dispatcher `connect.lookup` if that ever matters.
+ */
+export async function resolvedTargetProblem(raw: string): Promise<string | null> {
+  const problem = fetchTargetProblem(raw);
+  if (problem) return problem;
+  const host = new URL(raw).hostname.replace(/^\[|\]$/g, '');
+  try {
+    const addrs = await lookup(host, { all: true });
+    if (addrs.length === 0 || addrs.some((a) => !isPublicAddress(a.address))) return `${host} resolves to a non-public address`;
+    return null;
+  } catch (e) {
+    return `could not resolve ${host}: ${e instanceof Error ? e.message : String(e)}`;
+  }
 }
 
 function isIpLiteral(host: string): boolean {

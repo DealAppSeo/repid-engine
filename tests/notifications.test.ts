@@ -44,6 +44,10 @@ jest.mock('../src/db', () => {
   };
 });
 
+// [S2-4] Webhook delivery resolves the host and refuses non-public addresses. Unit tests never touch
+// real DNS: hooks.example.com resolves to a public documentation address here.
+jest.mock('node:dns/promises', () => ({ lookup: async () => [{ address: '93.184.215.14', family: 4 }] }));
+
 function mockFetch(impl: jest.Mock) {
   (global as any).fetch = impl;
 }

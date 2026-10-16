@@ -11,7 +11,9 @@
  *
  *   2. Webhook — looks up webhook_url + webhook_secret on repid_agents
  *      (via builder_id linkage). HMAC-SHA256 over the body keyed with
- *      webhook_secret, sent in X-Webhook-Signature.
+ *      webhook_secret, sent in X-Webhook-Signature. [S2-4] Through
+ *      deliverSignedWebhook: refused when the secret is empty, and public
+ *      https only, re-checked at every redirect.
  *
  * Both paths fail soft. Failures emit an event to hal_audit_chain
  * with event_type='notification_failed' so a downstream observer can
@@ -21,9 +23,9 @@
  * outcome but never throws.
  */
 
-import { createHmac } from 'crypto';
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
+import { deliverSignedWebhook } from './webhook-delivery';
 
 const TELEGRAM_API = 'https://api.telegram.org';
 const NOTIFY_TIMEOUT_MS = 5000;
@@ -151,25 +153,8 @@ async function deliverWebhook(builderId: string, message: string, metadata: Noti
     metadata,
     sent_at: new Date().toISOString(),
   });
-  const signature = createHmac('sha256', cfg.secret).update(body).digest('hex');
-  try {
-    const r = await fetchWithTimeout(
-      cfg.url,
-      {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'X-Webhook-Signature': signature,
-        },
-        body,
-      },
-      NOTIFY_TIMEOUT_MS,
-    );
-    return { ok: r.ok, status: r.status };
-  } catch (e: any) {
-    const isTimeout = e?.name === 'AbortError';
-    return { ok: false, error: isTimeout ? 'timeout' : (e?.message ?? 'unknown') };
-  }
+  const r = await deliverSignedWebhook(cfg.url, cfg.secret, body, NOTIFY_TIMEOUT_MS);
+  return r.ok ? { ok: true, status: r.status } : { ok: false, status: r.status, error: r.error };
 }
 
 export async function sendNotification(
@@ -281,22 +266,10 @@ export async function notifyAgentEvent(
     metadata,
     sent_at: new Date().toISOString(),
   });
-  const signature = createHmac('sha256', cfg.secret).update(body).digest('hex');
-
-  try {
-    const r = await fetchWithTimeout(
-      cfg.url,
-      { method: 'POST', headers: { 'content-type': 'application/json', 'X-Webhook-Signature': signature }, body },
-      NOTIFY_TIMEOUT_MS,
-    );
-    if (r.ok) return { event, delivered: true, status: r.status };
-    await auditDeliveryFailure(agentId, event, { status: r.status });
-    return { event, delivered: false, reason: 'delivery_failed', status: r.status };
-  } catch (e: any) {
-    const error = e?.name === 'AbortError' ? 'timeout' : (e?.message ?? 'unknown');
-    await auditDeliveryFailure(agentId, event, { error });
-    return { event, delivered: false, reason: 'delivery_failed', error };
-  }
+  const r = await deliverSignedWebhook(cfg.url, cfg.secret, body, NOTIFY_TIMEOUT_MS);
+  if (r.ok) return { event, delivered: true, status: r.status };
+  await auditDeliveryFailure(agentId, event, { status: r.status, error: r.error });
+  return { event, delivered: false, reason: 'delivery_failed', status: r.status, error: r.error };
 }
 
 async function auditDeliveryFailure(
