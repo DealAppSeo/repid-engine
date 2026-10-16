@@ -1,7 +1,7 @@
 /**
  * A2A RepID — collusion and Sybil vs honest work. MEASURE-ONLY: no database, no network, no writes.
  *
- *   SIM_SEED=12345 SIM_DAYS=30 npx ts-node scripts/repid-sim/a2a-ring-sim.ts
+ *   SIM_SEED=12345 npx ts-node scripts/repid-sim/a2a-ring-sim.ts   (30 days, 2 ring trades per pair per day)
  *
  * REAL: the touchpoint constants the live writers apply (SERVICE_FULFILLED_DELTAS,
  * SERVICE_SATISFIED_DELTA_BASE, SERVICE_DISPUTE_DELTAS), the [10, 10000] clamp, the tier bands, and
