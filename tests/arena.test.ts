@@ -367,6 +367,16 @@ describe('SSE stream and replay speed', () => {
     expect(r.text).toMatch(/event: end\ndata: \{"result":"0-1","termination":"checkmate"/);
   });
 
+  it('an EventSource reconnect (Last-Event-ID) resumes after the last ply it saw', async () => {
+    const { app, id } = await finishedGame();
+    const r = await request(app).get(`/api/v1/arena/games/${id}/stream?speed=machine`).set('Last-Event-ID', '2').buffer(true)
+      .parse((res, cb) => { let s = ''; res.on('data', (c: Buffer) => { s += c; }); res.on('end', () => cb(null, s)); });
+    const text = r.body as string;
+    expect(text).not.toMatch(/^event: start$/m);
+    expect(text.match(/^id: (\d+)$/gm)).toEqual(['id: 3', 'id: 4']);
+    expect(text).toMatch(/event: end/);
+  });
+
   it('paces the replay by the chosen speed', async () => {
     const { app, id } = await finishedGame();
     const fast = await sse(app, `/api/v1/arena/games/${id}/stream?speed=machine`);

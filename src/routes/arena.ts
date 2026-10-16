@@ -381,21 +381,30 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     let closed = false;
     res.on('close', () => { closed = true; }); // not req: a GET's request side can close as soon as it is read
-    const send = (event: string, data: unknown) => { if (!closed) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
+    const send = (event: string, data: unknown, id?: number) => { if (!closed) res.write(`${id ? `id: ${id}\n` : ''}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    /** A long replay gap (0.25x of a slow human move) still sends a comment every 15 s, so no proxy drops it as idle. */
+    const pause = async (ms: number) => {
+      for (let left = ms; left > 0 && !closed; left -= 15_000) {
+        await sleep(Math.min(left, 15_000));
+        if (left > 15_000 && !closed) res.write(': keep-alive\n\n');
+      }
+    };
+    // EventSource reconnects on its own and sends the last ply it saw: resume after it, never from move 1 again.
+    const resume = Math.max(0, Math.floor(Number(req.headers['last-event-id']) || 0));
 
     let g = g0, i = 0, prevAt = 0, lastSent = now(), lastBeat = now();
     const chess = replay([]), base = TIME_CONTROLS[g.time_control].base_ms;
-    send('start', { id: g.id, white: g.white, black: g.black, status: g.status, started_at: g.started_at, fen: START_FEN, speed, time_control: g.time_control, clock_ms: { w: base, b: base } });
+    if (!resume) send('start', { id: g.id, white: g.white, black: g.black, status: g.status, started_at: g.started_at, fen: START_FEN, speed, time_control: g.time_control, clock_ms: { w: base, b: base } });
     while (!closed) {
       const m = g.moves[i];
       if (m) {
         const at = Date.parse(m.at);
         if (i === 0) prevAt = Date.parse(g.started_at ?? m.at); // the first gap is from the start of play, not from the challenge
-        const wait = replayDelayMs(at - prevAt, speed, now() - lastSent);
-        if (wait) await sleep(wait);
+        const wait = i < resume ? 0 : replayDelayMs(at - prevAt, speed, now() - lastSent);
+        if (wait) await pause(wait);
         chess.move({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), ...(m.uci[4] ? { promotion: m.uci[4] } : {}) });
-        send('move', { ply: i + 1, uci: m.uci, san: m.san, at: m.at, clock_ms: m.clock_ms, fen: chess.fen() });
+        if (i >= resume) send('move', { ply: i + 1, uci: m.uci, san: m.san, at: m.at, clock_ms: m.clock_ms, fen: chess.fen() }, i + 1);
         prevAt = at; lastSent = now(); i++;
         continue;
       }
