@@ -721,17 +721,13 @@ router.get('/trader/oracle-sign/:bet_id/:outcome', async (req: Request, res: Res
 
 // --- Guided Tour -----------------------------------------------------------
 
+// [S1-1, 2026-10-16] Public route (GET /demo/* is auth-bypassed). It used to accept a builder UUID
+// and answer with that builder's session_token, and verify-otp turns a session_token into a signed
+// login, so a builder id was an account takeover. Now: the session token is the only key, and the
+// response never carries it. The path keeps its `:tokenOrId` name; a UUID is just an unknown token.
 router.get('/demo/builder/:tokenOrId/snapshot', async (req: Request, res: Response) => {
-  const tokenOrId = String(req.params.tokenOrId ?? '');
-  let b;
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tokenOrId)) {
-    const { data } = await db.from('builders').select('id, current_repid, session_token').eq('id', tokenOrId).maybeSingle();
-    b = data;
-  }
-  if (!b) {
-    const { data } = await db.from('builders').select('id, current_repid, session_token').eq('session_token', tokenOrId).maybeSingle();
-    b = data;
-  }
+  const token = String(req.params.tokenOrId ?? '');
+  const { data: b } = await db.from('builders').select('id, current_repid').eq('session_token', token).maybeSingle();
   if (!b) return res.status(404).json({ error: 'builder not found' });
   
   const authRes = await snapshotAuthority(b.id);
@@ -747,7 +743,6 @@ router.get('/demo/builder/:tokenOrId/snapshot', async (req: Request, res: Respon
   
   return res.json({
     builder_id: b.id,
-    session_token: b.session_token || tokenOrId,
     current_repid: Number(b.current_repid ?? 0),
     stake_total_usdc: Number(authRes.basis.stake) / 1_000_000,
     authority_raw,

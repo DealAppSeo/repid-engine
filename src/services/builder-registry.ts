@@ -16,6 +16,7 @@ import { STARTING_REPID } from '../scoring/repid-constants';
 import { emitAuditEvent } from './audit-emit';
 import { getCurrentStake, snapshotAuthority } from './stake-vault';
 import { decideAuthorityDisplay } from '../config/display-policy';
+import { likeLiteral } from '../utils/like-literal';
 
 const GHOST_PENALTY_PER_AGENT = 100;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -31,7 +32,7 @@ export async function registerBuilder(address: string, erc7231TokenId?: string):
   const { data: existing } = await db
     .from('builders')
     .select('id')
-    .ilike('address', norm)
+    .ilike('address', likeLiteral(norm)) // [S1-1] literal: `%`/`_` in a caller's address would otherwise be a pattern over every builder
     .maybeSingle();
   if (existing) {
     return { ok: true, builder_id: existing.id, is_new: false };
@@ -147,7 +148,7 @@ export async function getBuilderProfile(address: string): Promise<BuilderProfile
   const { data: builder } = await db
     .from('builders')
     .select('id, address, display_name, current_repid, ghost_cohort_count, last_active_at')
-    .ilike('address', norm)
+    .ilike('address', likeLiteral(norm)) // [S1-1] literal: `%`/`_` in a caller's address would otherwise be a pattern over every builder
     .maybeSingle();
   if (!builder) return null;
 
