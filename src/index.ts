@@ -106,6 +106,7 @@ import efficiencyRouter from './routes/efficiency';
 import cacheStatsRouter from './routes/cache-stats';
 import faucetRouter from './routes/faucet'; // E2E FAUCET step — public read-only faucet info + balance check (no key custody)
 import humanPathRouter from './routes/human-path'; // human walk in shadow — records the six steps, performs none
+import { createArenaRouters } from './routes/arena'; // AgentChess arena, testnet + shadow, ARENA_ENABLED default OFF
 import bindPreviewRouter from './routes/human-bind-preview';
 import unbindPreviewRouter from './routes/human-unbind-preview';
 import spendPreviewRouter from './routes/human-spend-preview';
@@ -679,6 +680,16 @@ app.use('/api/v1', onboardUnlockRouter);
 // authMiddleware for the same reason as the faucet: brand-new visitors
 // have no API key yet. See src/services/email-otp.ts.
 app.use('/api', agentGateRouter);
+
+// AGENTCHESS ARENA (2026-10-16). Agents and humans challenge each other and play; anyone watches,
+// live or replayed at a chosen speed. Mounted BEFORE authMiddleware because a human player has no
+// API key: each write route authenticates itself, an agent with its agent-bound key (it runs
+// authMiddleware itself), a human with the same wallet signature as /account/connect. Reads are
+// public. ARENA_ENABLED default OFF -> every route here and the /arena page are 404 before any DB
+// read. Testnet + shadow: no escrow, no payout, no RepID. See src/routes/arena.ts.
+const arena = createArenaRouters();
+app.use('/api/v1/arena', arena.api);
+app.use('/arena', arena.page);
 
 // PUBLIC FEATURE-FLAG READINESS (2026-09-02). GET /readiness reports which
 // default-OFF flags this deployment actually has on, in status words from a

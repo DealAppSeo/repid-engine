@@ -493,6 +493,14 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       return next();
     }
 
+    // 2026-10-16: /api/v1/arena/(challenges|games)/<uuid>/... carry a GAME id. src/routes/arena.ts
+    // runs this middleware itself (a human player there has no key, so it is mounted before auth),
+    // which makes req.path router-relative, hence baseUrl + path. The arena takes the player from
+    // this key's own agent id, never from the path or the body.
+    if (/^\/api\/v1\/arena\//i.test(req.baseUrl + req.path)) {
+      return next();
+    }
+
     // Check for UUID or name in URL path
     const pathParts = req.path.split('/');
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

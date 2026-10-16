@@ -82,7 +82,7 @@ interface Principal { wallet: string; owner: OwnerRef; }
  * proof without needing an account to already exist — otherwise creating your
  * first account would require having one.
  */
-async function provenWallet(req: Request, res: Response): Promise<string | null> {
+export async function provenWallet(req: Request, res: Response): Promise<string | null> {
   const wallet = String(req.headers['x-hd-wallet'] ?? '').trim();
   const signature = String(req.headers['x-hd-signature'] ?? '').trim();
   const timestamp = String(req.headers['x-hd-timestamp'] ?? '').trim();
@@ -117,6 +117,25 @@ async function provenWallet(req: Request, res: Response): Promise<string | null>
 }
 
 /**
+ * WHICH account a wallet is. Says nothing about whether the caller controls it — call this only
+ * after provenWallet. Checks the stronger registry first, so someone who holds a proof-of-human SBT
+ * is recognised as one rather than being downgraded to a plain builder. Exported for the arena
+ * (src/routes/arena.ts), which proves the wallet the same way and needs the same answer.
+ */
+export async function accountOfWallet(wallet: string): Promise<OwnerRef | null> {
+  const { data: sbt } = await db
+    .from('human_sbt_registry')
+    .select('token_id')
+    .ilike('wallet_address', wallet)
+    .limit(1);
+  if (sbt?.[0]) return { kind: 'human_sbt', id: sbt[0].token_id, wallet };
+
+  const { data: builder } = await db.from('builders').select('id').ilike('address', wallet).limit(1);
+  if (builder?.[0]) return { kind: 'builder', id: builder[0].id, wallet };
+  return null;
+}
+
+/**
  * Resolve WHO is calling, from cryptography rather than assertion.
  * Returns null and writes the response on any failure.
  */
@@ -124,18 +143,8 @@ async function principalOf(req: Request, res: Response): Promise<Principal | nul
   const wallet = await provenWallet(req, res);
   if (!wallet) return null;
 
-  // The wallet is proven. Now find WHICH account it is — checking the stronger
-  // registry first, so someone who holds a proof-of-human SBT is recognised as
-  // one rather than being downgraded to a plain builder.
-  const { data: sbt } = await db
-    .from('human_sbt_registry')
-    .select('token_id')
-    .ilike('wallet_address', wallet)
-    .limit(1);
-  if (sbt?.[0]) return { wallet, owner: { kind: 'human_sbt', id: sbt[0].token_id, wallet } };
-
-  const { data: builder } = await db.from('builders').select('id').ilike('address', wallet).limit(1);
-  if (builder?.[0]) return { wallet, owner: { kind: 'builder', id: builder[0].id, wallet } };
+  const owner = await accountOfWallet(wallet);
+  if (owner) return { wallet, owner };
 
   // Proving a wallet is not the same as having an account. This used to demand a
   // proof-of-human SBT, which only 5 accounts hold against 73 builders — so the
