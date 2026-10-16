@@ -267,7 +267,8 @@ async function fetchLatestMemoryRoot(agentId: string): Promise<string | null> {
     }
     return (data as any)?.root ?? null;
   } catch (e: unknown) {
-    console.warn(`[scoring/pipeline] fetchLatestMemoryRoot threw for agent=${agentId}:`, e);
+    // Constant format string (CodeQL #114): `%` in agentId is printed, not interpreted.
+    console.warn('[scoring/pipeline] fetchLatestMemoryRoot threw for agent=%s:', agentId, e);
     return null;
   }
 }

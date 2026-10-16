@@ -17,6 +17,7 @@
 (global as any).__grcAgentRow = null;
 (global as any).__grcMemoryRoot = null;    // null = no row; string = the root to return
 (global as any).__grcMemoryRootError = false; // true = DB error on root fetch
+(global as any).__grcMemoryRootThrow = false; // true = root fetch throws
 (global as any).__grcInsertCalls = [] as unknown[];
 
 jest.mock('../src/db', () => ({
@@ -43,10 +44,12 @@ jest.mock('../src/db', () => ({
             eq: () => ({
               order: () => ({
                 limit: () => ({
-                  maybeSingle: async () =>
-                    err
+                  maybeSingle: async () => {
+                    if ((global as any).__grcMemoryRootThrow) throw new Error('socket hang up');
+                    return err
                       ? { data: null, error: { message: 'db error' } }
-                      : { data: root != null ? { root } : null, error: null },
+                      : { data: root != null ? { root } : null, error: null };
+                  },
                 }),
               }),
             }),
@@ -112,6 +115,7 @@ beforeEach(() => {
   (global as any).__grcAgentRow = null;
   (global as any).__grcMemoryRoot = null;
   (global as any).__grcMemoryRootError = false;
+  (global as any).__grcMemoryRootThrow = false;
   (global as any).__grcInsertCalls = [];
 });
 
@@ -203,5 +207,30 @@ describe('pipeline grounding root-currency wiring', () => {
     expect(g?.root_current).toBeNull();
     // Score event still written (scoring was not broken)
     expect(inserted?.agent_id).toBe(AGENT_ID);
+  });
+
+  // CodeQL #114 (js/tainted-format-string): agentId must be an argument, never the format string.
+  test('root fetch throws → warn uses a constant format string with agentId as an argument', async () => {
+    (global as any).__grcAgentRow = AGENT_ROW;
+    (global as any).__grcMemoryRootThrow = true;
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const { pca } = makePCA();
+
+    await runScoreEvent({
+      agent_id: AGENT_ID,
+      prompt: 'question',
+      answer: 'answer',
+      provider_used: 'groq',
+      tier_used: '0a',
+      model_used: 'llama-3.1-8b-instant',
+      proof_carrying_answer: pca,
+    });
+
+    const call = warn.mock.calls.find((c) => String(c[0]).includes('fetchLatestMemoryRoot threw'));
+    expect(call).toBeDefined();
+    expect(call![0]).toBe('[scoring/pipeline] fetchLatestMemoryRoot threw for agent=%s:');
+    expect(call![1]).toBe(AGENT_ID);
+    expect((call![2] as Error).message).toBe('socket hang up');
+    warn.mockRestore();
   });
 });

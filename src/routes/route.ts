@@ -165,11 +165,21 @@ export function getDefaultModelForProvider(provider: string): string {
   return defaultModelFor(provider, fallback);
 }
 
-function inferCategory(prompt: string, taskHint?: string): string {
+// CodeQL #4 (js/polynomial-redos): `/generate.*tale/` on the prompt backtracked O(n²) on a prompt
+// of repeated "generate". Same match, linear: "tale" after the first "generate" on the same line
+// (`.` never crosses a line terminator, so this doesn't either).
+function generateThenTale(s: string): boolean {
+  return s.split(/[\n\r\u2028\u2029]/).some((line) => {
+    const i = line.indexOf('generate');
+    return i >= 0 && line.includes('tale', i + 'generate'.length);
+  });
+}
+
+export function inferCategory(prompt: string, taskHint?: string): string {
   const s = (prompt + ' ' + (taskHint || '')).toLowerCase();
   if (/classif|yes\/no|true\/false|fact check|is this|simple fact/.test(s)) return 'factual';
   if (/code|bug|fix|function|typescript|python|implement/.test(s)) return 'code';
-  if (/creative|story|poem|imagine|write a|generate.*tale/.test(s)) return 'creative';
+  if (/creative|story|poem|imagine|write a/.test(s) || generateThenTale(s)) return 'creative';
   if (/math|calculate|equation|prove/.test(s)) return 'math';
   return 'general';
 }
@@ -228,7 +238,8 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           resolvedAgentId = data.id;
         }
       } catch (err: any) {
-        console.warn(`[route] Failed to resolve agent_id UUID for name "${agent_id}":`, err.message);
+        // Constant format string (CodeQL #111): `%` in a caller's agent_id is printed, not interpreted.
+        console.warn('[route] Failed to resolve agent_id UUID for name "%s":', agent_id, err.message);
       }
     }
 
