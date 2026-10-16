@@ -5,6 +5,7 @@ import { hasTruthySimFlag } from '../utils/truthy';
 import type { HALProviderConfig } from '../hal/lib/types';
 import { factCheck, buildFactCheckProviders, factCheckOptsFromEnv } from '../hal/fact-check';
 import { maybeWriteOnChainReputation } from './onchain-reputation-trigger';
+import { ownerDistinctShadowEnabled, logOwnerDistinctShadow } from './owner-distinct-shadow';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 /**
@@ -325,6 +326,10 @@ export async function applyServiceFulfilledDeltas(
   // G1: gate RepID delta on !isSimulated. If simulated, delta applied is 0.
   const providerDelta = isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.provider;
   const buyerDelta = isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.buyer;
+
+  // Owner-distinct counterparty rule, SHADOW ONLY (services/owner-distinct-shadow.ts). Flag OFF:
+  // nothing runs. ON: one log line of what the rule would do, not awaited, deltas untouched.
+  if (ownerDistinctShadowEnabled()) void logOwnerDistinctShadow(contract);
 
   // HAL enrichment (2026-05-22): evaluate the deliverable text and pass a real
   // HAL verdict into the SERVICE_FULFILLED score-event rows below. NON-FATAL —
