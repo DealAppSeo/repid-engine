@@ -272,8 +272,8 @@ export function resolvePin(model: string): PinTarget {
       `model "${String(model)}" is not in the family registry (src/decisioning/family-registry.ts); register it before pinning`,
     );
   }
-  const key = model.toLowerCase();
-  const entries = FAMILY_REGISTRY_SEED.filter((e) => e.model.toLowerCase() === key);
+  const wanted = model.toLowerCase();
+  const entries = FAMILY_REGISTRY_SEED.filter((e) => e.model.toLowerCase() === wanted);
   const providers = [...tier0aAdapters, ...tier1Adapters]
     .map((a) => a.name)
     .filter((name) => entries.some((e) => e.provider === name));
