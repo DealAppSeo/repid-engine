@@ -82,7 +82,7 @@ jest.mock('../src/zkp/range-check-verify', () => ({
 import express from 'express';
 import request from 'supertest';
 import { buildTrustReceipt } from '../src/services/trust-receipt';
-import receiptRouter from '../src/routes/v1/receipt-public';
+import receiptRouter, { PROOF_CHECK_LIMIT_PER_MIN } from '../src/routes/v1/receipt-public';
 
 const app = express().use('/api/v1', receiptRouter);
 
@@ -155,5 +155,17 @@ describe('GET /receipt/:id/proof/:job — keyless proof check', () => {
     expect(res.status).toBe(200);
     expect(res.body.verification.verified).toBe(false);
     expect(mockVerifyCalls).toHaveLength(0);
+  });
+});
+
+// LAST in the file: it spends this router's per-IP budget.
+describe('the keyless proof check is rate-limited per network address', () => {
+  it(`answers 429 after ${PROOF_CHECK_LIMIT_PER_MIN} calls a minute`, async () => {
+    const url = `/api/v1/receipt/${C}/proof/${JOB_EVENT}`;
+    const ip = { 'X-Real-IP': '203.0.113.7' };
+    for (let i = 0; i < PROOF_CHECK_LIMIT_PER_MIN; i++) expect((await request(app).get(url).set(ip)).status).toBe(200);
+    expect((await request(app).get(url).set(ip)).status).toBe(429);
+    // Another address is unaffected.
+    expect((await request(app).get(url).set({ 'X-Real-IP': '203.0.113.8' })).status).toBe(200);
   });
 });

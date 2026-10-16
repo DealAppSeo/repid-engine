@@ -18,6 +18,8 @@
  * no CDN. It loads on anything and cannot break because a dependency moved.
  */
 import { Router, Request, Response } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../../middleware/client-ip';
 import { buildTrustReceipt, latestRealSettledContractId, type TrustReceipt } from '../../services/trust-receipt';
 import { db } from '../../db';
 import { verifyRangeCheck } from '../../zkp/range-check-verify';
@@ -219,7 +221,19 @@ router.get('/receipt/:id.json', async (req: Request, res: Response) => {
  * receipt could see a proof listed and not check it. Only a proof the receipt itself lists is served,
  * so this cannot be used to browse proofs unrelated to the contract.
  */
-router.get('/receipt/:id/proof/:jobId', async (req: Request, res: Response) => {
+// Keyless, and each call runs the receipt queries plus a WASM verify, so it is metered per network
+// address (trustedClientIp, as bounties.ts does). CodeQL js/missing-rate-limiting.
+export const PROOF_CHECK_LIMIT_PER_MIN = 30;
+const proofCheckLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: PROOF_CHECK_LIMIT_PER_MIN,
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'too_many_requests' },
+});
+
+router.get('/receipt/:id/proof/:jobId', proofCheckLimiter, async (req: Request, res: Response) => {
   const receipt = await buildTrustReceipt(String(req.params.id));
   if (!receipt) return res.status(404).json({ error: 'not_found' });
   const jobId = String(req.params.jobId);
