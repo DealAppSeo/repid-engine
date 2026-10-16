@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { db } from '../../db';
 import { requireRole, mintQrToken } from '../../middleware/controller-auth';
 import { setAgentEnabled } from '../../services/agent-controls';
@@ -12,6 +12,21 @@ const router = Router();
 
 // Base auth: every controller route needs at least a valid viewer role.
 router.use(requireRole('viewer'));
+
+// [S2-1, 2026-10-16] Two kinds of viewer reach these routes. A signed controller token or the
+// master key is a human the operator issued it to. An agent API key is a viewer pinned to its own
+// agent (requireRole sets dbAgentId), and anyone can get one from keyless /agents/register. So an
+// agent key reads its own agent's tasks only, and none of the HITL review queue or its history.
+function isAgentKeyViewer(req: Request): boolean {
+  return !!(req as any).dbAgentId;
+}
+function humanViewerOnly(req: Request, res: Response, next: NextFunction): void {
+  if (isAgentKeyViewer(req)) {
+    res.status(403).json({ error: { code: 'FORBIDDEN', message: 'HITL requests need a signed controller token, not an agent API key' } });
+    return;
+  }
+  next();
+}
 
 // GET /agent-grid — live status of all Trinity agents.
 router.get('/agent-grid', async (_req, res) => {
@@ -43,9 +58,14 @@ router.get('/agent-grid', async (_req, res) => {
 // GET /activity-feed — recent task claims / completions / failures across agents.
 router.get('/activity-feed', async (req, res) => {
   const limit = Math.min(Number(req.query.limit ?? 30), 100);
-  const { data, error } = await db
+  const agentKey = isAgentKeyViewer(req);
+  const own = (req as any).boundAgentName as string | undefined;
+  if (agentKey && !own) return res.json({ count: 0, events: [] }); // unknown agent: nothing, never everything
+  let query = db
     .from('trinity_tasks')
-    .select('id,title,task_type,status,claimed_by,agent_name,created_at,completed_at,updated_at')
+    .select('id,title,task_type,status,claimed_by,agent_name,created_at,completed_at,updated_at');
+  if (agentKey) query = query.eq('agent_name', own as string);
+  const { data, error } = await query
     .order('updated_at', { ascending: false, nullsFirst: false })
     .limit(limit);
   if (error) return res.status(500).json({ error: error.message });
@@ -364,7 +384,7 @@ router.post('/sprint/:agent_id', requireRole('admin'), async (req, res) => {
 
 // GET /requests/pending — viewer+: list open HITL requests awaiting decision.
 // Must be registered BEFORE /requests/:id to avoid "pending" being matched as :id.
-router.get('/requests/pending', async (req, res) => {
+router.get('/requests/pending', humanViewerOnly, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const data = await hitlService.getPendingRequests({ limit });
@@ -376,7 +396,7 @@ router.get('/requests/pending', async (req, res) => {
 
 // GET /requests/history — viewer+: resolved HITL rows from hal_audit_chain.
 // Returns entries where source_table = 'hitl_requests' ordered newest-first.
-router.get('/requests/history', async (req, res) => {
+router.get('/requests/history', humanViewerOnly, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const { data, error } = await db
@@ -396,9 +416,9 @@ router.get('/requests/history', async (req, res) => {
 });
 
 // GET /requests/:id — viewer+: fetch a single HITL request by UUID.
-router.get('/requests/:id', async (req, res) => {
+router.get('/requests/:id', humanViewerOnly, async (req, res) => {
   try {
-    const data = await hitlService.getRequest(req.params.id);
+    const data = await hitlService.getRequest(String(req.params.id ?? ''));
     if (!data) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Request not found' } });
     }
