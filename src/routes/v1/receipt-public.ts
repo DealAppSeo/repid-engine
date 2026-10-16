@@ -94,6 +94,37 @@ function workStatement(r: TrustReceipt): string {
   return `<p><strong>Agreed deliverable:</strong> ${esc(ws.deliverable)}</p>${items ? `<ol>${items}</ol>` : ''}`;
 }
 
+/**
+ * Step 3 used to say, on every receipt, "Independent verifiers on deliberately different model
+ * families reviewed the deliverable". MEASURED 2026-10-16: 14 of 16 daily receipts were reviewed by
+ * `trinity-mock-*` agents, no validator of any of them has a recorded model family, and on one
+ * (e12e52c7) the provider was one of its own validators. So the step says only what the record says.
+ */
+function checkedStep(r: TrustReceipt): string {
+  const v = r.validators;
+  if (!v) return step(3, 'No validator record', '<p class="muted">This exchange records no validators, so this receipt makes no claim about who checked the work.</p>');
+  const title = v.includes_provider
+    ? 'The work was reviewed, and the provider was one of its own validators'
+    : 'The work was checked by validators other than the provider';
+  const families = v.families.length >= 2
+    ? `<p>Recorded model families of the validators: ${v.families.map(esc).join(', ')}.</p><p class="muted">Two copies of one model make the same mistakes, so agreement between them proves nothing.</p>`
+    : v.families.length === 1
+      ? `<p>Only one validator model family is recorded: ${esc(v.families[0])}. Agreement between copies of one model is weak evidence.</p>`
+      : '<p class="muted">No validator model family is recorded, so this receipt does not claim the validators were independent of each other.</p>';
+  return step(3, title, families);
+}
+
+/**
+ * True only when a proof listed on this receipt was recorded against this exchange's work-statement
+ * hash. `work_statement_hash` on a proof entry is read structurally: proof entries gain it with the E1
+ * proof-link change (#1418). Without that change no proof is linked to any contract, so false is the
+ * truth here, not a gap.
+ */
+function proofForThisWork(r: TrustReceipt): boolean {
+  return !!r.work_statement_hash &&
+    r.zk_proofs.some((p) => (p as { work_statement_hash?: unknown }).work_statement_hash === r.work_statement_hash);
+}
+
 function render(r: TrustReceipt): string {
 
   const negotiation = r.negotiated
@@ -130,19 +161,27 @@ function render(r: TrustReceipt): string {
          <p class="muted">Each verify link returns the proof bytes and statement and checks them on our server. No API key. To check without trusting us, run them through <code>@hyperdag/proof-verifier</code>.</p>`)
     : '';
 
-  const binding = r.work_statement_hash
-    ? step(8, 'This proof is bound to THIS work',
-        `<p class="muted"><code>${esc(r.work_statement_hash)}</code></p>
+  // "This proof is bound to THIS work" was printed whenever a hash existed, including on every
+  // receipt that showed no proof at all. It is now said only when a listed proof carries this hash,
+  // and even then as "recorded against": the proof attests a RepID threshold and does not commit to
+  // the hash (abf897cf: linking is provenance, not proof the work was done).
+  const hashFacts = `<p class="muted"><code>${esc(r.work_statement_hash)}</code></p>
          ${workStatement(r)}
-         <p>A commitment over this exchange's immutable facts, recorded at settlement. Recompute it yourself and it must match — so this evidence cannot be replayed for a different deliverable, and the facts cannot be edited afterwards without the hash disagreeing.</p>
-         <p class="muted">It binds the proof to this work. It does <strong>not</strong> assert the work was correct.</p>`)
-    : '';
+         <p>A commitment over this exchange's immutable facts, recorded at settlement. Recompute it yourself and it must match, so the facts cannot be edited afterwards without the hash disagreeing.</p>`;
+  const binding = !r.work_statement_hash
+    ? ''
+    : proofForThisWork(r)
+      ? step(8, 'This proof is recorded against THIS work', `${hashFacts}
+         <p>The proof's record carries this same hash.</p>
+         <p class="muted">The proof attests a reputation threshold. It does not commit to this hash, and it does <strong>not</strong> assert the work was correct.</p>`)
+      : step(8, 'The agreed work, fingerprinted', `${hashFacts}
+         <p class="muted">No proof on this receipt is recorded against this hash.</p>`);
 
   const caveats = r.caveats.length
     ? `<div class="caveat"><strong>What this receipt does not establish</strong><ul>${r.caveats.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></div>`
     : '';
 
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Trust receipt — ${esc(r.buyer)} paid ${esc(r.provider)} ${esc(r.price_usdc)}</title>
 <style>
@@ -170,7 +209,7 @@ function render(r: TrustReceipt): string {
 <div class="flow"><strong>${esc(r.buyer)}</strong> &nbsp;──&nbsp; ${esc(r.price_usdc)} &nbsp;──▶&nbsp; <strong>${esc(r.provider)}</strong></div>
 ${negotiation}
 ${payFlow(r)}
-${step(3, 'The work was checked by someone who did not do it', `<p>Independent verifiers on deliberately different model families reviewed the deliverable.</p><p class="muted">Two copies of one model make the same mistakes, so agreement between them proves nothing.</p>`)}
+${checkedStep(r)}
 ${paidStep(r)}
 ${rep}
 ${onchain}
@@ -181,6 +220,10 @@ ${caveats}
   <p><strong>The point:</strong> being wrong costs the agent something, and you can verify that yourself on a public chain.</p>
   <p>contract <code>${esc(r.contract_id)}</code> · <a href="/api/v1/receipt/${esc(r.contract_id)}.json">machine-readable</a></p>
 </footer></body></html>`;
+  // Number the steps in the order shown. Steps 5-8 drop out when their data is missing, and fixed
+  // numbers left a gap (6 then 8 on every receipt with no proof).
+  let n = 0;
+  return html.replace(/<div class="n">\d+<\/div>/g, () => `<div class="n">${++n}</div>`);
 }
 
 /**
