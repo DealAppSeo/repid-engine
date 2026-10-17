@@ -1,13 +1,16 @@
 /**
- * Arena persistence: five NEW tables, created by supabase/migrations/20261016120000_arena.sql
- * (NOT applied by this PR; prod DDL is Sean's). Nothing here reads or writes RepID, stakes,
- * escrow or any money table.
+ * Arena persistence. Nothing here reads or writes RepID, stakes, escrow or any money table.
+ *   supabase/migrations/20261016120000_arena.sql            five tables; applied by Sean 2026-10-16.
+ *   supabase/migrations/20261017120000_arena_game_keys.sql  arena_game_keys, arena_games.events, and
+ *                                                           the wider arena_signatures.action CHECK.
+ *                                                           Prod DDL is Sean's.
  *
- * FAIL CLOSED. Until the migration is applied every arena route answers 503
- * `arena_tables_missing` and writes nothing: `ensureTables` probes all five tables before the
- * first request is served and is remembered only once it succeeds.
+ * FAIL CLOSED. Until both are applied every arena route answers 503 `arena_tables_missing` and
+ * writes nothing: `ensureTables` probes every table and the new column before the first request is
+ * served, and is remembered only once it succeeds.
  */
 import type { Clock, Result, StoredMove, TimeControl } from './referee';
+import type { ChainEvent, KeyAct, PublicJwk } from './game-key';
 
 export type GameStatus = 'pending' | 'live' | 'finished';
 export type Speed = 'machine' | '1' | '0.5' | '0.25';
@@ -31,6 +34,8 @@ export interface GameRow {
   moves: StoredMove[];
   clock_ms: Clock;
   illegal_attempts: Clock;
+  /** Resign and draw offers/acceptances, each with its game-key signature when a game key made it. */
+  events: ChainEvent[];
   pre: Record<string, unknown> | null;
   result: Result | null;
   termination: string | null;
@@ -40,7 +45,20 @@ export interface GameRow {
   last_move_at: string | null;
   finished_at: string | null;
 }
-export type NewGame = Omit<GameRow, 'id' | 'version' | 'created_at' | 'started_at' | 'last_move_at' | 'finished_at' | 'result' | 'termination' | 'pre'>;
+export type NewGame = Omit<GameRow, 'id' | 'version' | 'created_at' | 'started_at' | 'last_move_at' | 'finished_at' | 'result' | 'termination' | 'pre' | 'events'> & { id?: string };
+/** A wallet's grant to a game key. Published with the game: the statement and signature are the proof. */
+export interface GameKeyRow {
+  game_id: string;
+  participant: string;
+  thumbprint: string;
+  public_jwk: PublicJwk;
+  capabilities: KeyAct[];
+  grant_statement: string;
+  grant_signature: string;
+  granted_at?: string;
+  revoked_at: string | null;
+  revoked_reason: 'replaced' | 'ended_by_wallet' | null;
+}
 export interface RatingRow { participant: string; rating: number; games: number }
 export interface SignalRow { game_id: string; participant: string; owner_distinct: boolean; trust_evidence: boolean; signals: Record<string, unknown> }
 export interface PredictionRow { game_id: string; predictor: string; is_participant: boolean; side: 'white' | 'black'; probability: number; at_ply: number }
@@ -62,18 +80,29 @@ export interface ArenaStore {
   listPredictions(gameId: string): Promise<PredictionRow[]>;
   /** Single use: 'duplicate' when this signed statement was already accepted once. */
   claimSignature(row: { statement_sha256: string; wallet: string; action: string }): Promise<'ok' | 'duplicate'>;
+  /** A new grant for the same game and side revokes the old key ('replaced'); old rows stay, so old signatures stay verifiable. */
+  addGameKey(row: Omit<GameKeyRow, 'revoked_at' | 'revoked_reason'>): Promise<void>;
+  /** Every grant for the game, active or not. */
+  gameKeys(gameId: string): Promise<GameKeyRow[]>;
+  /** The wallet's "end game key". */
+  revokeGameKey(gameId: string, participant: string, at: string): Promise<void>;
+  /** The scoresheet signature: the "accepted the result" conduct signal, merged into that player's signals row. */
+  markResultAccepted(gameId: string, participant: string, scoresheet: Record<string, unknown>): Promise<boolean>;
 }
 
-export const ARENA_TABLES = ['arena_games', 'arena_ratings', 'arena_trust_signals', 'arena_predictions', 'arena_signatures'] as const;
-export const MIGRATION_FILE = 'supabase/migrations/20261016120000_arena.sql';
+export const ARENA_TABLES = ['arena_games', 'arena_ratings', 'arena_trust_signals', 'arena_predictions', 'arena_signatures', 'arena_game_keys'] as const;
+export const MIGRATION_FILE = 'supabase/migrations/20261016120000_arena.sql and 20261017120000_arena_game_keys.sql';
 
 export class ArenaTablesMissing extends Error {}
 
 interface PgError { code?: string; message?: string }
-/** Postgres 42P01 "relation does not exist"; PostgREST PGRST205 "could not find the table" (as durable-caps.ts). */
+/**
+ * Postgres 42P01 "relation does not exist", PostgREST PGRST205 "could not find the table" (as
+ * durable-caps.ts), and for a missing column 42703 / PGRST204.
+ */
 const isMissingTable = (e: PgError): boolean => {
   const msg = (e.message ?? '').toLowerCase();
-  return e.code === '42P01' || e.code === 'PGRST205' || msg.includes('does not exist') || msg.includes('could not find the table');
+  return ['42P01', 'PGRST205', '42703', 'PGRST204'].includes(e.code ?? '') || msg.includes('does not exist') || msg.includes('could not find the');
 };
 function check<T>(r: { data: T; error: PgError | null }): T {
   if (!r.error) return r.data;
@@ -90,6 +119,7 @@ export function supabaseArenaStore(db: any): ArenaStore {
     async ensureTables() {
       if (ready) return;
       for (const t of ARENA_TABLES) check(await db.from(t).select('*', { head: true, count: 'exact' }).limit(1));
+      check(await db.from('arena_games').select('events', { head: true }).limit(1));
       ready = true;
     },
     async insertGame(row) {
@@ -138,8 +168,28 @@ export function supabaseArenaStore(db: any): ArenaStore {
     async claimSignature(row) {
       const r = await db.from('arena_signatures').insert(row);
       if (r.error?.code === '23505') return 'duplicate';
+      // 23514: the action CHECK predates game keys ('grant', 'revoke', 'scoresheet'). Fail closed, and say why.
+      if (r.error?.code === '23514') throw new ArenaTablesMissing(`arena_signatures.action does not allow '${row.action}' yet`);
       check(r);
       return 'ok';
+    },
+    async addGameKey(row) {
+      const at = new Date().toISOString();
+      // Revoke first, then insert: the partial unique index (one active key per game and side) then always holds.
+      check(await db.from('arena_game_keys').update({ revoked_at: at, revoked_reason: 'replaced' }).eq('game_id', row.game_id).eq('participant', row.participant).is('revoked_at', null));
+      check(await db.from('arena_game_keys').insert({ ...row, granted_at: at, revoked_at: null, revoked_reason: null }));
+    },
+    async gameKeys(gameId) {
+      return check(await db.from('arena_game_keys').select('*').eq('game_id', gameId).order('granted_at', { ascending: true })) as GameKeyRow[];
+    },
+    async revokeGameKey(gameId, participant, at) {
+      check(await db.from('arena_game_keys').update({ revoked_at: at, revoked_reason: 'ended_by_wallet' }).eq('game_id', gameId).eq('participant', participant).is('revoked_at', null));
+    },
+    async markResultAccepted(gameId, participant, scoresheet) {
+      const row = check(await db.from('arena_trust_signals').select('signals').eq('game_id', gameId).eq('participant', participant).maybeSingle()) as { signals: Record<string, unknown> } | null;
+      if (!row) return false;
+      check(await db.from('arena_trust_signals').update({ signals: { ...row.signals, accepted_result: true, scoresheet } }).eq('game_id', gameId).eq('participant', participant));
+      return true;
     },
   };
 }

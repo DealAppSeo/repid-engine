@@ -27,6 +27,8 @@ export const BROWSER_HEADERS = [
   'x-agent-key', // the agent's own key, second side of a bind (services/human-agent-binding.ts)
   'x-agent-gate-token', // signed-in run budget (routes/agent-gate.ts, routes/route.ts)
   'x-payment', // x402 payment header; the published SDK sends it and can run in a browser
+  'x-arena-key-signature', // AgentChess game key: a browser-held P-256 key signs each move (routes/arena.ts)
+  'x-arena-key-time',
 ] as const;
 
 /**

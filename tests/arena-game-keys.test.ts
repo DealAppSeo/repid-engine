@@ -1,0 +1,306 @@
+/**
+ * GAME KEYS (src/arena/game-key.ts, src/routes/arena.ts): one wallet signature per game, then a
+ * browser-held P-256 key signs the moves. The controls under test:
+ *   - a move is refused when signed by the wrong key, for the wrong ply, over the wrong previous
+ *     hash, for another body, in another game, out of time, or after the game ended;
+ *   - a new grant for the same game and side revokes the old key, and the wallet can end it;
+ *   - the key can never create or accept a challenge, grant or end a key, sign a scoresheet or
+ *     predict; agents cannot be given one; the wallet still does every stake action;
+ *   - the grant says in plain words that resigning or a draw can lose the stake, and has no timer;
+ *   - the moves form a hash chain that anyone can verify from the published record alone;
+ *   - the page's own copies (payload, grant text, chain, thumbprint) equal the server's, and its
+ *     chain check flags a server copy that differs.
+ * The keys are made with WebCrypto (globalThis.crypto.subtle), exactly as the page makes them.
+ */
+import request from 'supertest';
+import { Wallet } from 'ethers';
+
+jest.mock('../src/db', () => {
+  const chain: any = {
+    select: () => chain, eq: () => chain, ilike: () => chain, limit: async () => ({ data: [], error: null }),
+    maybeSingle: async () => ({ data: null, error: null }), insert: async () => ({ data: null, error: null }),
+  };
+  return { db: { from: () => chain, rpc: async () => ({ data: null, error: null }) } };
+});
+jest.mock('../src/auth/api-keys', () => {
+  const actual = jest.requireActual('../src/auth/api-keys');
+  return { ...actual, validateAgentApiKey: jest.fn(async (key: string) => (key.startsWith('key-for-') ? { agent_id: key.slice(8), scopes: [] } : null)) };
+});
+
+import { arenaStatement, type ArenaAction } from '../src/routes/arena';
+import { ARENA_JS } from '../src/arena/page';
+import { chainGenesis, chainHead, chainNext, gameKeyPayload, grantLines, jwkThumbprint, verifyGameRecord, type KeyAct } from '../src/arena/game-key';
+import { A1, A3, human, human2, memStore, appWith, agent, signedArena, challengeBy } from './helpers/arena-fixtures';
+import type express from 'express';
+
+const subtle = globalThis.crypto.subtle;
+type GameKey = { pair: CryptoKeyPair; jwk: { kty: 'EC'; crv: 'P-256'; x: string; y: string }; thumb: string };
+async function newKey(): Promise<GameKey> {
+  const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']) as CryptoKeyPair;
+  const j = await subtle.exportKey('jwk', pair.publicKey);
+  const jwk = { kty: 'EC' as const, crv: 'P-256' as const, x: j.x as string, y: j.y as string };
+  return { pair, jwk, thumb: jwkThumbprint(jwk) };
+}
+async function keyHeaders(k: GameKey, app: express.Express, id: string, act: KeyAct, uci?: string, o: { ply?: number; prev?: string; game?: string; time?: string } = {}) {
+  const g = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
+  const time = o.time ?? new Date().toISOString();
+  const payload = gameKeyPayload({ game: o.game ?? id, act, ply: o.ply ?? g.moves.length + 1, prev: o.prev ?? chainHead(id, g.moves), uci }, time);
+  const sig = Buffer.from(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, k.pair.privateKey, new TextEncoder().encode(payload))).toString('base64url');
+  return { 'x-arena-key-signature': sig, 'x-arena-key-time': time };
+}
+const keyMove = async (app: express.Express, id: string, k: GameKey, uci: string, o = {}) =>
+  request(app).post(`/api/v1/arena/games/${id}/move`).set(await keyHeaders(k, app, id, 'move', uci, o)).send({ uci });
+const agentMove = (app: express.Express, id: string, by: string, uci: string) =>
+  request(app).post(`/api/v1/arena/games/${id}/move`).set(agent(by)).send({ uci });
+
+/** human (white) challenges an agent with a game key, in ONE wallet signature; the agent accepts. */
+async function keyGame(app: express.Express, opts: { stake?: number; opponent?: string; w?: Wallet } = {}) {
+  const w = opts.w ?? human, opponent = opts.opponent ?? A1, id = globalThis.crypto.randomUUID(), k = await newKey(), stake = opts.stake ?? 1;
+  const act = challengeBy(w, opponent, { game: id, stake_usd: stake, grant: k.thumb });
+  const c = await request(app).post('/api/v1/arena/challenges').set(await signedArena(w, act))
+    .send({ game_id: id, white: w.address, black: opponent, stake_usd: stake, game_key: k.jwk });
+  expect(c.status).toBe(201);
+  expect(c.body.challenge.id).toBe(id);
+  expect(c.body.game_key.thumbprint).toBe(k.thumb);
+  expect((await request(app).post(`/api/v1/arena/challenges/${id}/accept`).set(agent(opponent)).send()).status).toBe(200);
+  return { id, k };
+}
+
+beforeEach(() => { process.env.ARENA_ENABLED = 'true'; });
+afterAll(() => { delete process.env.ARENA_ENABLED; });
+
+describe('one wallet signature per game, then the game key moves', () => {
+  it('moves with no wallet popup, and each stored move carries its key, signature and chain hash', async () => {
+    const m = memStore(), app = appWith(m.store), { id, k } = await keyGame(app);
+    const r1 = await keyMove(app, id, k, 'e2e4');
+    expect(r1.status).toBe(200);
+    expect((await agentMove(app, id, A1, 'e7e5')).status).toBe(200);
+    expect((await keyMove(app, id, k, 'g1f3')).status).toBe(200);
+    const moves = m.games.get(id)!.moves;
+    expect(moves[0]).toMatchObject({ uci: 'e2e4', by: `human:${human.address.toLowerCase()}`, key: k.thumb, hash: chainNext(chainGenesis(id), 1, 'e2e4') });
+    expect(moves[0]!.sig).toEqual(expect.any(String));
+    expect(moves[1]).toMatchObject({ uci: 'e7e5', by: `agent:${A1}` });
+    expect(moves[1]!.sig).toBeUndefined();
+    expect(m.keys).toHaveLength(1);
+  });
+
+  it('REFUSED: wrong key, wrong ply, wrong previous hash, another body, another game, stale time', async () => {
+    const m = memStore(), app = appWith(m.store), { id, k } = await keyGame(app), { id: other, k: otherKey } = await keyGame(app);
+    const stranger = await newKey();
+    expect((await keyMove(app, id, stranger, 'e2e4')).body.error).toBe('bad_key_signature');
+    expect((await keyMove(app, id, k, 'e2e4', { ply: 2 })).body.error).toBe('bad_key_signature');
+    expect((await keyMove(app, id, k, 'e2e4', { prev: chainGenesis(other) })).body.error).toBe('bad_key_signature');
+    // another body: signed e2e4, sent d2d4
+    const signedE4 = await keyHeaders(k, app, id, 'move', 'e2e4');
+    expect((await request(app).post(`/api/v1/arena/games/${id}/move`).set(signedE4).send({ uci: 'd2d4' })).body.error).toBe('bad_key_signature');
+    // another game: this game's key, used on the other game (signed for it, too)
+    expect((await keyMove(app, other, k, 'e2e4')).body.error).toBe('bad_key_signature');
+    expect((await keyMove(app, other, k, 'e2e4', { game: id })).body.error).toBe('bad_key_signature');
+    const stale = await keyHeaders(k, app, id, 'move', 'e2e4', { time: new Date(Date.now() - 10 * 60_000).toISOString() });
+    expect((await request(app).post(`/api/v1/arena/games/${id}/move`).set(stale).send({ uci: 'e2e4' })).body.error).toBe('stale_key_signature');
+    expect(m.games.get(id)!.moves).toHaveLength(0);
+    expect((await keyMove(app, other, otherKey, 'e2e4')).status).toBe(200); // the right key still works
+  });
+
+  it('REFUSED in another game even when a client reuses one key for two games: the signature names its game', async () => {
+    const app = appWith(memStore().store), { id: a, k } = await keyGame(app), { id: b } = await keyGame(app);
+    await request(app).post(`/api/v1/arena/games/${b}/game-key`).set(await signedArena(human, { action: 'grant', game: b, colour: 'white', stake_usd: 1, grant: k.thumb })).send({ game_key: k.jwk }).expect(201);
+    const forA = await keyHeaders(k, app, a, 'move', 'e2e4');
+    expect((await request(app).post(`/api/v1/arena/games/${b}/move`).set(forA).send({ uci: 'e2e4' })).body.error).toBe('bad_key_signature');
+    expect((await keyMove(app, b, k, 'e2e4')).status).toBe(200);
+  });
+
+  it('the Supabase store revokes the old key BEFORE inserting the new one (one active key per game and side)', async () => {
+    const { supabaseArenaStore } = jest.requireActual('../src/arena/store');
+    const calls: unknown[][] = [];
+    const chain: any = new Proxy({}, { get: (_t, p) => (p === 'then' ? (r: any) => r({ data: [], error: null }) : (...args: unknown[]) => { calls.push([p, ...args]); return chain; }) });
+    await supabaseArenaStore({ from: (t: string) => { calls.push(['from', t]); return chain; } }).addGameKey({ game_id: A1, participant: 'human:0x1', thumbprint: 'T', public_jwk: (await newKey()).jwk, capabilities: ['move'], grant_statement: 's', grant_signature: 'g' });
+    const update = calls.findIndex((c) => c[0] === 'update'), insert = calls.findIndex((c) => c[0] === 'insert');
+    expect(update).toBeGreaterThan(-1);
+    expect(calls[update]![1]).toMatchObject({ revoked_reason: 'replaced' });
+    expect(calls).toContainEqual(['is', 'revoked_at', null]);
+    expect(insert).toBeGreaterThan(update);
+  });
+
+  it('REFUSED after the game ends: the key ends with its game', async () => {
+    const app = appWith(memStore().store), { id, k } = await keyGame(app);
+    const resign = await request(app).post(`/api/v1/arena/games/${id}/resign`).set(await keyHeaders(k, app, id, 'resign')).send();
+    expect(resign.body.game).toMatchObject({ status: 'finished', result: '0-1', termination: 'White resigned' });
+    expect((await keyMove(app, id, k, 'e2e4')).body.error).toBe('game_not_live');
+    expect((await request(app).post(`/api/v1/arena/games/${id}/resign`).set(await keyHeaders(k, app, id, 'resign')).send()).body.error).toBe('game_not_live');
+    const g = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
+    expect(g.grants[0].active).toBe(false);
+    expect((await request(app).post(`/api/v1/arena/games/${id}/game-key`).set(await signedArena(human, { action: 'grant', game: id, colour: 'white', stake_usd: 1, grant: (await newKey()).thumb })).send({ game_key: (await newKey()).jwk })).status).toBe(401);
+  });
+
+  it('a new grant for the same game and side revokes the old key; the wallet can end it', async () => {
+    const m = memStore(), app = appWith(m.store), { id, k } = await keyGame(app);
+    const k2 = await newKey();
+    const g = await request(app).post(`/api/v1/arena/games/${id}/game-key`).set(await signedArena(human, { action: 'grant', game: id, colour: 'white', stake_usd: 1, grant: k2.thumb })).send({ game_key: k2.jwk });
+    expect(g.status).toBe(201);
+    const old = await keyMove(app, id, k, 'e2e4');
+    expect(old.body).toMatchObject({ error: 'game_key_revoked', reason: 'replaced' });
+    expect((await keyMove(app, id, k2, 'e2e4')).status).toBe(200);
+    expect((await request(app).post(`/api/v1/arena/games/${id}/game-key/revoke`).set(await signedArena(human, { action: 'revoke', game: id })).send()).body.revoked).toBe(true);
+    expect((await agentMove(app, id, A1, 'e7e5')).status).toBe(200);
+    expect((await keyMove(app, id, k2, 'd2d4')).body).toMatchObject({ error: 'game_key_revoked', reason: 'ended_by_wallet' });
+    expect(m.keys.map((x) => x.revoked_reason)).toEqual(['replaced', 'ended_by_wallet']);
+  });
+});
+
+describe('what a game key can never do', () => {
+  it('cannot create or accept a challenge, grant or end a key, sign a scoresheet, or predict', async () => {
+    const app = appWith(memStore().store), { id, k } = await keyGame(app);
+    const h = await keyHeaders(k, app, id, 'move', 'e2e4');
+    const tries: [string, object][] = [
+      ['/challenges', { white: human.address, black: A3, stake_usd: 10 }],
+      [`/challenges/${id}/accept`, {}],
+      [`/games/${id}/game-key`, { game_key: (await newKey()).jwk }],
+      [`/games/${id}/game-key/revoke`, {}],
+      [`/games/${id}/scoresheet`, { result: 'x', chain_head: 'y' }],
+      [`/games/${id}/predict`, { side: 'white', probability: 0.5 }],
+    ];
+    for (const [path, body] of tries) {
+      const r = await request(app).post(`/api/v1/arena${path}`).set(h).send(body);
+      expect([path, r.status, r.body.error]).toEqual([path, 403, 'key_not_allowed']);
+    }
+  });
+
+  it('an agent cannot be given a game key (no agent hand-off in this build)', async () => {
+    const app = appWith(memStore().store);
+    const r = await request(app).post('/api/v1/arena/challenges').set(agent(A3))
+      .send({ game_id: globalThis.crypto.randomUUID(), white: A3, black: A1, game_key: (await newKey()).jwk });
+    expect(r.body.error).toBe('game_keys_are_for_wallets');
+  });
+
+  it('the wallet still does every stake action: a 10 USD challenge, and a human accepting one', async () => {
+    const app = appWith(memStore().store);
+    const { id } = await keyGame(app, { stake: 10 });
+    expect((await request(app).get(`/api/v1/arena/games/${id}`)).body.stake.usd).toBe(10);
+    // An agent challenges a human; the human accepts with its wallet, the grant riding on the same signature.
+    const c = await request(app).post('/api/v1/arena/challenges').set(agent(A1)).send({ white: A1, black: human2.address, stake_usd: 10 });
+    const k = await newKey(), accept: ArenaAction = { action: 'accept', game: c.body.challenge.id, colour: 'black', stake_usd: 10, grant: k.thumb };
+    const a = await request(app).post(`/api/v1/arena/challenges/${c.body.challenge.id}/accept`).set(await signedArena(human2, accept)).send({ game_key: k.jwk });
+    expect(a.status).toBe(200);
+    // The acceptor's statement named the stake, so a different stake would not have verified.
+    expect(arenaStatement(accept, human2.address, 't')).toContain('stake: 10 testnet USD, on your own win');
+    expect((await agentMove(app, c.body.challenge.id, A1, 'e2e4')).status).toBe(200);
+    expect((await keyMove(app, c.body.challenge.id, k, 'e7e5')).status).toBe(200);
+  });
+
+  it('the grant says plainly that resigning or a draw can lose the stake, and has no timer', () => {
+    const text = arenaStatement({ action: 'grant', game: A1, colour: 'white', stake_usd: 1, grant: 'T' }, human.address, 't');
+    expect(text).toContain('resigning, or agreeing a draw, can lose this game\'s stake');
+    expect(text).toContain('game key may never: move funds, change a stake, create or accept a challenge, or act in another game');
+    expect(text).toContain('game key ends: when this game ends, when you sign "end game key", or when you grant a new key for this game');
+    expect(text).not.toMatch(/expire|hour/i);
+  });
+});
+
+describe('draws and resigning', () => {
+  it('a key-offered draw accepted by the agent ends the game; a move withdraws a standing offer', async () => {
+    const app = appWith(memStore().store), { id, k } = await keyGame(app);
+    expect((await keyMove(app, id, k, 'e2e4')).status).toBe(200);
+    expect((await request(app).post(`/api/v1/arena/games/${id}/draw`).set(agent(A1)).send({ draw: 'offer' })).body.game.draw_offer).toEqual({ by: `agent:${A1}` });
+    expect((await agentMove(app, id, A1, 'e7e5')).status).toBe(200); // the offerer moved: the offer is withdrawn
+    expect((await request(app).post(`/api/v1/arena/games/${id}/draw`).set(await keyHeaders(k, app, id, 'accept_draw')).send({ draw: 'accept' })).body.error).toBe('no_draw_offer');
+    expect((await request(app).post(`/api/v1/arena/games/${id}/draw`).set(await keyHeaders(k, app, id, 'offer_draw')).send({ draw: 'offer' })).status).toBe(200);
+    const done = await request(app).post(`/api/v1/arena/games/${id}/draw`).set(agent(A1)).send({ draw: 'accept' });
+    expect(done.body.game).toMatchObject({ status: 'finished', result: '1/2-1/2', termination: 'draw agreed' });
+    expect(done.body.game.events.map((e: { act: string }) => e.act)).toEqual(['offer_draw', 'offer_draw', 'accept_draw']);
+  });
+});
+
+describe('the move chain is the scoresheet, and anyone can verify it', () => {
+  async function playedGame() {
+    const m = memStore(), app = appWith(m.store), { id, k } = await keyGame(app);
+    for (const step of ['f2f3', 'e7e5', 'g2g4'] as const) expect((step === 'e7e5' ? await agentMove(app, id, A1, step) : await keyMove(app, id, k, step)).status).toBe(200);
+    expect((await agentMove(app, id, A1, 'd8h4')).body.game).toMatchObject({ result: '0-1', termination: 'checkmate' });
+    return { m, app, id, k, g: (await request(app).get(`/api/v1/arena/games/${id}`)).body };
+  }
+
+  it('the published record verifies with no trust in the server; tampering is caught', async () => {
+    const { g } = await playedGame();
+    expect(g.chain_head).toBe(chainHead(g.id, g.moves));
+    expect(await verifyGameRecord(g, g.grants)).toEqual({ ok: true, problems: [] });
+    const swapped = structuredClone(g); swapped.moves[0].uci = 'f2f4';
+    expect((await verifyGameRecord(swapped, g.grants)).ok).toBe(false);
+    const rehashed = structuredClone(g); rehashed.moves[2].hash = '0'.repeat(64);
+    expect((await verifyGameRecord(rehashed, g.grants)).problems.join()).toMatch(/ply 3: hash/);
+    // A self-consistent forgery: another move with every hash recomputed, so only the signature can catch it.
+    const rewritten = structuredClone(g);
+    rewritten.moves[0].uci = 'f2f4';
+    rewritten.moves.forEach((m: { uci: string; hash: string }, i: number) => { m.hash = chainNext(i ? rewritten.moves[i - 1].hash : chainGenesis(g.id), i + 1, m.uci); });
+    // ply 3 was signed over the old chain, so it fails too: one changed move breaks every later signature.
+    expect((await verifyGameRecord(rewritten, g.grants)).problems).toEqual(['ply 1: game-key signature does not verify', 'ply 3: game-key signature does not verify']);
+    const forgedGrant = structuredClone(g.grants);
+    forgedGrant[0].grant_signature = await Wallet.createRandom().signMessage(forgedGrant[0].grant_statement);
+    expect((await verifyGameRecord(g, forgedGrant)).problems.join()).toMatch(/no valid wallet grant/);
+  });
+
+  it('moves signed by a replaced key stay verifiable', async () => {
+    const m = memStore(), app = appWith(m.store), { id, k } = await keyGame(app);
+    expect((await keyMove(app, id, k, 'e2e4')).status).toBe(200);
+    expect((await agentMove(app, id, A1, 'e7e5')).status).toBe(200);
+    const k2 = await newKey();
+    await request(app).post(`/api/v1/arena/games/${id}/game-key`).set(await signedArena(human, { action: 'grant', game: id, colour: 'white', stake_usd: 1, grant: k2.thumb })).send({ game_key: k2.jwk }).expect(201);
+    expect((await keyMove(app, id, k2, 'g1f3')).status).toBe(200);
+    const g = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
+    expect(g.moves.map((x: { key?: string }) => x.key)).toEqual([k.thumb, undefined, k2.thumb]);
+    expect(await verifyGameRecord(g, g.grants)).toEqual({ ok: true, problems: [] });
+  });
+
+  it('the scoresheet signature is optional: absent until signed, and only this result and chain count', async () => {
+    const { m, app, id, g } = await playedGame();
+    const mine = () => m.signals.find((s) => s.participant === `human:${human.address.toLowerCase()}`)!.signals;
+    expect(mine().accepted_result).toBeNull();
+    const sheet = (result: string, head: string): ArenaAction => ({ action: 'scoresheet', game: id, result, plies: 4, chain_head: head });
+    const wrong = await request(app).post(`/api/v1/arena/games/${id}/scoresheet`).set(await signedArena(human, sheet('0-1 (checkmate)', '0'.repeat(64)))).send({ result: '0-1 (checkmate)', chain_head: '0'.repeat(64) });
+    expect(wrong.body.error).toBe('scoresheet_mismatch');
+    expect(mine().accepted_result).toBeNull();
+    const ok = await request(app).post(`/api/v1/arena/games/${id}/scoresheet`).set(await signedArena(human, sheet('0-1 (checkmate)', g.chain_head))).send({ result: '0-1 (checkmate)', chain_head: g.chain_head });
+    expect(ok.body.accepted_result).toBe(true);
+    expect(mine()).toMatchObject({ accepted_result: true, scoresheet: { chain_head: g.chain_head, by: 'wallet' } });
+  });
+});
+
+describe('the page uses the same texts and keeps its own chain', () => {
+  const src = (re: RegExp) => { const x = re.exec(ARENA_JS)?.[0]; expect(x).toBeDefined(); return x as string; };
+  const fn = (name: string) => src(new RegExp(`(async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n  \\}`));
+  const client = new Function(`${src(/var ACT_WORDS = \{[^\n]*\};/)}\n${['grantLines', 'arenaStatement', 'gameKeyPayload', 'sha256hex', 'chainHashes', 'chainProblems', 'b64url', 'thumbprint'].map(fn).join('\n')}
+    return { grantLines, arenaStatement, gameKeyPayload, chainHashes, chainProblems, thumbprint };`)();
+
+  it('the grant text, every wallet statement and the key payload are identical to the server\'s', () => {
+    expect(client.grantLines('T')).toEqual(grantLines('T'));
+    for (const a of [
+      challengeBy(human, A1, { game: A3, stake_usd: 0.1, grant: 'T', colour: 'black' }),
+      { action: 'accept', game: A3, colour: 'white', stake_usd: 10, grant: 'T' },
+      { action: 'grant', game: A3, colour: 'black', stake_usd: 0, grant: 'T' },
+      { action: 'revoke', game: A3 },
+      { action: 'scoresheet', game: A3, result: '1-0 (checkmate)', plies: 37, chain_head: 'h' },
+    ] as ArenaAction[]) expect(client.arenaStatement(a, human.address, 't')).toBe(arenaStatement(a, human.address, 't'));
+    for (const act of ['move', 'resign', 'offer_draw', 'accept_draw'] as const) {
+      const a = { game: A3, act, ply: 9, prev: 'p', uci: act === 'move' ? 'e7e8q' : undefined };
+      expect(client.gameKeyPayload(a, 't')).toBe(gameKeyPayload(a, 't'));
+    }
+  });
+
+  it('the chain and the thumbprint match the server\'s, and a differing server copy is flagged', async () => {
+    const moves = [{ uci: 'e2e4' }, { uci: 'e7e5' }, { uci: 'g1f3' }];
+    const hs = await client.chainHashes(A3, moves);
+    expect(hs[0]).toBe(chainGenesis(A3));
+    expect(hs[3]).toBe(chainHead(A3, moves));
+    const k = await newKey();
+    expect(await client.thumbprint(k.jwk)).toBe(k.thumb);
+    const server = moves.map((m, i) => ({ ...m, hash: hs[i + 1] }));
+    const signedByMe = { 1: { uci: 'e2e4', prev: hs[0] }, 3: { uci: 'g1f3', prev: hs[2] } };
+    expect(await client.chainProblems(A3, server, signedByMe)).toEqual([]);
+    // A server copy that is internally consistent (hashes recomputed) but not what this browser signed.
+    const other = [{ uci: 'e2e4' }, { uci: 'e7e5' }, { uci: 'b1c3' }], ohs = await client.chainHashes(A3, other);
+    const consistent = other.map((m, i) => ({ ...m, hash: ohs[i + 1] }));
+    expect(await client.chainProblems(A3, consistent, {})).toEqual([]);
+    expect((await client.chainProblems(A3, consistent, signedByMe)).join()).toMatch(/ply 3: this browser signed g1f3, the server shows b1c3/);
+    const badHash = server.map((m, i) => (i === 1 ? { ...m, hash: 'x' } : m));
+    expect((await client.chainProblems(A3, badHash, {})).join()).toMatch(/ply 2/);
+  });
+});

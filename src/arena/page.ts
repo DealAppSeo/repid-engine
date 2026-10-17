@@ -4,11 +4,19 @@
  * step. helmet's default CSP allows only same-origin scripts and no inline handlers, so the script
  * is a separate file (/arena/arena.js) and every handler is attached with addEventListener.
  *
- * A human proves a wallet per request. Arena actions are signed over the arena's own statement
- * (`arenaStatement` in src/routes/arena.ts), which names the action in plain words; the client copy
- * below is pinned equal to the server's by tests/arena.test.ts. The page shows that exact text, and
- * asks the person to confirm it, before the wallet is asked to sign. Only "Create or confirm
- * account" signs the shared authMessage of POST /api/v1/account/connect.
+ * ONE WALLET SIGNATURE PER GAME. Challenging or accepting makes a P-256 game key with WebCrypto
+ * (`extractable: false`, kept in IndexedDB; the private half never leaves the browser) and the
+ * wallet signs one grant for it, after a confirm panel that says in plain words what the key may and
+ * may never do. Moves, draw offers and resigning are then signed by the game key, with no popup.
+ * The wallet is still asked for everything stake-bearing (challenge, accept), for a new or ended
+ * game key, and for the optional scoresheet.
+ *
+ * The page keeps its own copy of the move chain (what this browser signed, and the hash chain it
+ * recomputes from the moves) and flags a server copy that differs.
+ *
+ * The client copies of arenaStatement, grantLines, gameKeyPayload and the chain are pinned equal to
+ * the server's by tests/arena-game-keys.test.ts. Only "Create or confirm account" signs the shared
+ * authMessage of POST /api/v1/account/connect.
  */
 
 export const ARENA_HTML = `<!doctype html>
@@ -18,8 +26,8 @@ export const ARENA_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AgentChess Arena</title>
 <style>
-  :root { --bg:#ffffff; --fg:#1b1b1f; --muted:#55565e; --line:#d4d4d8; --accent:#1d4ed8; --light:#eeeed2; --dark:#7a9a5a; --sel:#f59e0b; --err:#b91c1c; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#111114; --fg:#ececf0; --muted:#a6a7b0; --line:#34343c; --accent:#93b4ff; --light:#c8c8a8; --dark:#5f7d43; --err:#fca5a5; } }
+  :root { --bg:#ffffff; --fg:#1b1b1f; --muted:#55565e; --line:#d4d4d8; --accent:#1d4ed8; --light:#eeeed2; --dark:#7a9a5a; --sel:#f59e0b; --err:#b91c1c; --ok:#166534; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111114; --fg:#ececf0; --muted:#a6a7b0; --line:#34343c; --accent:#93b4ff; --light:#c8c8a8; --dark:#5f7d43; --err:#fca5a5; --ok:#86efac; } }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
   main { max-width: 980px; margin: 0 auto; padding: 16px; }
@@ -29,15 +37,17 @@ export const ARENA_HTML = `<!doctype html>
   .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   label { display:flex; flex-direction:column; gap:2px; font-size:.9rem; color:var(--muted); }
   input, select, button { font:inherit; color:inherit; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:6px 10px; }
-  button { cursor:pointer; } button:focus-visible, input:focus-visible, select:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+  button { cursor:pointer; } button:disabled { cursor:default; opacity:.5; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
   input[name=agent] { min-width: 18rem; max-width: 100%; }
-  #status { min-height:1.5em; } #status.err { color:var(--err); }
+  #status { min-height:1.5em; } #status.err, #chain.err { color:var(--err); } #chain.ok { color:var(--ok); }
   ul.games { list-style:none; padding:0; margin:8px 0 0; } ul.games li { padding:4px 0; border-top:1px solid var(--line); overflow-wrap:anywhere; }
   .play { display:grid; grid-template-columns: minmax(0, 480px) minmax(0, 1fr); gap:16px; } @media (max-width: 720px) { .play { grid-template-columns: 1fr; } }
   #board { display:grid; grid-template-columns: repeat(8, 1fr); width:100%; max-width:480px; aspect-ratio:1; border:1px solid var(--line); }
   #board button { border:0; border-radius:0; padding:0; font-size: clamp(20px, 6vw, 40px); line-height:1; color:#000; aspect-ratio:1; }
   #board button.l { background:var(--light); } #board button.d { background:var(--dark); }
   #board button.sel { box-shadow: inset 0 0 0 4px var(--sel); }
+  .actions { margin-top:8px; }
   .clocks { display:flex; gap:16px; font-variant-numeric: tabular-nums; margin:8px 0; }
   #moves { font-family: ui-monospace, monospace; font-size:.9rem; max-height: 16rem; overflow:auto; }
   #sign-text { white-space: pre-wrap; overflow-wrap:anywhere; font-family: ui-monospace, monospace; font-size:.9rem; margin:0; }
@@ -46,12 +56,13 @@ export const ARENA_HTML = `<!doctype html>
 <body>
 <main>
   <h1>AgentChess Arena</h1>
-  <p class="note">Testnet and shadow. No money moves: a stake only scales the chess-rating change, and the chess rating never touches RepID. The chess.js referee on the server decides every move and result. Each challenge and move asks your wallet to sign.</p>
+  <p class="note">Testnet and shadow. No money moves: a stake only scales the chess-rating change, and the chess rating never touches RepID. The chess.js referee on the server decides every move and result. Your wallet signs once per game; after that this browser's game key signs your moves.</p>
   <p id="status" role="status" aria-live="polite"></p>
 
   <section aria-labelledby="h-sign">
     <h2 id="h-sign">What your wallet will sign</h2>
-    <pre id="sign-text" aria-live="polite">Nothing yet. Before every signature this shows the exact text, and you confirm it first.</pre>
+    <p id="sign-why"></p>
+    <pre id="sign-text" aria-live="polite">Nothing yet. Before every wallet signature this shows the exact text, and you confirm it first.</pre>
   </section>
 
   <section aria-labelledby="h-wallet">
@@ -95,9 +106,18 @@ export const ARENA_HTML = `<!doctype html>
         <p id="players">No game open.</p>
         <div class="clocks"><span id="cw">White --:--</span><span id="cb">Black --:--</span></div>
         <div id="board" role="group" aria-label="Chess board"></div>
+        <div class="row actions" role="group" aria-label="Game actions">
+          <button id="offer-draw" type="button" disabled>Offer draw</button>
+          <button id="accept-draw" type="button" disabled>Accept draw</button>
+          <button id="resign" type="button" disabled>Resign</button>
+          <button id="grant" type="button" disabled>Grant this browser a game key</button>
+          <button id="end-key" type="button" disabled>End game key</button>
+          <button id="scoresheet" type="button" disabled>Sign the scoresheet (optional)</button>
+        </div>
       </div>
       <div>
         <p id="result" aria-live="polite"></p>
+        <p id="chain" aria-live="polite"></p>
         <ol id="moves"></ol>
       </div>
     </div>
@@ -115,37 +135,104 @@ export const ARENA_JS = String.raw`(function () {
   function $(id) { return document.getElementById(id); }
   function say(msg, err) { var s = $('status'); s.textContent = msg; s.className = err ? 'err' : ''; }
   function me() { return S.wallet ? 'human:' + S.wallet.toLowerCase() : null; }
+  var GRANT_WHY = 'One wallet signature for this whole game. Until this game ends, this browser may move, offer a draw, accept a draw and resign for you, in this game only. Resigning, or agreeing a draw, can lose this game\'s stake. The key can never move funds, change a stake, create or accept a challenge, or act in another game. If this browser loses the key (cleared storage or another device), you sign one new grant; the game clock keeps running while you do.';
 
   // The engine's existing statement (src/routes/v1/byok.ts authMessage): method + path + wallet + time.
   function authMessage(method, path, wallet, ts) {
     return ['HyperDAG — authenticated request', 'method: ' + method.toUpperCase(), 'path:   ' + path, 'wallet: ' + wallet.toLowerCase(), 'time:   ' + ts].join('\n');
   }
-  // The arena's statement: the same text the server rebuilds from the request body (src/routes/arena.ts arenaStatement).
+  // The same lines the server signs into a grant (src/arena/game-key.ts grantLines).
+  function grantLines(thumbprint) {
+    return ['game key: ' + thumbprint,
+      'game key may: move, offer a draw, accept a draw and resign for you, in this game only',
+      'resigning, or agreeing a draw, can lose this game\'s stake',
+      'game key may never: move funds, change a stake, create or accept a challenge, or act in another game',
+      'game key ends: when this game ends, when you sign "end game key", or when you grant a new key for this game'];
+  }
+  // The arena's wallet statement: the same text the server rebuilds from the request body (src/routes/arena.ts arenaStatement).
   function arenaStatement(a, wallet, ts) {
     var lines = ['HyperDAG AgentChess arena (testnet; no money moves)'];
-    if (a.action === 'challenge') lines.push('action: challenge', 'opponent: ' + a.opponent, 'you play: ' + a.colour, 'stake: ' + a.stake_usd + ' testnet USD, on your own win', 'time control: ' + a.time_control, 'viewer speed: ' + a.speed);
-    else if (a.action === 'accept') lines.push('action: accept challenge', 'game: ' + a.game);
-    else if (a.action === 'move') lines.push('action: move', 'game: ' + a.game, 'ply: ' + a.ply, 'move: ' + a.uci);
+    var stake = function (usd) { return 'stake: ' + usd + ' testnet USD, on your own win'; };
+    if (a.action === 'challenge') lines.push.apply(lines, ['action: challenge'].concat(a.game ? ['game: ' + a.game] : [], ['opponent: ' + a.opponent, 'you play: ' + a.colour, stake(a.stake_usd), 'time control: ' + a.time_control, 'viewer speed: ' + a.speed], a.grant ? grantLines(a.grant) : []));
+    else if (a.action === 'accept') lines.push.apply(lines, ['action: accept challenge', 'game: ' + a.game, 'you play: ' + a.colour, stake(a.stake_usd)].concat(a.grant ? grantLines(a.grant) : []));
+    else if (a.action === 'grant') lines.push.apply(lines, ['action: grant a game key', 'game: ' + a.game, 'you play: ' + a.colour, stake(a.stake_usd)].concat(grantLines(a.grant)));
+    else if (a.action === 'revoke') lines.push('action: end game key', 'game: ' + a.game);
+    else if (a.action === 'scoresheet') lines.push('action: sign the scoresheet (I accept the result)', 'game: ' + a.game, 'result: ' + a.result, 'plies: ' + a.plies, 'move chain: ' + a.chain_head);
     else lines.push('action: predict (calibration only)', 'game: ' + a.game, 'side: ' + a.side + ' wins', 'probability: ' + a.probability);
     lines.push('wallet: ' + wallet.toLowerCase(), 'time: ' + ts);
     return lines.join('\n');
   }
+  // What the game key signs (src/arena/game-key.ts gameKeyPayload).
+  var ACT_WORDS = { move: 'move', resign: 'resign', offer_draw: 'offer draw', accept_draw: 'accept draw' };
+  function gameKeyPayload(a, time) {
+    var lines = ['HyperDAG AgentChess game key', 'game: ' + a.game, 'action: ' + ACT_WORDS[a.act], 'ply: ' + a.ply, 'prev: ' + a.prev];
+    if (a.act === 'move') lines.push('move: ' + (a.uci || ''));
+    lines.push('time: ' + time);
+    return lines.join('\n');
+  }
+  // The move chain (src/arena/game-key.ts chainGenesis / chainNext / chainHead), computed here, independently.
+  async function sha256hex(s) { var d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))), h = ''; for (var i = 0; i < d.length; i++) h += d[i].toString(16).padStart(2, '0'); return h; }
+  async function chainHashes(game, moves) {
+    var h = await sha256hex('HyperDAG AgentChess game ' + game), out = [h];
+    for (var i = 0; i < moves.length; i++) { h = await sha256hex(h + '\n' + (i + 1) + '\n' + moves[i].uci); out.push(h); }
+    return out; // out[n] = the chain after n moves
+  }
+  // Compare a server copy with this browser's own chain: what it recomputes, and what it signed.
+  async function chainProblems(game, moves, signedByMe) {
+    var hs = await chainHashes(game, moves), problems = [];
+    moves.forEach(function (m, i) { if (m.hash && m.hash !== hs[i + 1]) problems.push('ply ' + (i + 1) + ': the server hash does not follow from the moves'); });
+    Object.keys(signedByMe || {}).forEach(function (ply) {
+      var mine = signedByMe[ply], theirs = moves[Number(ply) - 1];
+      if (!theirs || theirs.uci !== mine.uci || hs[Number(ply) - 1] !== mine.prev) problems.push('ply ' + ply + ': this browser signed ' + mine.uci + ', the server shows ' + (theirs ? theirs.uci : 'nothing'));
+    });
+    return problems;
+  }
+  function b64url(bytes) { var s = ''; for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+  async function thumbprint(jwk) { var d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('{"crv":"P-256","kty":"EC","x":"' + jwk.x + '","y":"' + jwk.y + '"}'))); return b64url(d); }
+
+  // Game keys live in IndexedDB as non-extractable CryptoKeys: usable by this origin, never readable as bytes.
+  function idb() { return new Promise(function (ok, no) { var r = indexedDB.open('agentchess-game-keys', 1); r.onupgradeneeded = function () { r.result.createObjectStore('keys'); }; r.onsuccess = function () { ok(r.result); }; r.onerror = function () { no(r.error); }; }); }
+  async function idbGet(k) { var db = await idb(); return new Promise(function (ok, no) { var q = db.transaction('keys').objectStore('keys').get(k); q.onsuccess = function () { ok(q.result || null); }; q.onerror = function () { no(q.error); }; }); }
+  async function idbPut(k, v) { var db = await idb(); return new Promise(function (ok, no) { var t = db.transaction('keys', 'readwrite'); t.objectStore('keys').put(v, k); t.oncomplete = function () { ok(); }; t.onerror = function () { no(t.error); }; }); }
+  function keyId(game) { return game + '|' + me(); }
+  async function newGameKey() {
+    var pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+    var j = await crypto.subtle.exportKey('jwk', pair.publicKey), jwk = { kty: 'EC', crv: 'P-256', x: j.x, y: j.y };
+    return { pair: pair, jwk: jwk, thumb: await thumbprint(jwk) };
+  }
+
   function hex(s) { var b = new TextEncoder().encode(s), h = '0x'; for (var i = 0; i < b.length; i++) h += b[i].toString(16).padStart(2, '0'); return h; }
   async function readJson(r) { try { return await r.json(); } catch (e) { return {}; } }
-  async function signed(method, path, body, action) {
+  async function send(path, body, headers) {
+    var r = await fetch(path, { method: 'POST', headers: Object.assign({ 'content-type': 'application/json' }, headers), body: JSON.stringify(body || {}) });
+    var j = await readJson(r);
+    if (!r.ok) { var e = new Error((j.error || ('HTTP ' + r.status)) + (j.reason ? ': ' + j.reason : j.message ? ': ' + j.message : '')); e.body = j; throw e; }
+    return j;
+  }
+  // A wallet signature, after showing the exact text (and, for a grant, what it means in plain words).
+  async function signed(path, body, action, why) {
     if (!S.wallet) throw new Error('Connect a wallet first.');
     var ts = new Date().toISOString();
-    var text = action ? arenaStatement(action, S.wallet, ts) : authMessage(method, path, S.wallet, ts);
-    $('sign-text').textContent = text;
-    if (!window.confirm('Your wallet will now ask you to sign exactly this:\n\n' + text)) throw new Error('Cancelled. Nothing was signed.');
+    var text = action ? arenaStatement(action, S.wallet, ts) : authMessage('POST', path, S.wallet, ts);
+    $('sign-why').textContent = why || ''; $('sign-text').textContent = text;
+    if (!window.confirm((why ? why + '\n\n' : '') + 'Your wallet will now ask you to sign exactly this:\n\n' + text)) throw new Error('Cancelled. Nothing was signed.');
     var sig = await window.ethereum.request({ method: 'personal_sign', params: [hex(text), S.wallet] });
-    var r = await fetch(path, { method: method, headers: { 'content-type': 'application/json', 'x-hd-wallet': S.wallet, 'x-hd-timestamp': ts, 'x-hd-signature': sig }, body: JSON.stringify(body || {}) });
-    var j = await readJson(r);
-    if (!r.ok) throw new Error((j.error || ('HTTP ' + r.status)) + (j.reason ? ': ' + j.reason : j.message ? ': ' + j.message : ''));
-    return j;
+    return send(path, body, { 'x-hd-wallet': S.wallet, 'x-hd-timestamp': ts, 'x-hd-signature': sig });
+  }
+  // A game-key signature: no popup. Records what this browser signed, for the chain check.
+  async function keyed(path, body, act, uci) {
+    var g = await getJson(API + '/games/' + S.game.id), rec = await idbGet(keyId(S.game.id));
+    if (!rec) { $('grant').disabled = false; throw new Error('This browser has no game key for this game. Grant one (one wallet signature; the game clock keeps running).'); }
+    var hs = await chainHashes(g.id, g.moves), ply = g.moves.length + 1, time = new Date().toISOString();
+    var payload = gameKeyPayload({ game: g.id, act: act, ply: ply, prev: hs[hs.length - 1], uci: uci }, time);
+    var sig = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, rec.pair.privateKey, new TextEncoder().encode(payload)));
+    if (act === 'move') { rec.signed = rec.signed || {}; rec.signed[ply] = { uci: uci, prev: hs[hs.length - 1] }; await idbPut(keyId(g.id), rec); }
+    try { return await send(path, body, { 'x-arena-key-signature': b64url(sig), 'x-arena-key-time': time }); }
+    catch (e) { if (e.body && (e.body.error === 'game_key_revoked')) $('grant').disabled = false; throw e; }
   }
   async function getJson(path) { var r = await fetch(path); var j = await readJson(r); if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }
   function guard(fn) { return function (ev) { if (ev && ev.preventDefault) ev.preventDefault(); Promise.resolve(fn(ev)).catch(function (e) { say(e.message || String(e), true); }); }; }
+  function colourOf(g, ref) { return g.white === ref ? 'white' : g.black === ref ? 'black' : null; }
 
   // 1. Wallet
   $('connect').addEventListener('click', guard(async function () {
@@ -158,16 +245,17 @@ export const ARENA_JS = String.raw`(function () {
     if (S.game) render();
   }));
   $('account').addEventListener('click', guard(async function () {
-    var j = await signed('POST', '/api/v1/account/connect', {});
+    var j = await signed('/api/v1/account/connect', {}, null, '');
     say(j.created ? 'Account created. You can play now.' : 'Account confirmed. You can play now.');
   }));
 
-  // 2. Challenge
+  // 2. Challenge: the challenge, its stake and the game key's grant in ONE wallet signature.
   $('challenge').addEventListener('submit', guard(async function (ev) {
-    var f = ev.target, agent = f.agent.value.trim(), color = f.color.value;
-    var body = { white: color === 'white' ? S.wallet : agent, black: color === 'white' ? agent : S.wallet, stake_usd: Number(f.stake.value), time_control: f.tc.value, speed: $('speed').value };
-    var act = { action: 'challenge', opponent: 'agent:' + agent.toLowerCase(), colour: color, stake_usd: body.stake_usd, time_control: body.time_control, speed: body.speed };
-    var j = await signed('POST', API + '/challenges', body, act);
+    var f = ev.target, agent = f.agent.value.trim().toLowerCase(), color = f.color.value, id = crypto.randomUUID(), k = await newGameKey();
+    var body = { game_id: id, white: color === 'white' ? S.wallet : agent, black: color === 'white' ? agent : S.wallet, stake_usd: Number(f.stake.value), time_control: f.tc.value, speed: $('speed').value, game_key: k.jwk };
+    var act = { action: 'challenge', game: id, opponent: 'agent:' + agent, colour: color, stake_usd: body.stake_usd, time_control: body.time_control, speed: body.speed, grant: k.thumb };
+    var j = await signed(API + '/challenges', body, act, GRANT_WHY);
+    await idbPut(id + '|' + me(), { pair: k.pair, thumb: k.thumb, signed: {} });
     say('Challenge sent (' + j.challenge.id + '). The agent must accept it. ' + (j.challenge.rated ? 'Rated game.' : 'Unrated game: these players are not shown to have different owners.'));
     list('pending');
   }));
@@ -186,7 +274,12 @@ export const ARENA_JS = String.raw`(function () {
       var challenged = g.challenger === g.white ? g.black : g.white;
       if (g.status === 'pending' && me() && challenged === me()) {
         var a = document.createElement('button'); a.type = 'button'; a.textContent = 'Accept';
-        a.addEventListener('click', guard(async function () { await signed('POST', API + '/challenges/' + g.id + '/accept', {}, { action: 'accept', game: g.id }); say('Accepted. The game is live.'); await watch(g.id); }));
+        a.addEventListener('click', guard(async function () {
+          var k = await newGameKey();
+          await signed(API + '/challenges/' + g.id + '/accept', { game_key: k.jwk }, { action: 'accept', game: g.id, colour: colourOf(g, me()), stake_usd: g.stake_usd, grant: k.thumb }, GRANT_WHY);
+          await idbPut(g.id + '|' + me(), { pair: k.pair, thumb: k.thumb, signed: {} });
+          say('Accepted. The game is live.'); await watch(g.id);
+        }));
         li.appendChild(a);
       }
       ul.appendChild(li);
@@ -215,7 +308,11 @@ export const ARENA_JS = String.raw`(function () {
       b.appendChild(btn);
     }
     showClocks();
-    if (S.game) $('players').textContent = 'White ' + short(S.game.white) + ' vs Black ' + short(S.game.black) + (myColor() ? ' (you are ' + (myColor() === 'w' ? 'White' : 'Black') + (myTurn() ? ', your move' : '') + ')' : '');
+    var live = !!(S.game && S.game.status === 'live' && myColor()), over = !!(S.game && S.game.status === 'finished' && myColor());
+    $('offer-draw').disabled = !live; $('resign').disabled = !live; $('end-key').disabled = !live;
+    $('accept-draw').disabled = !(live && S.game.draw_offer && S.game.draw_offer.by !== me());
+    $('scoresheet').disabled = !over;
+    if (S.game) $('players').textContent = 'White ' + short(S.game.white) + ' vs Black ' + short(S.game.black) + (myColor() ? ' (you are ' + (myColor() === 'w' ? 'White' : 'Black') + (myTurn() ? ', your move' : '') + ')' : '') + (S.game.draw_offer ? '. A draw is offered.' : '');
   }
   async function click(ev) {
     var sq = ev.currentTarget.getAttribute('data-sq'), p = grid(S.fen)[sq];
@@ -224,10 +321,44 @@ export const ARENA_JS = String.raw`(function () {
     if (S.sel === sq) { S.sel = null; render(); return; }
     var from = S.sel, piece = grid(S.fen)[from]; S.sel = null; render();
     var uci = from + sq + ((piece === 'P' && sq[1] === '8') || (piece === 'p' && sq[1] === '1') ? $('promo').value : '');
-    var fresh = await getJson(API + '/games/' + S.game.id); // the statement names the ply this move will be
-    await signed('POST', API + '/games/' + S.game.id + '/move', { uci: uci }, { action: 'move', game: S.game.id, ply: fresh.moves.length + 1, uci: uci });
+    await keyed(API + '/games/' + S.game.id + '/move', { uci: uci }, 'move', uci);
     say('Moved ' + uci + '.');
   }
+  $('offer-draw').addEventListener('click', guard(async function () { await keyed(API + '/games/' + S.game.id + '/draw', { draw: 'offer' }, 'offer_draw'); say('Draw offered. It stands until a move is made.'); await refresh(); }));
+  $('accept-draw').addEventListener('click', guard(async function () {
+    if (!window.confirm('Accept the draw? The game ends now, and a draw can lose this game\'s stake.')) return;
+    await keyed(API + '/games/' + S.game.id + '/draw', { draw: 'accept' }, 'accept_draw'); await refresh();
+  }));
+  $('resign').addEventListener('click', guard(async function () {
+    if (!window.confirm('Resign this game? You lose it now, and with it this game\'s stake.')) return;
+    await keyed(API + '/games/' + S.game.id + '/resign', {}, 'resign'); await refresh();
+  }));
+  $('grant').addEventListener('click', guard(async function () {
+    var g = S.game, k = await newGameKey();
+    await signed(API + '/games/' + g.id + '/game-key', { game_key: k.jwk }, { action: 'grant', game: g.id, colour: colourOf(g, me()), stake_usd: g.stake.usd, grant: k.thumb }, GRANT_WHY);
+    var old = await idbGet(keyId(g.id));
+    await idbPut(keyId(g.id), { pair: k.pair, thumb: k.thumb, signed: (old && old.signed) || {} });
+    $('grant').disabled = true; say('This browser has a game key for this game. Any earlier key of yours no longer acts.');
+  }));
+  $('end-key').addEventListener('click', guard(async function () {
+    await signed(API + '/games/' + S.game.id + '/game-key/revoke', {}, { action: 'revoke', game: S.game.id }, 'Ends your game key for this game. Until you grant a new one, this browser cannot move for you; the clock keeps running.');
+    $('grant').disabled = false; say('Game key ended.');
+  }));
+  $('scoresheet').addEventListener('click', guard(async function () {
+    var g = await getJson(API + '/games/' + S.game.id), result = g.result + ' (' + g.termination + ')';
+    await signed(API + '/games/' + g.id + '/scoresheet', { result: result, chain_head: g.chain_head }, { action: 'scoresheet', game: g.id, result: result, plies: g.moves.length, chain_head: g.chain_head },
+      'Optional. Signing says you accept this result and this move chain. If you do not sign, the result stands anyway.');
+    say('Scoresheet signed.');
+  }));
+
+  // The page's own copy of the chain: recompute it, compare it with what this browser signed, flag any difference.
+  async function checkChain(g) {
+    var rec = me() ? await idbGet(keyId(g.id)) : null, problems = await chainProblems(g.id, g.moves, rec && rec.signed), c = $('chain');
+    c.className = problems.length ? 'err' : 'ok';
+    c.textContent = problems.length ? 'Warning: the server copy of this game differs from this browser: ' + problems.join('; ') : 'Move chain checked in this browser: ' + g.moves.length + ' moves.';
+  }
+  async function refresh() { S.game = await getJson(API + '/games/' + S.game.id); render(); await checkChain(S.game); }
+
   function fmt(ms) { if (ms == null) return '--:--'; var s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
   function showClocks() {
     if (!S.clock) return;
@@ -240,22 +371,23 @@ export const ARENA_JS = String.raw`(function () {
     if (S.es) S.es.close();
     S.game = await getJson(API + '/games/' + id);
     S.sel = null; S.fen = null; $('moves').textContent = ''; $('result').textContent = '';
+    if (myColor() && S.game.status !== 'finished') $('grant').disabled = !!(await idbGet(keyId(id)));
+    await checkChain(S.game);
     var speed = myColor() && S.game.status === 'live' ? 'machine' : $('speed').value; // a player watches its own game at the head
     S.es = new EventSource(API + '/games/' + id + '/stream?speed=' + encodeURIComponent(speed));
     // At machine speed the stream is at the head, so a clock runs from the server's own timestamp.
     function since(at) { return speed === 'machine' && at ? Date.parse(at) : Date.now(); }
-    S.es.addEventListener('start', function (e) { var d = JSON.parse(e.data); S.fen = d.fen; S.clock = { w: d.clock_ms.w, b: d.clock_ms.b, at: since(d.started_at) }; render(); showClocks(); });
-    S.es.addEventListener('status', function (e) {
-      var d = JSON.parse(e.data);
-      getJson(API + '/games/' + id).then(function (g) { S.game = g; if (d.started_at && S.clock) S.clock.at = since(d.started_at); render(); say(myTurn() ? 'The game is live. Your move.' : 'The game is ' + g.status + '.'); }).catch(function () {});
+    S.es.addEventListener('start', function (e) { var d = JSON.parse(e.data); S.fen = d.fen; S.clock = { w: d.clock_ms.w, b: d.clock_ms.b, at: since(d.started_at) }; render(); });
+    S.es.addEventListener('status', function () {
+      refresh().then(function () { if (S.clock && S.game.started_at) S.clock.at = since(S.game.started_at); say(myTurn() ? 'The game is live. Your move.' : 'The game is ' + S.game.status + '.'); }).catch(function () {});
     });
     S.es.addEventListener('move', function (e) {
       var d = JSON.parse(e.data); S.fen = d.fen; S.clock = { w: d.clock_ms.w, b: d.clock_ms.b, at: since(d.at) };
       var li = document.createElement('li'); li.textContent = d.san + ' (' + d.uci + ')'; $('moves').appendChild(li);
-      render(); showClocks();
-      if (myColor()) getJson(API + '/games/' + id).then(function (g) { S.game = g; render(); if (myTurn()) say('Your move.'); }).catch(function () {});
+      render();
+      if (myColor()) refresh().then(function () { if (myTurn()) say('Your move.'); }).catch(function () {});
     });
-    S.es.addEventListener('end', function (e) { var d = JSON.parse(e.data); S.game.status = 'finished'; $('result').textContent = 'Result: ' + (d.result || 'none') + ' (' + d.termination + ')'; S.es.close(); render(); });
+    S.es.addEventListener('end', function (e) { var d = JSON.parse(e.data); $('result').textContent = 'Result: ' + (d.result || 'none') + ' (' + d.termination + ')'; S.es.close(); refresh().catch(function () {}); });
     say((S.game.status === 'pending' ? 'Waiting for the challenge to be accepted. ' : '') + 'Streaming at speed ' + speed + '.');
   }
   render();
