@@ -107,10 +107,14 @@ export interface GameRecord {
   moves?: readonly ChainMove[]; events?: readonly ChainEvent[];
 }
 /**
- * How the result is known. `verified`: it follows from the record alone (the moves replay to it with
- * chess.js, or a verified signed event, or a recorded agent event, made it). `referee_attested`: a
- * loss on time. The signatures do not cover the clock, so a timeout rests on the referee's word and is
- * NEVER reported as verified. null: no result (the game is not over).
+ * How the result is known.
+ *   `verified`: it follows from the record alone AND the act that decided it is signed by a human's
+ *     game key: a human's signed move that ends the game on the board (its signature commits to every
+ *     move before it), a human's signed resign, a draw both sides signed.
+ *   `referee_attested`: it rests on something only the server vouches for: a loss on time (the
+ *     signatures do not cover the clock), or an AGENT seat's unsigned act (its resign, its draw offer
+ *     or acceptance, or the agent's own last move ending the game on the board). Never `verified`.
+ *   null: no result (the game is not over).
  */
 export type ResultBasis = 'verified' | 'referee_attested' | null;
 
@@ -123,15 +127,16 @@ const TIMEOUT = /^loss on time \((White|Black)'s clock ran out\)$/;
  */
 export function deriveResult(game: GameRecord, validEvents: readonly ChainEvent[]): { result: Result; termination: string; basis: Exclude<ResultBasis, null> } | null {
   const moves = game.moves ?? [], board = outcomeOf(replay(moves)), last = moves.length + 1;
-  if (board) return { ...board, basis: 'verified' };
+  /** Verified only when every act the result rests on is a human's (and so carries a verified signature). */
+  const basisOf = (...by: string[]): Exclude<ResultBasis, null> => (by.every((b) => b.startsWith('human:')) ? 'verified' : 'referee_attested');
+  if (board) return { ...board, basis: basisOf(moves.length % 2 === 1 ? game.white : game.black) };
   const at = validEvents.filter((e) => e.ply === last);
   const resign = at.find((e) => e.act === 'resign');
-  if (resign) return resign.by === game.white ? { result: '0-1', termination: 'White resigned', basis: 'verified' } : { result: '1-0', termination: 'Black resigned', basis: 'verified' };
+  if (resign) return { ...(resign.by === game.white ? { result: '0-1' as const, termination: 'White resigned' } : { result: '1-0' as const, termination: 'Black resigned' }), basis: basisOf(resign.by) };
   // A draw is agreed when one side offers and the OTHER side then offers or accepts, with no move between.
   const offer = at.findIndex((e) => e.act === 'offer_draw');
-  if (offer >= 0 && at.slice(offer + 1).some((e) => e.by !== at[offer]!.by && (e.act === 'accept_draw' || e.act === 'offer_draw'))) {
-    return { result: '1/2-1/2', termination: 'draw agreed', basis: 'verified' };
-  }
+  const reply = offer >= 0 ? at.slice(offer + 1).find((e) => e.by !== at[offer]!.by && (e.act === 'accept_draw' || e.act === 'offer_draw')) : undefined;
+  if (reply) return { result: '1/2-1/2', termination: 'draw agreed', basis: basisOf(at[offer]!.by, reply.by) };
   const t = TIMEOUT.exec(game.termination ?? '');
   if (t) {
     const loser = t[1] === 'White' ? 'w' : 'b', toMove = moves.length % 2 === 0 ? 'w' : 'b';
@@ -139,6 +144,24 @@ export function deriveResult(game: GameRecord, validEvents: readonly ChainEvent[
     if (loser === toMove && game.result === result) return { result, termination: game.termination as string, basis: 'referee_attested' };
   }
   return null;
+}
+
+/**
+ * The statements a player could have signed to grant `grant.thumbprint` in this game: the grant itself,
+ * and the challenge (challenger) or the accept (the other player) that can carry it. Rebuilt with
+ * `arenaStatement`, using the time the statement itself names. The page has a byte-identical copy,
+ * pinned by tests/arena-game-keys.test.ts. A published statement must equal one of these whole.
+ */
+export function expectedGrantStatements(game: GameRecord, grant: Pick<PublishedGrant, 'participant' | 'thumbprint' | 'grant_statement'>): string[] {
+  const colour = grant.participant === game.white ? 'white' : grant.participant === game.black ? 'black' : null;
+  const time = /\ntime: ([^\n]*)$/.exec(grant.grant_statement)?.[1];
+  if (!colour || time === undefined) return [];
+  const wallet = grant.participant.replace(/^human:/, ''), stake_usd = Number(game.stake?.usd);
+  const opponent = grant.participant === game.white ? game.black : game.white;
+  const variants: ArenaAction[] = [{ action: 'grant', game: game.id, colour, stake_usd, grant: grant.thumbprint }];
+  if (grant.participant === game.challenger) variants.push({ action: 'challenge', game: game.id, opponent, colour, stake_usd, time_control: game.time_control, speed: game.default_speed, grant: grant.thumbprint });
+  else variants.push({ action: 'accept', game: game.id, colour, stake_usd, grant: grant.thumbprint });
+  return variants.map((a) => arenaStatement(a, wallet, time));
 }
 
 /**
@@ -155,8 +178,8 @@ export function deriveResult(game: GameRecord, validEvents: readonly ChainEvent[
  *   - every grant is for a seated human, and its statement is EXACTLY one this player could have signed
  *     for this game (rebuilt from the record, not searched), and recovers to that player's wallet.
  *     Grants are cached per participant AND thumbprint;
- *   - the RESULT follows from the moves (chess.js replay) and the valid events; a loss on time is
- *     reported as `referee_attested`, never `verified`.
+ *   - the RESULT follows from the moves (chess.js replay) and the valid events; a loss on time, or a
+ *     result resting on an agent seat's unsigned act, is reported as `referee_attested`, never `verified`.
  * Returns every problem found, not just the first.
  */
 export async function verifyGameRecord(game: GameRecord, grants: readonly PublishedGrant[]): Promise<{ ok: boolean; problems: string[]; result_basis: ResultBasis; result: { result: Result; termination: string } | null }> {
@@ -169,24 +192,13 @@ export async function verifyGameRecord(game: GameRecord, grants: readonly Publis
   for (const g of grants) {
     if (!seatColour(g.participant) || !isHuman(g.participant)) problems.push(`grant ${g.thumbprint}: ${g.participant} is not a human player in this game`);
   }
-  /** The statements this player could have signed to grant this key here: rebuilt, then compared whole. */
-  const expectedStatements = (g: PublishedGrant): string[] => {
-    const colour = seatColour(g.participant), time = /\ntime: ([^\n]*)$/.exec(g.grant_statement)?.[1];
-    if (!colour || time === undefined) return [];
-    const wallet = g.participant.replace(/^human:/, ''), stake_usd = Number(game.stake?.usd);
-    const opponent = g.participant === game.white ? game.black : game.white;
-    const variants: ArenaAction[] = [{ action: 'grant', game: game.id, colour, stake_usd, grant: g.thumbprint }];
-    if (g.participant === game.challenger) variants.push({ action: 'challenge', game: game.id, opponent, colour, stake_usd, time_control: game.time_control, speed: game.default_speed, grant: g.thumbprint });
-    else variants.push({ action: 'accept', game: game.id, colour, stake_usd, grant: g.thumbprint });
-    return variants.map((a) => arenaStatement(a, wallet, time));
-  };
   const grantOk = new Map<string, boolean>();
   const grantFor = async (by: string, key: string | undefined): Promise<PublishedGrant | null> => {
     const g = grants.find((x) => x.participant === by && x.thumbprint === key);
     if (!g) return null;
     const id = `${g.participant}|${g.thumbprint}`;
     if (!grantOk.has(id)) {
-      const exact = expectedStatements(g).includes(g.grant_statement);
+      const exact = expectedGrantStatements(game, g).includes(g.grant_statement);
       const signed = exact && (await verifyWalletMessage(g.participant.replace(/^human:/, ''), g.grant_statement, g.grant_signature)).ok;
       grantOk.set(id, signed && jwkThumbprint(g.public_jwk) === g.thumbprint);
     }

@@ -218,8 +218,7 @@ export const ARENA_JS = String.raw`(function () {
       var id = by + '|' + thumb;
       if (!(id in keys)) {
         var x = grants.find(function (y) { return y.participant === by && y.thumbprint === thumb; });
-        var ok = !!x && (await thumbprint(x.public_jwk)) === thumb && x.grant_statement.indexOf('game: ' + g.id + '\n') >= 0
-          && x.grant_statement.indexOf('game key: ' + thumb + '\n') >= 0 && x.grant_statement.indexOf('you play: ' + colour(by) + '\n') >= 0;
+        var ok = !!x && (await thumbprint(x.public_jwk)) === thumb && expectedGrantStatements(g, x).indexOf(x.grant_statement) >= 0;
         keys[id] = ok ? await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: x.public_jwk.x, y: x.public_jwk.y }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']) : null;
       }
       return keys[id];
@@ -276,21 +275,39 @@ export const ARENA_JS = String.raw`(function () {
     }
     return { problems: problems, basis: basis };
   }
+  // The statements a player could have signed to grant this key here, rebuilt whole with arenaStatement
+  // (src/arena/game-key.ts expectedGrantStatements; this copy is pinned equal to it by a test).
+  function expectedGrantStatements(g, x) {
+    var c = x.participant === g.white ? 'white' : x.participant === g.black ? 'black' : null;
+    var tm = /\ntime: ([^\n]*)$/.exec(x.grant_statement), time = tm ? tm[1] : undefined;
+    if (!c || time === undefined) return [];
+    var wallet = x.participant.replace(/^human:/, ''), stake_usd = Number(g.stake && g.stake.usd);
+    var opponent = x.participant === g.white ? g.black : g.white;
+    var variants = [{ action: 'grant', game: g.id, colour: c, stake_usd: stake_usd, grant: x.thumbprint }];
+    if (x.participant === g.challenger) variants.push({ action: 'challenge', game: g.id, opponent: opponent, colour: c, stake_usd: stake_usd, time_control: g.time_control, speed: g.default_speed, grant: x.thumbprint });
+    else variants.push({ action: 'accept', game: g.id, colour: c, stake_usd: stake_usd, grant: x.thumbprint });
+    return variants.map(function (a) { return arenaStatement(a, wallet, time); });
+  }
   // The result the record supports (src/arena/game-key.ts deriveResult): the board, then a valid resign or
-  // agreed draw after the last move; a loss on time only as the referee's word ('referee_attested').
+  // agreed draw after the last move. 'verified' only when the deciding act is a human's signed one; a loss
+  // on time, or anything resting on an agent seat's unsigned act, is the referee's word ('referee_attested').
   function deriveResult(g, moves, validEvents) {
     var c = new window.ArenaChess();
+    function basisOf() { return Array.prototype.every.call(arguments, function (b) { return String(b).indexOf('human:') === 0; }) ? 'verified' : 'referee_attested'; }
     moves.forEach(function (m) { c.move({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), promotion: m.uci[4] }); });
-    if (c.isCheckmate()) return { result: c.turn() === 'w' ? '0-1' : '1-0', termination: 'checkmate', basis: 'verified' };
-    if (c.isStalemate()) return { result: '1/2-1/2', termination: 'stalemate', basis: 'verified' };
-    if (c.isThreefoldRepetition()) return { result: '1/2-1/2', termination: 'threefold repetition', basis: 'verified' };
-    if (c.isInsufficientMaterial()) return { result: '1/2-1/2', termination: 'insufficient material', basis: 'verified' };
-    if (c.isDrawByFiftyMoves()) return { result: '1/2-1/2', termination: 'fifty-move rule', basis: 'verified' };
+    var lastMover = moves.length % 2 === 1 ? g.white : g.black, board = null;
+    if (c.isCheckmate()) board = { result: c.turn() === 'w' ? '0-1' : '1-0', termination: 'checkmate' };
+    else if (c.isStalemate()) board = { result: '1/2-1/2', termination: 'stalemate' };
+    else if (c.isThreefoldRepetition()) board = { result: '1/2-1/2', termination: 'threefold repetition' };
+    else if (c.isInsufficientMaterial()) board = { result: '1/2-1/2', termination: 'insufficient material' };
+    else if (c.isDrawByFiftyMoves()) board = { result: '1/2-1/2', termination: 'fifty-move rule' };
+    if (board) return { result: board.result, termination: board.termination, basis: basisOf(lastMover) };
     var last = moves.length + 1, at = validEvents.filter(function (e) { return e.ply === last; });
     var resign = at.find(function (e) { return e.act === 'resign'; });
-    if (resign) return resign.by === g.white ? { result: '0-1', termination: 'White resigned', basis: 'verified' } : { result: '1-0', termination: 'Black resigned', basis: 'verified' };
+    if (resign) return resign.by === g.white ? { result: '0-1', termination: 'White resigned', basis: basisOf(resign.by) } : { result: '1-0', termination: 'Black resigned', basis: basisOf(resign.by) };
     var offer = at.findIndex(function (e) { return e.act === 'offer_draw'; });
-    if (offer >= 0 && at.slice(offer + 1).some(function (e) { return e.by !== at[offer].by && (e.act === 'accept_draw' || e.act === 'offer_draw'); })) return { result: '1/2-1/2', termination: 'draw agreed', basis: 'verified' };
+    var reply = offer >= 0 ? at.slice(offer + 1).find(function (e) { return e.by !== at[offer].by && (e.act === 'accept_draw' || e.act === 'offer_draw'); }) : undefined;
+    if (reply) return { result: '1/2-1/2', termination: 'draw agreed', basis: basisOf(at[offer].by, reply.by) };
     var t = /^loss on time \((White|Black)'s clock ran out\)$/.exec(g.termination || '');
     if (t) {
       var loser = t[1] === 'White' ? 'w' : 'b', toMove = moves.length % 2 === 0 ? 'w' : 'b', result = loser === 'w' ? '0-1' : '1-0';
@@ -486,7 +503,7 @@ export const ARENA_JS = String.raw`(function () {
     c.textContent = problems.length
       ? 'Warning: this browser cannot verify the server copy of this game: ' + problems.join('; ')
       : 'Move chain checked in this browser: ' + g.moves.length + ' moves, every human move signed by its granted key.'
-        + (checked.basis === 'verified' ? ' The result follows from the record.' : checked.basis === 'referee_attested' ? ' The result is a loss on time: the referee\'s word, which the signatures do not cover.' : '')
+        + (checked.basis === 'verified' ? ' The result follows from the record and a signed human act.' : checked.basis === 'referee_attested' ? ' The result rests on the referee\'s word (a loss on time, or an agent\'s unsigned act), which no signature covers.' : '')
         + (w.notChecked ? ' The grants\' wallet signatures were not checked here (no wallet that can recover them).' : ' The grants\' wallet signatures check out.');
   }
   async function refresh() { S.game = await getJson(API + '/games/' + S.game.id); render(); await checkChain(S.game); }

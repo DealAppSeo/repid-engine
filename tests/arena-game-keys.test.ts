@@ -29,7 +29,7 @@ jest.mock('../src/auth/api-keys', () => {
 
 import { arenaStatement, type ArenaAction } from '../src/routes/arena';
 import { ARENA_JS } from '../src/arena/page';
-import { chainGenesis, chainHead, chainNext, gameKeyPayload, grantLines, jwkThumbprint, verifyGameRecord, type KeyAct } from '../src/arena/game-key';
+import { chainGenesis, chainHead, chainNext, expectedGrantStatements, gameKeyPayload, grantLines, jwkThumbprint, verifyGameRecord, type KeyAct } from '../src/arena/game-key';
 import { A1, A3, human, human2, memStore, appWith, agent, signedArena, challengeBy } from './helpers/arena-fixtures';
 import type express from 'express';
 import { Chess } from 'chess.js';
@@ -77,6 +77,15 @@ async function humanVsHuman(app: express.Express) {
   const a = await request(app).post(`/api/v1/arena/challenges/${id}/accept`).set(await signedArena(human2, { action: 'accept', game: id, colour: 'black', stake_usd: 1, grant: k2.thumb })).send({ game_key: k2.jwk });
   expect(a.status).toBe(200);
   return { id, k, k2 };
+}
+
+/** Scholar's mate: the HUMAN (white) delivers it with a signed move, so the result is verified. */
+async function humanMates() {
+  const app = appWith(memStore().store), { id, k } = await keyGame(app);
+  for (const [who, uci] of [['k', 'e2e4'], ['a', 'e7e5'], ['k', 'f1c4'], ['a', 'b8c6'], ['k', 'd1h5'], ['a', 'g8f6'], ['k', 'h5f7']] as const) {
+    expect((who === 'k' ? await keyMove(app, id, k, uci) : await agentMove(app, id, A1, uci)).status).toBe(200);
+  }
+  return (await request(app).get(`/api/v1/arena/games/${id}`)).body;
 }
 
 beforeEach(() => { process.env.ARENA_ENABLED = 'true'; });
@@ -341,9 +350,15 @@ describe('the move chain is the scoresheet, and anyone can verify it', () => {
     expect(await verifyGameRecord(record, rightColour)).toMatchObject({ ok: true, problems: [] });
   });
 
-  it('RESULT: a signed prefix that claims mate fails; the full game verifies as checkmate', async () => {
+  it('BASIS: a mate the human signed is verified; a mate made by the agent\'s unsigned move is referee_attested', async () => {
+    const human1 = await humanMates();
+    expect(await verifyGameRecord(human1, human1.grants)).toMatchObject({ ok: true, result_basis: 'verified', result: { result: '1-0', termination: 'checkmate' } });
+    const { g } = await playedGame(); // black, the agent, delivers 2...Qh4#
+    expect(await verifyGameRecord(g, g.grants)).toMatchObject({ ok: true, result_basis: 'referee_attested', result: { result: '0-1', termination: 'checkmate' } });
+  });
+
+  it('RESULT: a signed prefix that claims mate fails', async () => {
     const { g } = await playedGame();
-    expect(await verifyGameRecord(g, g.grants)).toMatchObject({ ok: true, result_basis: 'verified', result: { result: '0-1', termination: 'checkmate' } });
     const prefix = structuredClone(g); prefix.moves = prefix.moves.slice(0, 3); // every signature still good
     const v = await verifyGameRecord(prefix, g.grants);
     expect(v).toMatchObject({ ok: false, result_basis: null, result: null });
@@ -356,7 +371,12 @@ describe('the move chain is the scoresheet, and anyone can verify it', () => {
 
   it('RESULT: a resign or draw needs its verified event; a missing events list is a problem, never []', async () => {
     const { g } = await resignedGame();
-    expect(await verifyGameRecord(g, g.grants)).toMatchObject({ ok: true, result_basis: 'verified', result: { termination: 'White resigned' } });
+    expect(await verifyGameRecord(g, g.grants)).toMatchObject({ ok: true, result_basis: 'verified', result: { termination: 'White resigned' } }); // the human signed it
+    // An AGENT's resign is the server's word: referee_attested.
+    const app2 = appWith(memStore().store), { id: id2 } = await keyGame(app2);
+    await request(app2).post(`/api/v1/arena/games/${id2}/resign`).set(agent(A1)).send().expect(200);
+    const agentResigned = (await request(app2).get(`/api/v1/arena/games/${id2}`)).body;
+    expect(await verifyGameRecord(agentResigned, agentResigned.grants)).toMatchObject({ ok: true, result_basis: 'referee_attested', result: { termination: 'Black resigned' } });
     const stripped = structuredClone(g); stripped.events = [];
     expect((await verifyGameRecord(stripped, g.grants)).problems).toEqual(['the result 0-1 (White resigned) does not follow from the moves and the verified events']);
     const noEvents = structuredClone(g); delete noEvents.events;
@@ -367,9 +387,19 @@ describe('the move chain is the scoresheet, and anyone can verify it', () => {
     const done = (await request(app).post(`/api/v1/arena/games/${id}/draw`).set(agent(A1)).send({ draw: 'accept' })).body.game;
     const drawn = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
     expect(done.termination).toBe('draw agreed');
-    expect(await verifyGameRecord(drawn, drawn.grants)).toMatchObject({ ok: true, result_basis: 'verified' });
+    // The agent's acceptance is unsigned JSON only the server vouches for: the draw is referee_attested.
+    expect(await verifyGameRecord(drawn, drawn.grants)).toMatchObject({ ok: true, result_basis: 'referee_attested' });
     const oneOffer = structuredClone(drawn); oneOffer.events = oneOffer.events.slice(0, 1);
     expect((await verifyGameRecord(oneOffer, drawn.grants)).problems).toEqual(['the result 1/2-1/2 (draw agreed) does not follow from the moves and the verified events']);
+  });
+
+  it('EVENTS: a null events column is published as missing (not []), so "no events list" fires', async () => {
+    const m = memStore(), app = appWith(m.store), { id, k } = await keyGame(app);
+    await request(app).post(`/api/v1/arena/games/${id}/resign`).set(await keyHeaders(k, app, id, 'resign')).send().expect(200);
+    (m.games.get(id) as unknown as { events: null }).events = null;
+    const g = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
+    expect(g.events).toBeNull();
+    expect((await verifyGameRecord(g, g.grants)).problems).toEqual(['the record has no events list', 'the result 0-1 (White resigned) does not follow from the moves and the verified events']);
   });
 
   it('EVENTS: an off-list event, a missing prev, or an unknown act fails, even for an unsigned agent seat', async () => {
@@ -422,7 +452,7 @@ describe('the move chain is the scoresheet, and anyone can verify it', () => {
     m.games.get(id)!.result = '0-1';
     const ok = await request(app).post(`/api/v1/arena/games/${id}/scoresheet`).set(await signedArena(human, sheet('0-1 (checkmate)'))).send({ result: '0-1 (checkmate)', chain_head: g.chain_head });
     expect(ok.body.accepted_result).toBe(true);
-    expect(m.signals.find((x) => x.participant === g.white)!.signals.scoresheet).toMatchObject({ result_basis: 'verified' });
+    expect(m.signals.find((x) => x.participant === g.white)!.signals.scoresheet).toMatchObject({ result_basis: 'referee_attested' }); // the agent mated
   });
 
   it('moves signed by a replaced key stay verifiable', async () => {
@@ -463,8 +493,8 @@ describe('the page uses the same texts and keeps its own chain', () => {
   const src = (re: RegExp) => { const x = re.exec(ARENA_JS)?.[0]; expect(x).toBeDefined(); return x as string; };
   const fn = (name: string) => src(new RegExp(`(async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n  \\}`));
   // The page runs with chess.js as window.ArenaChess, served same-origin from the referee's own dependency.
-  const client = new Function('ArenaChess', `var window = { ArenaChess: ArenaChess };\n${src(/var ACT_WORDS = \{[^\n]*\};/)}\n${['grantLines', 'arenaStatement', 'gameKeyPayload', 'sha256hex', 'chainHashes', 'chainProblems', 'deriveResult', 'b64url', 'b64urlBytes', 'thumbprint'].map(fn).join('\n')}
-    return { grantLines, arenaStatement, gameKeyPayload, chainHashes, chainProblems, thumbprint };`)(Chess);
+  const client = new Function('ArenaChess', `var window = { ArenaChess: ArenaChess };\n${src(/var ACT_WORDS = \{[^\n]*\};/)}\n${['grantLines', 'arenaStatement', 'gameKeyPayload', 'sha256hex', 'chainHashes', 'chainProblems', 'expectedGrantStatements', 'deriveResult', 'b64url', 'b64urlBytes', 'thumbprint'].map(fn).join('\n')}
+    return { grantLines, arenaStatement, gameKeyPayload, chainHashes, chainProblems, expectedGrantStatements, thumbprint };`)(Chess);
 
   it('the grant text, every wallet statement and the key payload are identical to the server\'s', () => {
     expect(client.grantLines('T')).toEqual(grantLines('T'));
@@ -488,6 +518,8 @@ describe('the page uses the same texts and keeps its own chain', () => {
     expect(js.headers['content-type']).toMatch(/javascript/);
     expect(js.text).toMatch(/export \{[^}]*\bChess\b/);
     expect(js.text).not.toMatch(/sourceMappingURL/);
+    expect(js.headers['cache-control']).toBe('no-cache');
+    expect((await request(app).get('/arena/rules.js')).headers['cache-control']).toBe('no-cache');
     expect((await request(app).get('/arena/rules.js')).text).toContain("import { Chess } from '/arena/chess.js'");
     expect((await request(app).get('/arena')).text).toContain('<script type="module" src="/arena/rules.js"></script>');
     delete process.env.ARENA_ENABLED;
@@ -540,6 +572,34 @@ describe('the page uses the same texts and keeps its own chain', () => {
     expect((await client.chainProblems(unsigned, {})).problems).toEqual(['event 1 (resign at ply 1): a human seat with no game-key signature', 'the result 0-1 (White resigned) does not follow from the moves and the verified events']);
     const offList = structuredClone(resigned); offList.events.push({ act: 'offer_draw', by: resigned.black, ply: 40 });
     expect((await client.chainProblems(offList, {})).problems.join()).toMatch(/ply is off the move list.*no prev/);
+  });
+
+  it('the page rebuilds grant statements exactly like the server, and refuses a padded one', async () => {
+    const { g, mine } = await hvhRecord();
+    for (const x of g.grants) expect(client.expectedGrantStatements(g, x)).toEqual(expectedGrantStatements(g, x));
+    // The stand-alone "grant a game key" variant, from a re-grant.
+    const app = appWith(memStore().store), { id } = await keyGame(app), k2 = await newKey();
+    await request(app).post(`/api/v1/arena/games/${id}/game-key`).set(await signedArena(human, { action: 'grant', game: id, colour: 'white', stake_usd: 1, grant: k2.thumb })).send({ game_key: k2.jwk }).expect(201);
+    const regranted = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
+    expect(regranted.grants.map((x: { grant_statement: string }) => /action: ([^\n]*)/.exec(x.grant_statement)![1])).toEqual(['challenge', 'grant a game key']);
+    for (const x of regranted.grants) {
+      expect(client.expectedGrantStatements(regranted, x)).toEqual(expectedGrantStatements(regranted, x));
+      expect(expectedGrantStatements(regranted, x)).toContain(x.grant_statement);
+    }
+    const padded = structuredClone(g);
+    padded.grants[1].grant_statement = padded.grants[1].grant_statement.replace(/\nwallet: /, '\nalso: this key may withdraw\nwallet: ');
+    const p = (await client.chainProblems(padded, mine)).problems;
+    expect(p.join()).toMatch(/ply 2: no valid grant for key/);
+    expect(p.join()).toMatch(/ply 4: no valid grant for key/);
+  });
+
+  it('the page marks a result resting on an agent\'s unsigned act referee_attested', async () => {
+    const human1 = await humanMates();
+    expect(await client.chainProblems(human1, {})).toEqual({ problems: [], basis: 'verified' });
+    const app = appWith(memStore().store), { id } = await keyGame(app);
+    await request(app).post(`/api/v1/arena/games/${id}/resign`).set(agent(A1)).send().expect(200);
+    const agentResigned = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
+    expect(await client.chainProblems(agentResigned, {})).toEqual({ problems: [], basis: 'referee_attested' });
   });
 
   it('the page labels a loss on time referee_attested, never verified', async () => {

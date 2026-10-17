@@ -337,7 +337,8 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
       owner: { relation: g.owner_relation, evidence: g.owner_evidence, owner_distinct: g.owner_distinct, trust_evidence: g.trust_evidence },
       rated: g.rated,
       fen: chess.fen(), turn: live ? (turn === 'w' ? 'white' : 'black') : null,
-      moves: g.moves, chain_head: chainHead(g.id, g.moves), events: g.events ?? [],
+      // A missing events column stays missing (null), so a verifier reports "no events list" rather than reading [].
+      moves: g.moves, chain_head: chainHead(g.id, g.moves), events: g.events ?? null,
       draw_offer: live && standingOffer(g) ? { by: standingOffer(g)!.by } : null,
       clocks: { white_ms: clock.w, black_ms: clock.b, running: live ? (turn === 'w' ? 'white' : 'black') : null },
       legal_uci: live ? legalUci(chess) : [],
@@ -749,11 +750,12 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
   page.get('/', (_req, res) => { res.type('html').send(ARENA_HTML); });
   page.get('/arena.js', (_req, res) => { res.type('application/javascript; charset=utf-8').send(ARENA_JS); });
   // The referee's own rules (chess.js, BSD-2-Clause), so the page can replay a result itself.
-  page.get('/rules.js', (_req, res) => { res.type('application/javascript; charset=utf-8').send(ARENA_RULES_JS); });
+  // no-cache: after a deploy that bumps chess.js, a browser revalidates rather than replaying with old rules.
+  page.get('/rules.js', (_req, res) => { res.set('Cache-Control', 'no-cache').type('application/javascript; charset=utf-8').send(ARENA_RULES_JS); });
   page.get('/chess.js', (_req, res) => {
     const js = chessModuleJs();
     if (!js) return void res.status(404).json({ error: 'rules_unavailable' });
-    res.type('application/javascript; charset=utf-8').send(js);
+    res.set('Cache-Control', 'no-cache').type('application/javascript; charset=utf-8').send(js);
   });
 
   return { api, page };
