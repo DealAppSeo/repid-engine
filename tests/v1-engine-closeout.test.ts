@@ -3,8 +3,6 @@
  */
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'http://localhost:54321';
 process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'dummy';
-// The staging bind (a body naming a wallet) needs an API key; an operator key may bind a named agent.
-process.env.REPID_API_KEYS = 'test-operator-key:ops';
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,7 +13,6 @@ import { writeReceiptVote } from '../src/hal/quorum-receipt-writer';
 import proofVerifyRouter from '../src/routes/proof-verify';
 
 const state: { latest: 'row' | 'empty' } = { latest: 'row' };
-const bindStore = new Set<string>();
 
 jest.mock('../src/db', () => ({
   db: {
@@ -57,16 +54,6 @@ jest.mock('../src/db', () => ({
           },
         };
       }
-      if (table === 'human_agent_binds') {
-        return {
-          insert(row: { wallet: string; agent_id: string }) {
-            const key = `${row.wallet}:${row.agent_id}`;
-            if (bindStore.has(key)) return Promise.resolve({ error: { code: '23505' } });
-            bindStore.add(key);
-            return Promise.resolve({ error: null });
-          },
-        };
-      }
       throw new Error(`unexpected table ${table}`);
     },
   },
@@ -76,8 +63,6 @@ jest.mock('../src/db', () => ({
 const honestyARouter = require('../src/routes/honesty-a').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const halLatestRouter = require('../src/routes/hal-latest').default;
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const humanBindStagingRouter = require('../src/routes/human-bind-staging').default;
 
 const FIX_DIR = join(__dirname, 'fixtures', 'zkp');
 const meta = JSON.parse(readFileSync(join(FIX_DIR, 'leaf-rangecheck.synthetic.json'), 'utf8')) as {
@@ -86,14 +71,12 @@ const meta = JSON.parse(readFileSync(join(FIX_DIR, 'leaf-rangecheck.synthetic.js
   proof_file: string;
 };
 const proof = readFileSync(join(FIX_DIR, meta.proof_file));
-const AGENT = '11111111-1111-4111-8111-111111111111';
 
 function app() {
   const server = express();
   server.use(express.json({ limit: '2mb' }));
   server.use('/api/v1/hal', honestyARouter);
   server.use('/api/v1', halLatestRouter);
-  server.use('/api/v1', humanBindStagingRouter);
   server.use('/api/v1', proofVerifyRouter);
   return server;
 }
@@ -122,17 +105,8 @@ function writerClient() {
 }
 
 describe('v1 engine closeout', () => {
-  const savedBind = process.env.HUMAN_AGENT_BIND_ENABLED;
-
   beforeEach(() => {
     state.latest = 'row';
-    bindStore.clear();
-    delete process.env.HUMAN_AGENT_BIND_ENABLED;
-  });
-
-  afterEach(() => {
-    if (savedBind === undefined) delete process.env.HUMAN_AGENT_BIND_ENABLED;
-    else process.env.HUMAN_AGENT_BIND_ENABLED = savedBind;
   });
 
   it('omits first_pass when the column is missing', async () => {
@@ -189,18 +163,6 @@ describe('v1 engine closeout', () => {
     const missing = await request(app()).get('/api/v1/receipt/hal-latest');
     expect(missing.status).toBe(404);
     expect(missing.body).toEqual({ error: 'not_found' });
-  });
-
-  it('returns 410 and leaves the bind store empty unless the flag is the exact string true', async () => {
-    const unset = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send({ wallet: '0xabc', agent_id: AGENT });
-    expect(unset.status).toBe(410);
-    expect(unset.body).toEqual({ error: 'disabled' });
-    expect(bindStore.size).toBe(0);
-
-    process.env.HUMAN_AGENT_BIND_ENABLED = 'TRUE';
-    const folded = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send({ wallet: '0xabc', agent_id: AGENT });
-    expect(folded.status).toBe(410);
-    expect(bindStore.size).toBe(0);
   });
 
   it('verifies the known-good range check and rejects one flipped byte', async () => {
