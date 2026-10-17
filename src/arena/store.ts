@@ -1,10 +1,10 @@
 /**
- * Arena persistence: four NEW tables, created by supabase/migrations/20261016120000_arena.sql
+ * Arena persistence: five NEW tables, created by supabase/migrations/20261016120000_arena.sql
  * (NOT applied by this PR; prod DDL is Sean's). Nothing here reads or writes RepID, stakes,
  * escrow or any money table.
  *
  * FAIL CLOSED. Until the migration is applied every arena route answers 503
- * `arena_tables_missing` and writes nothing: `ensureTables` probes all four tables before the
+ * `arena_tables_missing` and writes nothing: `ensureTables` probes all five tables before the
  * first request is served and is remembered only once it succeeds.
  */
 import type { Clock, Result, StoredMove, TimeControl } from './referee';
@@ -25,6 +25,8 @@ export interface GameRow {
   owner_evidence: 'strong' | 'administrative' | 'none';
   owner_distinct: boolean;
   trust_evidence: boolean;
+  /** = owner_distinct. An unrated game is recorded, playable and replayable, but never moves arena_ratings. */
+  rated: boolean;
   fen: string;
   moves: StoredMove[];
   clock_ms: Clock;
@@ -50,7 +52,7 @@ export interface ArenaStore {
   /** Compare-and-set on `version`. null = somebody else changed the game first. */
   updateGame(id: string, version: number, patch: Partial<GameRow>): Promise<GameRow | null>;
   listGames(status: GameStatus, participant: string | null, limit: number): Promise<GameRow[]>;
-  /** Every finished game, oldest first, for the rating fold. */
+  /** Every finished RATED game, oldest first, for the rating fold. */
   finishedGames(): Promise<Pick<GameRow, 'white' | 'black' | 'result' | 'stake_usd'>[]>;
   upsertRatings(rows: RatingRow[]): Promise<void>;
   listRatings(limit: number): Promise<RatingRow[]>;
@@ -58,9 +60,11 @@ export interface ArenaStore {
   /** 'duplicate' when this predictor already predicted this game. */
   insertPrediction(row: PredictionRow): Promise<'ok' | 'duplicate'>;
   listPredictions(gameId: string): Promise<PredictionRow[]>;
+  /** Single use: 'duplicate' when this signed statement was already accepted once. */
+  claimSignature(row: { statement_sha256: string; wallet: string; action: string }): Promise<'ok' | 'duplicate'>;
 }
 
-export const ARENA_TABLES = ['arena_games', 'arena_ratings', 'arena_trust_signals', 'arena_predictions'] as const;
+export const ARENA_TABLES = ['arena_games', 'arena_ratings', 'arena_trust_signals', 'arena_predictions', 'arena_signatures'] as const;
 export const MIGRATION_FILE = 'supabase/migrations/20261016120000_arena.sql';
 
 export class ArenaTablesMissing extends Error {}
@@ -107,7 +111,7 @@ export function supabaseArenaStore(db: any): ArenaStore {
       const out: Pick<GameRow, 'white' | 'black' | 'result' | 'stake_usd'>[] = [];
       for (let from = 0; ; from += PAGE) {
         const rows = check(await db.from('arena_games').select('white, black, result, stake_usd')
-          .eq('status', 'finished').order('finished_at', { ascending: true }).order('id', { ascending: true })
+          .eq('status', 'finished').eq('rated', true).order('finished_at', { ascending: true }).order('id', { ascending: true })
           .range(from, from + PAGE - 1)) as typeof out;
         out.push(...rows);
         if (rows.length < PAGE) return out;
@@ -130,6 +134,12 @@ export function supabaseArenaStore(db: any): ArenaStore {
     },
     async listPredictions(gameId) {
       return check(await db.from('arena_predictions').select('*').eq('game_id', gameId)) as PredictionRow[];
+    },
+    async claimSignature(row) {
+      const r = await db.from('arena_signatures').insert(row);
+      if (r.error?.code === '23505') return 'duplicate';
+      check(r);
+      return 'ok';
     },
   };
 }

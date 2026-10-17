@@ -26,7 +26,7 @@ jest.mock('../src/auth/api-keys', () => {
   return { ...actual, validateAgentApiKey: jest.fn(async (key: string) => (key.startsWith('key-for-') ? { agent_id: key.slice(8), scopes: [] } : null)) };
 });
 
-import { createArenaRouters, replayDelayMs } from '../src/routes/arena';
+import { arenaStatement, createArenaRouters, replayDelayMs, type ArenaAction } from '../src/routes/arena';
 import { authMessage } from '../src/routes/v1/byok';
 import { ARENA_JS } from '../src/arena/page';
 import { supabaseArenaStore, type ArenaStore, type GameRow, type PredictionRow, type RatingRow, type SignalRow } from '../src/arena/store';
@@ -55,7 +55,7 @@ const accountOf = async (wallet: string) => (wallet.toLowerCase() === human.addr
 /** In-memory ArenaStore with the same compare-and-set contract as the Supabase one. */
 function memStore() {
   const games = new Map<string, GameRow>(), ratings = new Map<string, RatingRow>();
-  const signals: SignalRow[] = [], preds: PredictionRow[] = [];
+  const signals: SignalRow[] = [], preds: PredictionRow[] = [], sigs = new Set<string>();
   let n = 0;
   const calls: string[] = [];
   const store: ArenaStore = {
@@ -74,12 +74,13 @@ function memStore() {
       games.set(id, next); return structuredClone(next);
     },
     async listGames(status, participant) { return [...games.values()].filter((g) => g.status === status && (!participant || g.white === participant || g.black === participant)); },
-    async finishedGames() { return [...games.values()].filter((g) => g.status === 'finished').sort((a, b) => String(a.finished_at).localeCompare(String(b.finished_at))); },
+    async finishedGames() { return [...games.values()].filter((g) => g.status === 'finished' && g.rated).sort((a, b) => String(a.finished_at).localeCompare(String(b.finished_at))); },
     async upsertRatings(rows) { for (const r of rows) ratings.set(r.participant, r); },
     async listRatings() { return [...ratings.values()].sort((a, b) => b.rating - a.rating); },
     async insertSignals(rows) { signals.push(...rows); },
     async insertPrediction(row) { if (preds.some((p) => p.game_id === row.game_id && p.predictor === row.predictor)) return 'duplicate'; preds.push(row); return 'ok'; },
     async listPredictions(id) { return preds.filter((p) => p.game_id === id); },
+    async claimSignature(row) { if (sigs.has(row.statement_sha256)) return 'duplicate'; sigs.add(row.statement_sha256); return 'ok'; },
   };
   return { store, games, ratings, signals, preds, calls };
 }
@@ -93,10 +94,13 @@ function appWith(store: ArenaStore, pollMs = 10) {
   return app;
 }
 const agent = (id: string) => ({ 'x-api-key': `key-for-${id}` });
-async function signedBy(w: Wallet, method: string, path: string) {
+/** A human's headers for one arena action: a wallet signature over the arena statement for it. */
+async function signedArena(w: Wallet, action: ArenaAction) {
   const ts = new Date().toISOString();
-  return { 'x-hd-wallet': w.address, 'x-hd-timestamp': ts, 'x-hd-signature': await w.signMessage(authMessage(method, path, w.address, ts)) };
+  return { 'x-hd-wallet': w.address, 'x-hd-timestamp': ts, 'x-hd-signature': await w.signMessage(arenaStatement(action, w.address, ts)) };
 }
+const challengeBy = (_w: Wallet, opponent: string, extra: Partial<Extract<ArenaAction, { action: 'challenge' }>> = {}): ArenaAction =>
+  ({ action: 'challenge', opponent: `agent:${opponent}`, colour: 'white', stake_usd: 0, time_control: 'normal', speed: '1', ...extra });
 async function liveGame(app: express.Express, white = A3, black = A1) {
   const c = await request(app).post('/api/v1/arena/challenges').set(agent(white)).send({ white, black, stake_usd: 1, time_control: 'fast' });
   expect(c.status).toBe(201);
@@ -121,13 +125,24 @@ describe('flag OFF = 404, nothing else', () => {
     expect(m.calls).toEqual([]);
   });
 
-  it('the page signs exactly the statement the server verifies, and its script parses', async () => {
+  it('the page builds exactly the statements the server verifies, and its script parses', async () => {
     expect(() => new Function(ARENA_JS)).not.toThrow();
-    const src = /function authMessage\([^)]*\) \{[\s\S]*?\n  \}/.exec(ARENA_JS)?.[0];
-    expect(src).toBeDefined();
-    const pageAuthMessage = new Function(`${src}; return authMessage;`)();
-    const args = ['POST', '/api/v1/arena/games/x/move', human.address, '2026-10-16T00:00:00.000Z'] as const;
-    expect(pageAuthMessage(...args)).toBe(authMessage(...args));
+    const fn = (name: string) => {
+      const src = new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n  \\}`).exec(ARENA_JS)?.[0];
+      expect(src).toBeDefined();
+      return new Function(`${src}; return ${name};`)();
+    };
+    const ts = '2026-10-16T00:00:00.000Z';
+    // account/connect keeps the shared authMessage.
+    expect(fn('authMessage')('POST', '/api/v1/account/connect', human.address, ts)).toBe(authMessage('POST', '/api/v1/account/connect', human.address, ts));
+    const pageStatement = fn('arenaStatement');
+    for (const a of [
+      challengeBy(human, A1, { colour: 'black', stake_usd: 0.1, time_control: 'slow', speed: '0.25' }),
+      { action: 'accept', game: A2 },
+      { action: 'move', game: A2, ply: 7, uci: 'e7e8q' },
+      { action: 'predict', game: A2, side: 'black', probability: 0.35 },
+    ] as ArenaAction[]) expect(pageStatement(a, human.address, ts)).toBe(arenaStatement(a, human.address, ts));
+    expect(arenaStatement({ action: 'move', game: A2, ply: 7, uci: 'e7e8q' }, human.address, ts)).toContain('move: e7e8q');
   });
 
   it('only the exact string true turns it on', async () => {
@@ -233,29 +248,61 @@ describe('move auth: only the side to move, only as itself', () => {
     expect(m.games.get(id)!.moves).toHaveLength(0);
   });
 
-  it('a human plays with the wallet signature from the human path, and a bad signature is refused', async () => {
-    const m = memStore(), app = appWith(m.store);
-    const path = '/api/v1/arena/challenges';
-    const c = await request(app).post(path).set(await signedBy(human, 'POST', path)).send({ white: human.address, black: A1, stake_usd: 0.1 });
+  /** A human (white) vs A1, accepted: returns the game id. */
+  async function humanGame(app: express.Express) {
+    const c = await request(app).post('/api/v1/arena/challenges').set(await signedArena(human, challengeBy(human, A1, { stake_usd: 0.1 }))).send({ white: human.address, black: A1, stake_usd: 0.1 });
     expect(c.status).toBe(201);
     expect(c.body.challenge.white).toBe(`human:${human.address.toLowerCase()}`);
-    const id = c.body.challenge.id;
-    await request(app).post(`/api/v1/arena/challenges/${id}/accept`).set(agent(A1)).send().expect(200);
-    const mvPath = `/api/v1/arena/games/${id}/move`;
-    const other = Wallet.createRandom();
-    const forged = { ...(await signedBy(other, 'POST', mvPath)), 'x-hd-wallet': human.address };
+    await request(app).post(`/api/v1/arena/challenges/${c.body.challenge.id}/accept`).set(agent(A1)).send().expect(200);
+    return c.body.challenge.id as string;
+  }
+
+  it('a human plays by signing the arena statement for the move; a forged or other-action signature is refused', async () => {
+    const app = appWith(memStore().store), id = await humanGame(app);
+    const mvPath = `/api/v1/arena/games/${id}/move`, e2e4: ArenaAction = { action: 'move', game: id, ply: 1, uci: 'e2e4' };
+    const forged = { ...(await signedArena(Wallet.createRandom(), e2e4)), 'x-hd-wallet': human.address };
     expect((await request(app).post(mvPath).set(forged).send({ uci: 'e2e4' })).body.error).toBe('bad_signature');
-    // A signature for a different path does not carry over.
-    const wrongPath = await signedBy(human, 'POST', '/api/v1/arena/challenges');
-    expect((await request(app).post(mvPath).set(wrongPath).send({ uci: 'e2e4' })).status).toBe(401);
-    const ok = await request(app).post(mvPath).set(await signedBy(human, 'POST', mvPath)).send({ uci: 'e2e4' });
+    // A signature for another action (the challenge) does not carry over.
+    const other = await signedArena(human, challengeBy(human, A1, { stake_usd: 0.1 }));
+    expect((await request(app).post(mvPath).set(other).send({ uci: 'e2e4' })).body.error).toBe('bad_signature');
+    const ok = await request(app).post(mvPath).set(await signedArena(human, e2e4)).send({ uci: 'e2e4' });
     expect(ok.status).toBe(200);
     expect(ok.body.game.turn).toBe('black');
   });
 
+  it('BODY SWAP: a signature over one move, challenge or prediction cannot carry another', async () => {
+    const app = appWith(memStore().store), id = await humanGame(app);
+    // move: signed e2e4, sent e2e3
+    const mv = await signedArena(human, { action: 'move', game: id, ply: 1, uci: 'e2e4' });
+    expect((await request(app).post(`/api/v1/arena/games/${id}/move`).set(mv).send({ uci: 'e2e3' })).body.error).toBe('bad_signature');
+    // challenge: signed a 0.1 stake on normal against A3, as white; sent other terms
+    const ch = await signedArena(human, challengeBy(human, A3, { stake_usd: 0.1 }));
+    for (const body of [
+      { white: human.address, black: A3, stake_usd: 10 },
+      { white: human.address, black: A3, stake_usd: 0.1, time_control: 'fast' },
+      { white: human.address, black: A1, stake_usd: 0.1 },
+      { white: A3, black: human.address, stake_usd: 0.1 },
+    ]) expect((await request(app).post('/api/v1/arena/challenges').set(ch).send(body)).body.error).toBe('bad_signature');
+    // predict: signed white at 0.6, sent 0.9, then black
+    const pr = await signedArena(human, { action: 'predict', game: id, side: 'white', probability: 0.6 });
+    expect((await request(app).post(`/api/v1/arena/games/${id}/predict`).set(pr).send({ side: 'white', probability: 0.9 })).body.error).toBe('bad_signature');
+    expect((await request(app).post(`/api/v1/arena/games/${id}/predict`).set(pr).send({ side: 'black', probability: 0.6 })).body.error).toBe('bad_signature');
+  });
+
+  it('SINGLE USE: an accepted signature is refused the second time', async () => {
+    const app = appWith(memStore().store), id = await humanGame(app);
+    const ch = await signedArena(human, challengeBy(human, A3, { stake_usd: 1 })), body = { white: human.address, black: A3, stake_usd: 1 };
+    expect((await request(app).post('/api/v1/arena/challenges').set(ch).send(body)).status).toBe(201);
+    expect((await request(app).post('/api/v1/arena/challenges').set(ch).send(body)).body.error).toBe('signature_replayed');
+    // A prediction cannot be re-sent either (and a move is pinned to its ply as well).
+    const pr = await signedArena(human, { action: 'predict', game: id, side: 'white', probability: 0.6 });
+    expect((await request(app).post(`/api/v1/arena/games/${id}/predict`).set(pr).send({ side: 'white', probability: 0.6 })).status).toBe(201);
+    expect((await request(app).post(`/api/v1/arena/games/${id}/predict`).set(pr).send({ side: 'white', probability: 0.6 })).body.error).toBe('signature_replayed');
+  });
+
   it('a proven wallet with no account is told to connect first', async () => {
     const stranger = Wallet.createRandom(), path = '/api/v1/arena/challenges';
-    const r = await request(appWith(memStore().store)).post(path).set(await signedBy(stranger, 'POST', path)).send({ white: stranger.address, black: A1 });
+    const r = await request(appWith(memStore().store)).post(path).set(await signedArena(stranger, challengeBy(stranger, A1))).send({ white: stranger.address, black: A1 });
     expect(r.status).toBe(403);
     expect(r.body.error).toBe('no_account');
   });
@@ -303,7 +350,7 @@ describe('stakes: own win only, no side bets', () => {
 describe('write brake', () => {
   it('a network gets 120 arena writes a minute, then 429', async () => {
     const app = appWith(memStore().store);
-    for (let i = 0; i < 120; i++) expect((await request(app).post('/api/v1/arena/challenges').send({})).status).toBe(401);
+    for (let i = 0; i < 120; i++) expect((await request(app).post('/api/v1/arena/challenges').send({})).status).toBe(400);
     expect((await request(app).post('/api/v1/arena/challenges').send({})).status).toBe(429);
   });
 });
@@ -314,6 +361,29 @@ describe('owner_distinct', () => {
     const r = await request(app).post('/api/v1/arena/challenges').set(agent(A1)).send({ white: A1, black: A2 });
     expect(r.status).toBe(201);
     expect(r.body.challenge.owner).toEqual({ relation: 'same', evidence: 'administrative', owner_distinct: false, trust_evidence: false });
+    expect(r.body.challenge.rated).toBe(false);
+  });
+
+  it('UNRATED: a same-owner game is played and recorded but leaves the ratings unchanged', async () => {
+    const m = memStore(), app = appWith(m.store);
+    const before = (await request(app).get('/api/v1/arena/ratings')).body.ratings;
+    const id = await liveGame(app, A1, A2);
+    for (const [by, uci] of [[A1, 'f2f3'], [A2, 'e7e5'], [A1, 'g2g4'], [A2, 'd8h4']] as const) expect((await move(app, id, by, uci)).status).toBe(200);
+    const g = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
+    expect(g).toMatchObject({ status: 'finished', result: '0-1', rated: false });
+    expect(m.ratings.size).toBe(0);
+    expect((await request(app).get('/api/v1/arena/ratings')).body.ratings).toEqual(before);
+    expect(m.signals).toHaveLength(2); // still recorded as shadow conduct, never trust evidence
+  });
+
+  it('UNRATED: the Supabase store folds only rated games into the ladder', async () => {
+    const calls: unknown[][] = [];
+    const chain: any = new Proxy({}, {
+      get: (_t, k) => (k === 'then' ? (r: any) => r({ data: [], error: null }) : (...args: unknown[]) => { calls.push([k, ...args]); return chain; }),
+    });
+    await supabaseArenaStore({ from: () => chain }).finishedGames();
+    expect(calls).toContainEqual(['eq', 'status', 'finished']);
+    expect(calls).toContainEqual(['eq', 'rated', true]);
   });
 
   it('a pair the resolver cannot separate is unknown, which is never distinct', async () => {
@@ -327,7 +397,7 @@ describe('owner_distinct', () => {
     OWNERS[A3] = [claim(human.address.toLowerCase(), 'wallet', 'proven_wallet')];
     try {
       const app = appWith(memStore().store), path = '/api/v1/arena/challenges';
-      const r = await request(app).post(path).set(await signedBy(human, 'POST', path)).send({ white: human.address, black: A3 });
+      const r = await request(app).post(path).set(await signedArena(human, challengeBy(human, A3))).send({ white: human.address, black: A3 });
       expect(r.body.challenge.owner).toMatchObject({ relation: 'same', owner_distinct: false, trust_evidence: false });
     } finally {
       OWNERS[A3] = [claim('cccccccc-0000-4000-8000-000000000003', 'builder_id', 'attested_unverified')];

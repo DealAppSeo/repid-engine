@@ -4,8 +4,11 @@
  * step. helmet's default CSP allows only same-origin scripts and no inline handlers, so the script
  * is a separate file (/arena/arena.js) and every handler is attached with addEventListener.
  *
- * A human proves a wallet per request with the engine's existing signature scheme
- * (src/routes/v1/byok.ts authMessage), so each challenge, accept and move asks the wallet to sign.
+ * A human proves a wallet per request. Arena actions are signed over the arena's own statement
+ * (`arenaStatement` in src/routes/arena.ts), which names the action in plain words; the client copy
+ * below is pinned equal to the server's by tests/arena.test.ts. The page shows that exact text, and
+ * asks the person to confirm it, before the wallet is asked to sign. Only "Create or confirm
+ * account" signs the shared authMessage of POST /api/v1/account/connect.
  */
 
 export const ARENA_HTML = `<!doctype html>
@@ -37,6 +40,7 @@ export const ARENA_HTML = `<!doctype html>
   #board button.sel { box-shadow: inset 0 0 0 4px var(--sel); }
   .clocks { display:flex; gap:16px; font-variant-numeric: tabular-nums; margin:8px 0; }
   #moves { font-family: ui-monospace, monospace; font-size:.9rem; max-height: 16rem; overflow:auto; }
+  #sign-text { white-space: pre-wrap; overflow-wrap:anywhere; font-family: ui-monospace, monospace; font-size:.9rem; margin:0; }
 </style>
 </head>
 <body>
@@ -44,6 +48,11 @@ export const ARENA_HTML = `<!doctype html>
   <h1>AgentChess Arena</h1>
   <p class="note">Testnet and shadow. No money moves: a stake only scales the chess-rating change, and the chess rating never touches RepID. The chess.js referee on the server decides every move and result. Each challenge and move asks your wallet to sign.</p>
   <p id="status" role="status" aria-live="polite"></p>
+
+  <section aria-labelledby="h-sign">
+    <h2 id="h-sign">What your wallet will sign</h2>
+    <pre id="sign-text" aria-live="polite">Nothing yet. Before every signature this shows the exact text, and you confirm it first.</pre>
+  </section>
 
   <section aria-labelledby="h-wallet">
     <h2 id="h-wallet">1. Wallet</h2>
@@ -111,12 +120,25 @@ export const ARENA_JS = String.raw`(function () {
   function authMessage(method, path, wallet, ts) {
     return ['HyperDAG — authenticated request', 'method: ' + method.toUpperCase(), 'path:   ' + path, 'wallet: ' + wallet.toLowerCase(), 'time:   ' + ts].join('\n');
   }
+  // The arena's statement: the same text the server rebuilds from the request body (src/routes/arena.ts arenaStatement).
+  function arenaStatement(a, wallet, ts) {
+    var lines = ['HyperDAG AgentChess arena (testnet; no money moves)'];
+    if (a.action === 'challenge') lines.push('action: challenge', 'opponent: ' + a.opponent, 'you play: ' + a.colour, 'stake: ' + a.stake_usd + ' testnet USD, on your own win', 'time control: ' + a.time_control, 'viewer speed: ' + a.speed);
+    else if (a.action === 'accept') lines.push('action: accept challenge', 'game: ' + a.game);
+    else if (a.action === 'move') lines.push('action: move', 'game: ' + a.game, 'ply: ' + a.ply, 'move: ' + a.uci);
+    else lines.push('action: predict (calibration only)', 'game: ' + a.game, 'side: ' + a.side + ' wins', 'probability: ' + a.probability);
+    lines.push('wallet: ' + wallet.toLowerCase(), 'time: ' + ts);
+    return lines.join('\n');
+  }
   function hex(s) { var b = new TextEncoder().encode(s), h = '0x'; for (var i = 0; i < b.length; i++) h += b[i].toString(16).padStart(2, '0'); return h; }
   async function readJson(r) { try { return await r.json(); } catch (e) { return {}; } }
-  async function signed(method, path, body) {
+  async function signed(method, path, body, action) {
     if (!S.wallet) throw new Error('Connect a wallet first.');
     var ts = new Date().toISOString();
-    var sig = await window.ethereum.request({ method: 'personal_sign', params: [hex(authMessage(method, path, S.wallet, ts)), S.wallet] });
+    var text = action ? arenaStatement(action, S.wallet, ts) : authMessage(method, path, S.wallet, ts);
+    $('sign-text').textContent = text;
+    if (!window.confirm('Your wallet will now ask you to sign exactly this:\n\n' + text)) throw new Error('Cancelled. Nothing was signed.');
+    var sig = await window.ethereum.request({ method: 'personal_sign', params: [hex(text), S.wallet] });
     var r = await fetch(path, { method: method, headers: { 'content-type': 'application/json', 'x-hd-wallet': S.wallet, 'x-hd-timestamp': ts, 'x-hd-signature': sig }, body: JSON.stringify(body || {}) });
     var j = await readJson(r);
     if (!r.ok) throw new Error((j.error || ('HTTP ' + r.status)) + (j.reason ? ': ' + j.reason : j.message ? ': ' + j.message : ''));
@@ -144,8 +166,9 @@ export const ARENA_JS = String.raw`(function () {
   $('challenge').addEventListener('submit', guard(async function (ev) {
     var f = ev.target, agent = f.agent.value.trim(), color = f.color.value;
     var body = { white: color === 'white' ? S.wallet : agent, black: color === 'white' ? agent : S.wallet, stake_usd: Number(f.stake.value), time_control: f.tc.value, speed: $('speed').value };
-    var j = await signed('POST', API + '/challenges', body);
-    say('Challenge sent (' + j.challenge.id + '). The agent must accept it. Owner-distinct: ' + j.challenge.owner.owner_distinct + '.');
+    var act = { action: 'challenge', opponent: 'agent:' + agent.toLowerCase(), colour: color, stake_usd: body.stake_usd, time_control: body.time_control, speed: body.speed };
+    var j = await signed('POST', API + '/challenges', body, act);
+    say('Challenge sent (' + j.challenge.id + '). The agent must accept it. ' + (j.challenge.rated ? 'Rated game.' : 'Unrated game: these players are not shown to have different owners.'));
     list('pending');
   }));
 
@@ -163,7 +186,7 @@ export const ARENA_JS = String.raw`(function () {
       var challenged = g.challenger === g.white ? g.black : g.white;
       if (g.status === 'pending' && me() && challenged === me()) {
         var a = document.createElement('button'); a.type = 'button'; a.textContent = 'Accept';
-        a.addEventListener('click', guard(async function () { await signed('POST', API + '/challenges/' + g.id + '/accept', {}); say('Accepted. The game is live.'); await watch(g.id); }));
+        a.addEventListener('click', guard(async function () { await signed('POST', API + '/challenges/' + g.id + '/accept', {}, { action: 'accept', game: g.id }); say('Accepted. The game is live.'); await watch(g.id); }));
         li.appendChild(a);
       }
       ul.appendChild(li);
@@ -201,7 +224,8 @@ export const ARENA_JS = String.raw`(function () {
     if (S.sel === sq) { S.sel = null; render(); return; }
     var from = S.sel, piece = grid(S.fen)[from]; S.sel = null; render();
     var uci = from + sq + ((piece === 'P' && sq[1] === '8') || (piece === 'p' && sq[1] === '1') ? $('promo').value : '');
-    await signed('POST', API + '/games/' + S.game.id + '/move', { uci: uci });
+    var fresh = await getJson(API + '/games/' + S.game.id); // the statement names the ply this move will be
+    await signed('POST', API + '/games/' + S.game.id + '/move', { uci: uci }, { action: 'move', game: S.game.id, ply: fresh.moves.length + 1, uci: uci });
     say('Moved ' + uci + '.');
   }
   function fmt(ms) { if (ms == null) return '--:--'; var s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }

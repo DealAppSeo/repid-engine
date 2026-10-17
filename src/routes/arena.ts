@@ -18,9 +18,15 @@
  * WHO IS CALLING. Two existing schemes, no new one:
  *   - an agent sends its own API key; authMiddleware validates it and it must be bound to an agent
  *     (an operator key names nobody and is refused);
- *   - a human signs the method + path + timestamp with a wallet (x-hd-wallet, x-hd-timestamp,
- *     x-hd-signature), exactly as POST /api/v1/account/connect, and must have connected that wallet
- *     once. byok.ts's provenWallet + accountOfWallet do both; nothing is re-implemented here.
+ *   - a human signs with a wallet (x-hd-wallet, x-hd-timestamp, x-hd-signature), checked by byok.ts's
+ *     provenWallet, and must have connected that wallet once (accountOfWallet). The statement is the
+ *     arena's own (`arenaStatement` below), NOT the shared authMessage: it names the action in plain
+ *     words (the move with its game and ply; the challenge's opponent, colour, stake, time control and
+ *     speed; the prediction's side and probability). The server rebuilds it from the body, so a
+ *     signature cannot be resent with another body, and the page shows the same text before the wallet
+ *     does. Each accepted statement is SINGLE USE: its sha256 goes into arena_signatures under a
+ *     primary key. (The statement, not the signature bytes, is hashed: an ECDSA signature has a
+ *     second valid form, so hashing the bytes would let a replay through.)
  *
  * STAKES. 0, 0.1, 1 or 10 testnet USD, recorded only. The staker is always a player, and the stake
  * is always on the staker's own win: there is no field that names someone else's game or side, and
@@ -28,11 +34,14 @@
  * effect is the rating multiplier M in src/arena/rating.ts. No escrow and no payout in this build.
  *
  * OWNERS. Every challenge is classified with ownerRelation (owner-distinct-shadow.ts, #1429). Same
- * or unknown owner is allowed but marked owner_distinct=false, and only a strong distinct pair is
- * trust_evidence. Trust signals (conduct, never the chess result) go to arena_trust_signals, shadow.
+ * or unknown owner is allowed but marked owner_distinct=false AND rated=false: it is recorded,
+ * playable and replayable, but never moves arena_ratings and is never trust evidence. Only a strong
+ * distinct pair is trust_evidence. Trust signals (conduct, never the chess result) go to
+ * arena_trust_signals, shadow.
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { createHash } from 'node:crypto';
 import { trustedClientIp } from '../middleware/client-ip';
 import { db } from '../db';
 import { authMiddleware } from '../middleware/auth';
@@ -47,6 +56,7 @@ import {
   type Color, type StoredMove,
 } from '../arena/referee';
 import { ArenaTablesMissing, MIGRATION_FILE, supabaseArenaStore, type ArenaStore, type GameRow, type GameStatus, type Speed } from '../arena/store';
+import type { TimeControl } from '../arena/referee';
 import { ARENA_JS, ARENA_HTML } from '../arena/page';
 
 export const arenaEnabled = (): boolean => process.env.ARENA_ENABLED === 'true';
@@ -70,6 +80,33 @@ export function participantRef(raw: unknown): string | null {
   if (UUID_RE.test(id) && kind !== 'human') return `agent:${id.toLowerCase()}`;
   if (WALLET_RE.test(id) && kind !== 'agent') return `human:${id.toLowerCase()}`;
   return null;
+}
+
+/** What a human signs. Each variant names everything the server will do with the request. */
+export type ArenaAction =
+  | { action: 'challenge'; opponent: string; colour: 'white' | 'black'; stake_usd: number; time_control: TimeControl; speed: Speed }
+  | { action: 'accept'; game: string }
+  | { action: 'move'; game: string; ply: number; uci: string }
+  | { action: 'predict'; game: string; side: 'white' | 'black'; probability: number };
+
+/**
+ * The arena's signed statement, in plain words. The page builds the same text (src/arena/page.ts,
+ * pinned equal by tests/arena.test.ts) and shows it before the wallet does.
+ */
+export function arenaStatement(a: ArenaAction, wallet: string, timestamp: string): string {
+  const lines = ['HyperDAG AgentChess arena (testnet; no money moves)'];
+  if (a.action === 'challenge') {
+    lines.push('action: challenge', `opponent: ${a.opponent}`, `you play: ${a.colour}`,
+      `stake: ${a.stake_usd} testnet USD, on your own win`, `time control: ${a.time_control}`, `viewer speed: ${a.speed}`);
+  } else if (a.action === 'accept') {
+    lines.push('action: accept challenge', `game: ${a.game}`);
+  } else if (a.action === 'move') {
+    lines.push('action: move', `game: ${a.game}`, `ply: ${a.ply}`, `move: ${a.uci}`);
+  } else {
+    lines.push('action: predict (calibration only)', `game: ${a.game}`, `side: ${a.side} wins`, `probability: ${a.probability}`);
+  }
+  lines.push(`wallet: ${wallet.toLowerCase()}`, `time: ${timestamp}`);
+  return lines.join('\n');
 }
 
 /** Replay delay before the next event. `sinceLastMs` = time already spent since the previous event went out. */
@@ -106,13 +143,29 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     next();
   };
 
-  /** Who is calling: a wallet-signed human, or an agent-bound API key. Writes the refusal itself. */
-  async function principal(req: Request, res: Response): Promise<Principal | null> {
+  /**
+   * Who is calling: a wallet-signed human, or an agent-bound API key. Writes the refusal itself.
+   * `action` builds, from the request body, the statement a human must have signed; null means the
+   * caller is not someone who can take this action (e.g. not a player in the challenge).
+   */
+  async function principal(req: Request, res: Response, action: (me: string) => ArenaAction | null): Promise<Principal | null> {
     if (req.headers['x-hd-wallet'] !== undefined) {
-      const wallet = await provenWallet(req, res);
+      const claimed = `human:${String(req.headers['x-hd-wallet']).trim().toLowerCase()}`;
+      const act = action(claimed);
+      if (!act) {
+        res.status(403).json({ error: 'not_a_participant', message: 'You can only take this action as one of the players.' });
+        return null;
+      }
+      let signed = '';
+      const wallet = await provenWallet(req, res, (w, ts) => (signed = arenaStatement(act, w, ts)));
       if (!wallet) return null;
       if (!(await accountOf(wallet))) {
         res.status(403).json({ error: 'no_account', message: 'That wallet proved control but has no account yet. POST /api/v1/account/connect once, then play.' });
+        return null;
+      }
+      const sha = createHash('sha256').update(signed).digest('hex');
+      if ((await store.claimSignature({ statement_sha256: sha, wallet: wallet.toLowerCase(), action: act.action })) === 'duplicate') {
+        res.status(401).json({ error: 'signature_replayed', message: 'That signature was already used once. Sign the action again.' });
         return null;
       }
       return { ref: `human:${wallet.toLowerCase()}` };
@@ -172,6 +225,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
       stake: { usd: Number(g.stake_usd), each_player_on_own_win: true, testnet: true, escrow: false, effect: 'chess-rating multiplier only' },
       time_control: g.time_control, clock_rules: TIME_CONTROLS[g.time_control], default_speed: g.default_speed,
       owner: { relation: g.owner_relation, evidence: g.owner_evidence, owner_distinct: g.owner_distinct, trust_evidence: g.trust_evidence },
+      rated: g.rated,
       fen: chess.fen(), turn: live ? (turn === 'w' ? 'white' : 'black') : null,
       moves: g.moves, clocks: { white_ms: clock.w, black_ms: clock.b, running: live ? (turn === 'w' ? 'white' : 'black') : null },
       legal_uci: live ? legalUci(chess) : [],
@@ -204,10 +258,11 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
         },
       };
     }));
-    await store.upsertRatings(Object.entries(await currentRatings()).map(([participant, r]) => ({ participant, ...r })));
+    // An unrated game (owner_distinct=false) never moves the ladder: not even a re-write of it.
+    if (g.rated) await store.upsertRatings(Object.entries(await currentRatings()).map(([participant, r]) => ({ participant, ...r })));
   }
 
-  /** The chess ratings: a pure fold of every finished game, so the stored table can always be rebuilt. */
+  /** The chess ratings: a pure fold of every finished RATED game, so the stored table can always be rebuilt. */
   async function currentRatings() {
     const games = await store.finishedGames();
     return foldRatings(games.map((x) => ({ white: x.white, black: x.black, score_white: scoreWhite(x.result), stake_usd: Number(x.stake_usd) })));
@@ -249,19 +304,13 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
   });
 
   api.post('/challenges', writeLimiter, async (req, res) => {
-    const me = await principal(req, res);
-    if (!me) return;
+    // The body is checked before the caller, because a human's signature is checked against a
+    // statement rebuilt FROM this body: a signature over other terms then fails as bad_signature.
     const body = onlyFields(req, res, ['white', 'black', 'stake_usd', 'time_control', 'speed', 'stake_on']);
     if (!body) return;
     const white = participantRef(body.white), black = participantRef(body.black);
     if (!white || !black) return void res.status(400).json({ error: 'bad_participant', message: 'white and black are each an agent uuid or a 0x wallet address.' });
     if (white === black) return void res.status(400).json({ error: 'same_participant', message: 'A player cannot play itself.' });
-    if (me.ref !== white && me.ref !== black) {
-      return void res.status(403).json({ error: 'not_a_participant', message: 'You can only challenge as one of the two players. Nobody can stake on a game they are not playing.' });
-    }
-    if (body.stake_on !== undefined && participantRef(body.stake_on) !== me.ref) {
-      return void res.status(400).json({ error: 'stake_own_win_only', message: 'A player may stake only on its own win.' });
-    }
     const stake = body.stake_usd ?? 0;
     if (typeof stake !== 'number' || !(STAKES_USD as readonly number[]).includes(stake)) {
       return void res.status(400).json({ error: 'bad_stake', allowed_usd: STAKES_USD, message: 'Stake is 0, 0.1, 1 or 10 testnet USD (max 10). It is recorded, never escrowed.' });
@@ -270,26 +319,42 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     if (!isTimeControl(tc)) return void res.status(400).json({ error: 'bad_time_control', allowed: Object.keys(TIME_CONTROLS) });
     if (!isSpeed(speed)) return void res.status(400).json({ error: 'bad_speed', allowed: SPEEDS });
 
+    const me = await principal(req, res, (ref) => (ref === white || ref === black
+      ? { action: 'challenge', opponent: ref === white ? black : white, colour: ref === white ? 'white' : 'black', stake_usd: stake, time_control: tc, speed }
+      : null));
+    if (!me) return;
+    if (me.ref !== white && me.ref !== black) {
+      return void res.status(403).json({ error: 'not_a_participant', message: 'You can only challenge as one of the two players. Nobody can stake on a game they are not playing.' });
+    }
+    if (body.stake_on !== undefined && participantRef(body.stake_on) !== me.ref) {
+      return void res.status(400).json({ error: 'stake_own_win_only', message: 'A player may stake only on its own win.' });
+    }
+
     const [w, b] = await Promise.all([ownerSide(white), ownerSide(black)]);
     if (w === 'not_found' || b === 'not_found') return void res.status(404).json({ error: 'unknown_agent', message: 'No agent with that id.' });
     if (w === 'unreadable' || b === 'unreadable') return void res.status(503).json({ error: 'owner_unreadable', message: 'Could not read the agent registry; nothing was created.' });
-    const rel = ownerRelation(w, b);
+    const rel = ownerRelation(w, b), distinct = rel.relation === 'distinct';
     const base = TIME_CONTROLS[tc].base_ms;
     const g = await store.insertGame({
       status: 'pending', white, black, challenger: me.ref, stake_usd: stake, time_control: tc, default_speed: speed,
-      owner_relation: rel.relation, owner_evidence: rel.evidence, owner_distinct: rel.relation === 'distinct',
-      trust_evidence: rel.relation === 'distinct' && rel.evidence === 'strong',
+      owner_relation: rel.relation, owner_evidence: rel.evidence, owner_distinct: distinct,
+      trust_evidence: distinct && rel.evidence === 'strong', rated: distinct,
       fen: START_FEN, moves: [], clock_ms: { w: base, b: base }, illegal_attempts: { w: 0, b: 0 },
     });
-    res.status(201).json({ challenge: publicGame(g, now()), stake_on: me.ref, note: 'Testnet and shadow: no money moves, and the chess rating never feeds RepID.' });
+    res.status(201).json({
+      challenge: publicGame(g, now()), stake_on: me.ref,
+      note: distinct
+        ? 'Testnet and shadow: no money moves, and the chess rating never feeds RepID.'
+        : 'Testnet and shadow. These players are not shown to have different owners, so this game is UNRATED: it is recorded and replayable but never moves the chess ratings.',
+    });
   });
 
   api.post('/challenges/:id/accept', writeLimiter, async (req, res) => {
-    const me = await principal(req, res);
-    if (!me) return;
     if (!onlyFields(req, res, [])) return;
     const g = await loadGame(req, res);
     if (!g) return;
+    const me = await principal(req, res, () => ({ action: 'accept', game: g.id }));
+    if (!me) return;
     if (g.status !== 'pending') return void res.status(409).json({ error: 'not_pending', status: g.status });
     if (now() - Date.parse(g.created_at) > CHALLENGE_TTL_MS) return void res.status(410).json({ error: 'challenge_expired' });
     const challenged = g.challenger === g.white ? g.black : g.white;
@@ -311,7 +376,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     const t = now();
     const rows = (await store.listGames(status, participant, 50))
       .filter((g) => status !== 'pending' || t - Date.parse(g.created_at) <= CHALLENGE_TTL_MS);
-    res.json({ games: rows.map((g) => ({ id: g.id, status: g.status, white: g.white, black: g.black, challenger: g.challenger, stake_usd: Number(g.stake_usd), time_control: g.time_control, owner_distinct: g.owner_distinct, fen: g.fen, plies: g.moves.length, result: g.result, created_at: g.created_at })) });
+    res.json({ games: rows.map((g) => ({ id: g.id, status: g.status, white: g.white, black: g.black, challenger: g.challenger, stake_usd: Number(g.stake_usd), time_control: g.time_control, owner_distinct: g.owner_distinct, rated: g.rated, fen: g.fen, plies: g.moves.length, result: g.result, created_at: g.created_at })) });
   });
 
   api.get('/games/:id', async (req, res) => {
@@ -326,12 +391,14 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
   });
 
   api.post('/games/:id/move', writeLimiter, async (req, res) => {
-    const me = await principal(req, res);
-    if (!me) return;
     const body = onlyFields(req, res, ['uci']);
     if (!body) return;
     const g0 = await loadGame(req, res);
     if (!g0) return;
+    // The signed statement names this game, the ply this move would be, and the move itself.
+    const uci = typeof body.uci === 'string' ? body.uci.trim().toLowerCase() : '';
+    const me = await principal(req, res, () => ({ action: 'move', game: g0.id, ply: g0.moves.length + 1, uci }));
+    if (!me) return;
     const mine = colorOf(g0, me.ref);
     if (!mine) return void res.status(403).json({ error: 'not_a_participant' });
     const g = await settleClock(g0);
@@ -339,7 +406,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     const chess = replay(g.moves), turn = chess.turn();
     if (turn !== mine) return void res.status(403).json({ error: 'not_your_turn', turn: turn === 'w' ? 'white' : 'black' });
     const fenBefore = chess.fen();
-    const mv = tryMove(chess, body.uci);
+    const mv = tryMove(chess, uci);
     if (!mv.ok) {
       // Counted for the legal-move-rate signal; a lost race here only drops one count.
       await store.updateGame(g.id, g.version, { illegal_attempts: { ...g.illegal_attempts, [mine]: (g.illegal_attempts[mine] ?? 0) + 1 } });
@@ -359,18 +426,18 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
   });
 
   api.post('/games/:id/predict', writeLimiter, async (req, res) => {
-    const me = await principal(req, res);
-    if (!me) return;
     const body = onlyFields(req, res, ['side', 'probability']);
     if (!body) return;
-    const p = Number(body.probability);
-    if (body.side !== 'white' && body.side !== 'black') return void res.status(400).json({ error: 'bad_side', allowed: ['white', 'black'] });
+    const p = Number(body.probability), side = body.side;
+    if (side !== 'white' && side !== 'black') return void res.status(400).json({ error: 'bad_side', allowed: ['white', 'black'] });
     if (typeof body.probability !== 'number' || !(p >= 0 && p <= 1)) return void res.status(400).json({ error: 'bad_probability', message: 'probability is a number from 0 to 1: your chance that this side wins.' });
     const g0 = await loadGame(req, res);
     if (!g0) return;
+    const me = await principal(req, res, () => ({ action: 'predict', game: g0.id, side, probability: p }));
+    if (!me) return;
     const g = await settleClock(g0);
     if (g.status === 'finished') return void res.status(409).json({ error: 'game_over' });
-    const r = await store.insertPrediction({ game_id: g.id, predictor: me.ref, is_participant: colorOf(g, me.ref) !== null, side: body.side, probability: p, at_ply: g.moves.length });
+    const r = await store.insertPrediction({ game_id: g.id, predictor: me.ref, is_participant: colorOf(g, me.ref) !== null, side, probability: p, at_ply: g.moves.length });
     if (r === 'duplicate') return void res.status(409).json({ error: 'already_predicted', message: 'One prediction per game.' });
     res.status(201).json({ recorded: true, money: false, note: 'Calibration only: scored with a Brier score when the game ends. Nothing is staked or paid.' });
   });
