@@ -32,6 +32,7 @@ import { ARENA_JS } from '../src/arena/page';
 import { chainGenesis, chainHead, chainNext, gameKeyPayload, grantLines, jwkThumbprint, verifyGameRecord, type KeyAct } from '../src/arena/game-key';
 import { A1, A3, human, human2, memStore, appWith, agent, signedArena, challengeBy } from './helpers/arena-fixtures';
 import type express from 'express';
+import { Chess } from 'chess.js';
 
 const subtle = globalThis.crypto.subtle;
 type GameKey = { pair: CryptoKeyPair; jwk: { kty: 'EC'; crv: 'P-256'; x: string; y: string }; thumb: string; who: string };
@@ -270,7 +271,7 @@ describe('the move chain is the scoresheet, and anyone can verify it', () => {
   it('the published record verifies with no trust in the server; tampering is caught', async () => {
     const { g } = await playedGame();
     expect(g.chain_head).toBe(chainHead(g.id, g.moves));
-    expect(await verifyGameRecord(g, g.grants)).toEqual({ ok: true, problems: [] });
+    expect(await verifyGameRecord(g, g.grants)).toMatchObject({ ok: true, problems: [] });
     const swapped = structuredClone(g); swapped.moves[0].uci = 'f2f4';
     expect((await verifyGameRecord(swapped, g.grants)).ok).toBe(false);
     const rehashed = structuredClone(g); rehashed.moves[2].hash = '0'.repeat(64);
@@ -299,7 +300,7 @@ describe('the move chain is the scoresheet, and anyone can verify it', () => {
     // An event's signature stripped is caught too.
     const { g: resigned } = await resignedGame();
     const noSig = structuredClone(resigned); delete noSig.events[0].sig;
-    expect((await verifyGameRecord(noSig, resigned.grants)).problems).toEqual(['resign at ply 1: a human seat with no game-key signature']);
+    expect((await verifyGameRecord(noSig, resigned.grants)).problems).toEqual(['event 1 (resign at ply 1): a human seat with no game-key signature', 'the result 0-1 (White resigned) does not follow from the moves and the verified events']);
   });
 
   it('FAIL CLOSED: an unsigned human ply, a missing hash, or a ply relabelled as the agent\'s all fail', async () => {
@@ -326,7 +327,7 @@ describe('the move chain is the scoresheet, and anyone can verify it', () => {
     ];
     const sign = async (player: string, ply: number, prev: string, uci: string) => Buffer.from(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, k.pair.privateKey, new TextEncoder().encode(gameKeyPayload({ game: id, player, act: 'move', ply, prev, uci }, 't')))).toString('base64url');
     const h0 = chainGenesis(id), h1 = chainNext(h0, 1, 'e2e4'), h2 = chainNext(h1, 2, 'e7e5');
-    const record = { id, white, black, events: [], moves: [
+    const record = { id, white, black, challenger: white, stake: { usd: 0 }, time_control: 'normal' as const, default_speed: '1' as const, result: null, events: [], moves: [
       { uci: 'e2e4', hash: h1, by: white, key: k.thumb, time: 't', sig: await sign(white, 1, h0, 'e2e4') },
       { uci: 'e7e5', hash: h2, by: black, key: k.thumb, time: 't', sig: await sign(black, 2, h1, 'e7e5') },
     ] };
@@ -337,7 +338,91 @@ describe('the move chain is the scoresheet, and anyone can verify it', () => {
     expect((await verifyGameRecord(record, wrongColour)).problems).toEqual([`ply 2: no valid wallet grant for key ${k.thumb} of ${black}`]);
     const rightColour = [grants[0]!, { ...grants[1]!, grant_statement: statement('black') }];
     rightColour[1]!.grant_signature = await human2.signMessage(statement('black'));
-    expect(await verifyGameRecord(record, rightColour)).toEqual({ ok: true, problems: [] });
+    expect(await verifyGameRecord(record, rightColour)).toMatchObject({ ok: true, problems: [] });
+  });
+
+  it('RESULT: a signed prefix that claims mate fails; the full game verifies as checkmate', async () => {
+    const { g } = await playedGame();
+    expect(await verifyGameRecord(g, g.grants)).toMatchObject({ ok: true, result_basis: 'verified', result: { result: '0-1', termination: 'checkmate' } });
+    const prefix = structuredClone(g); prefix.moves = prefix.moves.slice(0, 3); // every signature still good
+    const v = await verifyGameRecord(prefix, g.grants);
+    expect(v).toMatchObject({ ok: false, result_basis: null, result: null });
+    expect(v.problems).toEqual(['the result 0-1 (checkmate) does not follow from the moves and the verified events']);
+    const wrongWinner = structuredClone(g); wrongWinner.result = '1-0';
+    expect((await verifyGameRecord(wrongWinner, g.grants)).problems).toEqual(['the result 1-0 (checkmate) is not what the record shows: 0-1 (checkmate)']);
+    const noMoves = structuredClone(g); delete noMoves.moves;
+    expect((await verifyGameRecord(noMoves, g.grants)).problems).toContain('the record has no move list');
+  });
+
+  it('RESULT: a resign or draw needs its verified event; a missing events list is a problem, never []', async () => {
+    const { g } = await resignedGame();
+    expect(await verifyGameRecord(g, g.grants)).toMatchObject({ ok: true, result_basis: 'verified', result: { termination: 'White resigned' } });
+    const stripped = structuredClone(g); stripped.events = [];
+    expect((await verifyGameRecord(stripped, g.grants)).problems).toEqual(['the result 0-1 (White resigned) does not follow from the moves and the verified events']);
+    const noEvents = structuredClone(g); delete noEvents.events;
+    expect((await verifyGameRecord(noEvents, g.grants)).problems).toEqual(['the record has no events list', 'the result 0-1 (White resigned) does not follow from the moves and the verified events']);
+    // A draw claimed from ONE offer (no acceptance) does not follow.
+    const app = appWith(memStore().store), { id, k } = await keyGame(app);
+    await request(app).post(`/api/v1/arena/games/${id}/draw`).set(await keyHeaders(k, app, id, 'offer_draw')).send({ draw: 'offer' }).expect(200);
+    const done = (await request(app).post(`/api/v1/arena/games/${id}/draw`).set(agent(A1)).send({ draw: 'accept' })).body.game;
+    const drawn = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
+    expect(done.termination).toBe('draw agreed');
+    expect(await verifyGameRecord(drawn, drawn.grants)).toMatchObject({ ok: true, result_basis: 'verified' });
+    const oneOffer = structuredClone(drawn); oneOffer.events = oneOffer.events.slice(0, 1);
+    expect((await verifyGameRecord(oneOffer, drawn.grants)).problems).toEqual(['the result 1/2-1/2 (draw agreed) does not follow from the moves and the verified events']);
+  });
+
+  it('EVENTS: an off-list event, a missing prev, or an unknown act fails, even for an unsigned agent seat', async () => {
+    const { g } = await playedGame();
+    for (const [bad, why] of [
+      [{ act: 'offer_draw', by: g.black, ply: 99 }, /ply is off the move list \(1 to 5\)/],
+      [{ act: 'offer_draw', by: g.black, ply: 0, prev: 'x' }, /ply is off the move list/],
+      [{ act: 'offer_draw', by: g.black, ply: 2 }, /no prev/],
+      [{ act: 'move', by: g.black, ply: 2, prev: chainHead(g.id, g.moves.slice(0, 1)) }, /not a resign, offer_draw or accept_draw/],
+    ] as const) {
+      const r = structuredClone(g); r.events = [...g.events, bad];
+      const v = await verifyGameRecord(r, g.grants);
+      expect(v.ok).toBe(false);
+      expect(v.problems.join()).toMatch(why);
+    }
+  });
+
+  it('TIMEOUT: a loss on time is referee_attested, never verified, and must fall on the side to move', async () => {
+    let t = Date.now();
+    const m = memStore(), app = appWith(m.store, 10, { now: () => t }), { id, k } = await keyGame(app);
+    expect((await keyMove(app, id, k, 'e2e4', { time: new Date(t).toISOString() })).status).toBe(200);
+    t += 16 * 60_000; // black (the agent) lets a normal clock run out
+    const g = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
+    expect(g.termination).toBe("loss on time (Black's clock ran out)");
+    const v = await verifyGameRecord(g, g.grants);
+    expect(v).toMatchObject({ ok: true, result_basis: 'referee_attested', result: { result: '1-0' } });
+    const wrongSide = structuredClone(g); wrongSide.termination = "loss on time (White's clock ran out)"; wrongSide.result = '0-1';
+    expect((await verifyGameRecord(wrongSide, g.grants)).problems).toEqual(["the result 0-1 (loss on time (White's clock ran out)) does not follow from the moves and the verified events"]);
+  });
+
+  it('GRANTS: a statement is rebuilt exactly; an extra signed line is not the grant this player could have made', async () => {
+    const { g } = await playedGame();
+    const padded = structuredClone(g.grants);
+    padded[0].grant_statement = padded[0].grant_statement.replace(/\nwallet: /, '\nalso: this key may withdraw\nwallet: ');
+    padded[0].grant_signature = await human.signMessage(padded[0].grant_statement); // a genuine signature over the longer text
+    expect((await verifyGameRecord(g, padded)).problems).toEqual([
+      `ply 1: no valid wallet grant for key ${g.grants[0].thumbprint} of ${g.white}`,
+      `ply 3: no valid wallet grant for key ${g.grants[0].thumbprint} of ${g.white}`,
+    ]);
+  });
+
+  it('SCORESHEET: checked against the replay and verified events, so a stored result the record does not support is refused', async () => {
+    const { m, app, id, g } = await playedGame();
+    m.games.get(id)!.result = '1-0'; // the stored row now disagrees with the moves (black mated white)
+    const sheet = (result: string): ArenaAction => ({ action: 'scoresheet', game: id, result, plies: 4, chain_head: g.chain_head });
+    for (const result of ['1-0 (checkmate)', '0-1 (checkmate)']) {
+      const r = await request(app).post(`/api/v1/arena/games/${id}/scoresheet`).set(await signedArena(human, sheet(result))).send({ result, chain_head: g.chain_head });
+      expect(r.body.error).toBe('record_unverified');
+    }
+    m.games.get(id)!.result = '0-1';
+    const ok = await request(app).post(`/api/v1/arena/games/${id}/scoresheet`).set(await signedArena(human, sheet('0-1 (checkmate)'))).send({ result: '0-1 (checkmate)', chain_head: g.chain_head });
+    expect(ok.body.accepted_result).toBe(true);
+    expect(m.signals.find((x) => x.participant === g.white)!.signals.scoresheet).toMatchObject({ result_basis: 'verified' });
   });
 
   it('moves signed by a replaced key stay verifiable', async () => {
@@ -349,14 +434,14 @@ describe('the move chain is the scoresheet, and anyone can verify it', () => {
     expect((await keyMove(app, id, k2, 'g1f3')).status).toBe(200);
     const g = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
     expect(g.moves.map((x: { key?: string }) => x.key)).toEqual([k.thumb, undefined, k2.thumb]);
-    expect(await verifyGameRecord(g, g.grants)).toEqual({ ok: true, problems: [] });
+    expect(await verifyGameRecord(g, g.grants)).toMatchObject({ ok: true, problems: [] });
   });
 
   async function resignedGame() {
     const app = appWith(memStore().store), { id, k } = await keyGame(app);
     await request(app).post(`/api/v1/arena/games/${id}/resign`).set(await keyHeaders(k, app, id, 'resign')).send().expect(200);
     const g = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
-    expect(await verifyGameRecord(g, g.grants)).toEqual({ ok: true, problems: [] });
+    expect(await verifyGameRecord(g, g.grants)).toMatchObject({ ok: true, problems: [] });
     return { g };
   }
 
@@ -377,8 +462,9 @@ describe('the move chain is the scoresheet, and anyone can verify it', () => {
 describe('the page uses the same texts and keeps its own chain', () => {
   const src = (re: RegExp) => { const x = re.exec(ARENA_JS)?.[0]; expect(x).toBeDefined(); return x as string; };
   const fn = (name: string) => src(new RegExp(`(async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n  \\}`));
-  const client = new Function(`${src(/var ACT_WORDS = \{[^\n]*\};/)}\n${['grantLines', 'arenaStatement', 'gameKeyPayload', 'sha256hex', 'chainHashes', 'chainProblems', 'b64url', 'b64urlBytes', 'thumbprint'].map(fn).join('\n')}
-    return { grantLines, arenaStatement, gameKeyPayload, chainHashes, chainProblems, thumbprint };`)();
+  // The page runs with chess.js as window.ArenaChess, served same-origin from the referee's own dependency.
+  const client = new Function('ArenaChess', `var window = { ArenaChess: ArenaChess };\n${src(/var ACT_WORDS = \{[^\n]*\};/)}\n${['grantLines', 'arenaStatement', 'gameKeyPayload', 'sha256hex', 'chainHashes', 'chainProblems', 'deriveResult', 'b64url', 'b64urlBytes', 'thumbprint'].map(fn).join('\n')}
+    return { grantLines, arenaStatement, gameKeyPayload, chainHashes, chainProblems, thumbprint };`)(Chess);
 
   it('the grant text, every wallet statement and the key payload are identical to the server\'s', () => {
     expect(client.grantLines('T')).toEqual(grantLines('T'));
@@ -393,6 +479,19 @@ describe('the page uses the same texts and keeps its own chain', () => {
       const a = { game: A3, player: `human:${human.address.toLowerCase()}`, act, ply: 9, prev: 'p', uci: act === 'move' ? 'e7e8q' : undefined };
       expect(client.gameKeyPayload(a, 't')).toBe(gameKeyPayload(a, 't'));
     }
+  });
+
+  it('the page loads the referee\'s own rules (chess.js) from this origin, behind the arena flag', async () => {
+    const app = appWith(memStore().store);
+    const js = await request(app).get('/arena/chess.js');
+    expect(js.status).toBe(200);
+    expect(js.headers['content-type']).toMatch(/javascript/);
+    expect(js.text).toMatch(/export \{[^}]*\bChess\b/);
+    expect(js.text).not.toMatch(/sourceMappingURL/);
+    expect((await request(app).get('/arena/rules.js')).text).toContain("import { Chess } from '/arena/chess.js'");
+    expect((await request(app).get('/arena')).text).toContain('<script type="module" src="/arena/rules.js"></script>');
+    delete process.env.ARENA_ENABLED;
+    expect((await request(app).get('/arena/chess.js')).status).toBe(404);
   });
 
   it('the chain and the thumbprint match the server\'s', async () => {
@@ -418,12 +517,38 @@ describe('the page uses the same texts and keeps its own chain', () => {
   it('the page passes an honest record, and fails closed on stripped signatures and missing hashes', async () => {
     const { g, mine } = await hvhRecord();
     expect(g.result).toBe('0-1');
-    expect(await client.chainProblems(g, mine)).toEqual([]);
-    expect(await verifyGameRecord(g, g.grants)).toEqual({ ok: true, problems: [] });
+    expect(await client.chainProblems(g, mine)).toEqual({ problems: [], basis: 'verified' });
+    expect(await verifyGameRecord(g, g.grants)).toMatchObject({ ok: true, problems: [] });
     const stripped = structuredClone(g); delete stripped.moves[1].sig;
-    expect(await client.chainProblems(stripped, mine)).toEqual(['ply 2: a human seat with no game-key signature']);
+    expect((await client.chainProblems(stripped, mine)).problems).toEqual(['ply 2: a human seat with no game-key signature']);
     const noHash = structuredClone(g); delete noHash.moves[3].hash;
-    expect(await client.chainProblems(noHash, mine)).toEqual(['ply 4: no hash']);
+    expect((await client.chainProblems(noHash, mine)).problems).toEqual(['ply 4: no hash']);
+  });
+
+  it('the page checks the result too: a signed prefix claiming mate fails, a stripped resign fails', async () => {
+    const { g, mine } = await hvhRecord();
+    const prefix = structuredClone(g); prefix.moves = prefix.moves.slice(0, 3);
+    const prefixMine = Object.fromEntries(Object.entries(mine).filter(([n]) => Number(n) <= 3));
+    expect((await client.chainProblems(prefix, prefixMine)).problems).toEqual(['the result 0-1 (checkmate) does not follow from the moves and the verified events']);
+    const app = appWith(memStore().store), { id, k } = await keyGame(app);
+    await request(app).post(`/api/v1/arena/games/${id}/resign`).set(await keyHeaders(k, app, id, 'resign')).send().expect(200);
+    const resigned = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
+    expect(await client.chainProblems(resigned, {})).toEqual({ problems: [], basis: 'verified' });
+    const noEvent = structuredClone(resigned); noEvent.events = [];
+    expect((await client.chainProblems(noEvent, {})).problems).toEqual(['the result 0-1 (White resigned) does not follow from the moves and the verified events']);
+    const unsigned = structuredClone(resigned); delete unsigned.events[0].sig;
+    expect((await client.chainProblems(unsigned, {})).problems).toEqual(['event 1 (resign at ply 1): a human seat with no game-key signature', 'the result 0-1 (White resigned) does not follow from the moves and the verified events']);
+    const offList = structuredClone(resigned); offList.events.push({ act: 'offer_draw', by: resigned.black, ply: 40 });
+    expect((await client.chainProblems(offList, {})).problems.join()).toMatch(/ply is off the move list.*no prev/);
+  });
+
+  it('the page labels a loss on time referee_attested, never verified', async () => {
+    let t = Date.now();
+    const app = appWith(memStore().store, 10, { now: () => t }), { id, k } = await keyGame(app);
+    expect((await keyMove(app, id, k, 'e2e4', { time: new Date(t).toISOString() })).status).toBe(200);
+    t += 16 * 60_000;
+    const g = (await request(app).get(`/api/v1/arena/games/${id}`)).body;
+    expect(await client.chainProblems(g, {})).toEqual({ problems: [], basis: 'referee_attested' });
   });
 
   it('the page flags a rewrite of the OPPONENT\'s move, which this browser never signed', async () => {
@@ -433,11 +558,11 @@ describe('the page uses the same texts and keeps its own chain', () => {
     rewritten.moves[3].uci = 'd8g5';
     const hs = await client.chainHashes(g.id, rewritten.moves);
     rewritten.moves.forEach((m: { hash: string }, i: number) => { m.hash = hs[i + 1]; });
-    expect(await client.chainProblems(rewritten, mine)).toEqual(['ply 4: game-key signature does not verify']);
+    expect((await client.chainProblems(rewritten, mine)).problems).toEqual(['ply 4: game-key signature does not verify', 'the result 0-1 (checkmate) does not follow from the moves and the verified events']);
     // And a rewrite of a move this browser DID sign is flagged twice: bad signature, and not what I signed.
     const mineChanged = structuredClone(g); mineChanged.moves[2].uci = 'h2h4';
     const hs2 = await client.chainHashes(g.id, mineChanged.moves);
     mineChanged.moves.forEach((m: { hash: string }, i: number) => { m.hash = hs2[i + 1]; });
-    expect((await client.chainProblems(mineChanged, mine)).join()).toMatch(/ply 3: this browser signed g2g4, the server shows h2h4/);
+    expect((await client.chainProblems(mineChanged, mine)).problems.join()).toMatch(/ply 3: this browser signed g2g4, the server shows h2h4/);
   });
 });

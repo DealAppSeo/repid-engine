@@ -19,6 +19,28 @@
  * authMessage of POST /api/v1/account/connect.
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
+let chessModule: string | null | undefined;
+/**
+ * chess.js's own ESM build (the referee's exact dependency and version), served same-origin at
+ * /arena/chess.js so the page can replay a game with the same rules as the server. Read once; null
+ * when the file is not there, in which case the page says it could not check the result.
+ */
+export function chessModuleJs(): string | null {
+  if (chessModule === undefined) {
+    try {
+      chessModule = readFileSync(join(dirname(require.resolve('chess.js')), '..', 'esm', 'chess.js'), 'utf8').replace(/\n\/\/# sourceMappingURL=.*$/m, '\n');
+    } catch {
+      chessModule = null;
+    }
+  }
+  return chessModule;
+}
+/** Hands the rules to the classic page script. A module, so it loads after the page and may fail alone. */
+export const ARENA_RULES_JS = "import { Chess } from '/arena/chess.js';\nwindow.ArenaChess = Chess;\n";
+
 export const ARENA_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -123,6 +145,7 @@ export const ARENA_HTML = `<!doctype html>
     </div>
   </section>
 </main>
+<script type="module" src="/arena/rules.js"></script>
 <script src="/arena/arena.js"></script>
 </body>
 </html>
@@ -184,7 +207,10 @@ export const ARENA_JS = String.raw`(function () {
   // covers the OPPONENT's moves too. Then compare with what this browser signed itself. (The grants'
   // wallet signatures are checked separately, by walletGrantProblems.)
   async function chainProblems(g, signedByMe) {
-    var moves = g.moves || [], hs = await chainHashes(g.id, moves), problems = [], grants = g.grants || [], keys = {};
+    var problems = [], grants = g.grants || [], keys = {}, validEvents = [];
+    if (!Array.isArray(g.moves)) problems.push('the record has no move list');
+    if (!Array.isArray(g.events)) problems.push('the record has no events list');
+    var moves = Array.isArray(g.moves) ? g.moves : [], hs = await chainHashes(g.id, moves);
     function colour(ref) { return ref === g.white ? 'white' : ref === g.black ? 'black' : null; }
     function human(ref) { return String(ref).indexOf('human:') === 0; }
     grants.forEach(function (x) { if (!colour(x.participant) || !human(x.participant)) problems.push('grant ' + x.thumbprint + ': ' + x.participant + ' is not a human player in this game'); });
@@ -199,16 +225,18 @@ export const ARENA_JS = String.raw`(function () {
       return keys[id];
     }
     async function checkSigned(label, by, x, payload) {
+      var before = problems.length;
       if (!human(by)) {
         if (grants.some(function (y) { return y.participant === by; })) problems.push(label + ': an agent seat holds a human grant');
         if (x.sig) problems.push(label + ': an agent seat carries a game-key signature');
-        return;
+        return problems.length === before;
       }
-      if (!x.sig || !x.key) { problems.push(label + ': a human seat with no game-key signature'); return; }
+      if (!x.sig || !x.key) { problems.push(label + ': a human seat with no game-key signature'); return false; }
       var k = await keyFor(by, x.key);
-      if (!k) { problems.push(label + ': no valid grant for key ' + x.key + ' of ' + by); return; }
+      if (!k) { problems.push(label + ': no valid grant for key ' + x.key + ' of ' + by); return false; }
       var ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, k, b64urlBytes(x.sig), new TextEncoder().encode(payload));
       if (!ok) problems.push(label + ': game-key signature does not verify');
+      return ok;
     }
     for (var i = 0; i < moves.length; i++) {
       var m = moves[i], ply = i + 1, seat = ply % 2 === 1 ? g.white : g.black;
@@ -217,18 +245,58 @@ export const ARENA_JS = String.raw`(function () {
       if (m.by !== seat) problems.push('ply ' + ply + ': made by ' + (m.by || 'nobody named') + ', but ' + seat + ' was to move');
       await checkSigned('ply ' + ply, seat, m, gameKeyPayload({ game: g.id, player: seat, act: 'move', ply: ply, prev: hs[i], uci: m.uci }, m.time || ''));
     }
-    var events = g.events || [];
+    var events = Array.isArray(g.events) ? g.events : [];
     for (var j = 0; j < events.length; j++) {
-      var e = events[j], label = e.act + ' at ply ' + e.ply;
-      if (!colour(e.by)) { problems.push(label + ': ' + e.by + ' is not a player in this game'); continue; }
-      if (hs[e.ply - 1] !== e.prev) problems.push(label + ': prev is not the chain head at that ply');
-      await checkSigned(label, e.by, e, gameKeyPayload({ game: g.id, player: e.by, act: e.act, ply: e.ply, prev: e.prev }, e.time || ''));
+      var e = events[j], label = 'event ' + (j + 1) + ' (' + e.act + ' at ply ' + e.ply + ')', before = problems.length;
+      if (['resign', 'offer_draw', 'accept_draw'].indexOf(e.act) < 0) problems.push(label + ': not a resign, offer_draw or accept_draw');
+      if (!Number.isInteger(e.ply) || e.ply < 1 || e.ply > moves.length + 1) problems.push(label + ': ply is off the move list (1 to ' + (moves.length + 1) + ')');
+      if (typeof e.prev !== 'string') problems.push(label + ': no prev');
+      else if (hs[e.ply - 1] !== e.prev) problems.push(label + ': prev is not the chain head at that ply');
+      if (!colour(e.by)) problems.push(label + ': ' + e.by + ' is not a player in this game');
+      if (problems.length > before) continue;
+      if (await checkSigned(label, e.by, e, gameKeyPayload({ game: g.id, player: e.by, act: e.act, ply: e.ply, prev: e.prev }, e.time || ''))) validEvents.push(e);
     }
     Object.keys(signedByMe || {}).forEach(function (n) {
       var mine = signedByMe[n], theirs = moves[Number(n) - 1];
       if (!theirs || theirs.uci !== mine.uci || hs[Number(n) - 1] !== mine.prev) problems.push('ply ' + n + ': this browser signed ' + mine.uci + ', the server shows ' + (theirs ? theirs.uci : 'nothing'));
     });
-    return problems;
+    // The result must follow from what verified, as the server's verifyGameRecord requires.
+    var basis = null, claimed = g.result || null, derived = null;
+    if (g.status === 'finished' && !claimed) problems.push('the game is finished but carries no result');
+    if (claimed || window.ArenaChess) {
+      if (!window.ArenaChess) problems.push('this browser could not load the rules of chess, so it cannot check the result');
+      else {
+        try { derived = deriveResult(g, moves, validEvents); } catch (x) { problems.push('the moves do not replay under the rules of chess'); }
+        if (claimed) {
+          if (!derived) problems.push('the result ' + claimed + ' (' + (g.termination || '') + ') does not follow from the moves and the verified events');
+          else if (derived.result !== claimed || derived.termination !== g.termination) problems.push('the result ' + claimed + ' (' + (g.termination || '') + ') is not what the record shows: ' + derived.result + ' (' + derived.termination + ')');
+          else basis = derived.basis;
+        } else if (derived) problems.push('the moves and events end the game (' + derived.result + ', ' + derived.termination + ') but no result is recorded');
+      }
+    }
+    return { problems: problems, basis: basis };
+  }
+  // The result the record supports (src/arena/game-key.ts deriveResult): the board, then a valid resign or
+  // agreed draw after the last move; a loss on time only as the referee's word ('referee_attested').
+  function deriveResult(g, moves, validEvents) {
+    var c = new window.ArenaChess();
+    moves.forEach(function (m) { c.move({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), promotion: m.uci[4] }); });
+    if (c.isCheckmate()) return { result: c.turn() === 'w' ? '0-1' : '1-0', termination: 'checkmate', basis: 'verified' };
+    if (c.isStalemate()) return { result: '1/2-1/2', termination: 'stalemate', basis: 'verified' };
+    if (c.isThreefoldRepetition()) return { result: '1/2-1/2', termination: 'threefold repetition', basis: 'verified' };
+    if (c.isInsufficientMaterial()) return { result: '1/2-1/2', termination: 'insufficient material', basis: 'verified' };
+    if (c.isDrawByFiftyMoves()) return { result: '1/2-1/2', termination: 'fifty-move rule', basis: 'verified' };
+    var last = moves.length + 1, at = validEvents.filter(function (e) { return e.ply === last; });
+    var resign = at.find(function (e) { return e.act === 'resign'; });
+    if (resign) return resign.by === g.white ? { result: '0-1', termination: 'White resigned', basis: 'verified' } : { result: '1-0', termination: 'Black resigned', basis: 'verified' };
+    var offer = at.findIndex(function (e) { return e.act === 'offer_draw'; });
+    if (offer >= 0 && at.slice(offer + 1).some(function (e) { return e.by !== at[offer].by && (e.act === 'accept_draw' || e.act === 'offer_draw'); })) return { result: '1/2-1/2', termination: 'draw agreed', basis: 'verified' };
+    var t = /^loss on time \((White|Black)'s clock ran out\)$/.exec(g.termination || '');
+    if (t) {
+      var loser = t[1] === 'White' ? 'w' : 'b', toMove = moves.length % 2 === 0 ? 'w' : 'b', result = loser === 'w' ? '0-1' : '1-0';
+      if (loser === toMove && g.result === result) return { result: result, termination: g.termination, basis: 'referee_attested' };
+    }
+    return null;
   }
   // The grants' wallet signatures: recovered through the connected wallet (personal_ecRecover), since
   // this page carries no secp256k1 code of its own. Without a wallet that offers it, they are NOT CHECKED
@@ -412,12 +480,14 @@ export const ARENA_JS = String.raw`(function () {
 
   // The page's own copy of the chain: recompute it, compare it with what this browser signed, flag any difference.
   async function checkChain(g) {
-    var rec = me() ? await idbGet(keyId(g.id)) : null, problems = await chainProblems(g, rec && rec.signed), w = await walletGrantProblems(g), c = $('chain');
-    problems = problems.concat(w.problems);
+    var rec = me() ? await idbGet(keyId(g.id)) : null, checked = await chainProblems(g, rec && rec.signed), w = await walletGrantProblems(g), c = $('chain');
+    var problems = checked.problems.concat(w.problems);
     c.className = problems.length ? 'err' : 'ok';
     c.textContent = problems.length
       ? 'Warning: this browser cannot verify the server copy of this game: ' + problems.join('; ')
-      : 'Move chain checked in this browser: ' + g.moves.length + ' moves, every human move signed by its granted key.' + (w.notChecked ? ' The grants\' wallet signatures were not checked here (no wallet that can recover them).' : ' The grants\' wallet signatures check out.');
+      : 'Move chain checked in this browser: ' + g.moves.length + ' moves, every human move signed by its granted key.'
+        + (checked.basis === 'verified' ? ' The result follows from the record.' : checked.basis === 'referee_attested' ? ' The result is a loss on time: the referee\'s word, which the signatures do not cover.' : '')
+        + (w.notChecked ? ' The grants\' wallet signatures were not checked here (no wallet that can recover them).' : ' The grants\' wallet signatures check out.');
   }
   async function refresh() { S.game = await getJson(API + '/games/' + S.game.id); render(); await checkChain(S.game); }
 

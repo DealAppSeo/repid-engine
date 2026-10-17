@@ -74,9 +74,10 @@ import {
 } from '../arena/referee';
 import { ArenaTablesMissing, MIGRATION_FILE, supabaseArenaStore, type ArenaStore, type GameRow, type GameStatus, type Speed } from '../arena/store';
 import type { TimeControl } from '../arena/referee';
-import { ARENA_JS, ARENA_HTML } from '../arena/page';
+import { ARENA_JS, ARENA_HTML, ARENA_RULES_JS, chessModuleJs } from '../arena/page';
+import { arenaStatement, type ArenaAction } from '../arena/statement';
 import {
-  KEY_ACTS, chainHead, chainNext, gameKeyPayload, grantLines, jwkThumbprint, parseJwk, verifyGameKey,
+  KEY_ACTS, chainHead, chainNext, gameKeyPayload, grantLines, jwkThumbprint, parseJwk, verifyGameKey, verifyGameRecord,
   type ChainEvent, type KeyAct, type PublicJwk,
 } from '../arena/game-key';
 
@@ -103,43 +104,7 @@ export function participantRef(raw: unknown): string | null {
   return null;
 }
 
-/**
- * What a human's WALLET signs. Each variant names everything the server will do with the request.
- * `grant` (a game key's RFC 7638 thumbprint) rides on a challenge or an accept, so a human signs once
- * per game. Moves are not here: a game key signs those (src/arena/game-key.ts).
- */
-export type ArenaAction =
-  | { action: 'challenge'; game?: string; opponent: string; colour: 'white' | 'black'; stake_usd: number; time_control: TimeControl; speed: Speed; grant?: string }
-  | { action: 'accept'; game: string; colour: 'white' | 'black'; stake_usd: number; grant?: string }
-  | { action: 'grant'; game: string; colour: 'white' | 'black'; stake_usd: number; grant: string }
-  | { action: 'revoke'; game: string }
-  | { action: 'scoresheet'; game: string; result: string; plies: number; chain_head: string }
-  | { action: 'predict'; game: string; side: 'white' | 'black'; probability: number };
-
-/**
- * The arena's signed statement, in plain words. The page builds the same text (src/arena/page.ts,
- * pinned equal by tests/arena.test.ts) and shows it before the wallet does.
- */
-export function arenaStatement(a: ArenaAction, wallet: string, timestamp: string): string {
-  const lines = ['HyperDAG AgentChess arena (testnet; no money moves)'];
-  const stake = (usd: number) => `stake: ${usd} testnet USD, on your own win`;
-  if (a.action === 'challenge') {
-    lines.push('action: challenge', ...(a.game ? [`game: ${a.game}`] : []), `opponent: ${a.opponent}`, `you play: ${a.colour}`,
-      stake(a.stake_usd), `time control: ${a.time_control}`, `viewer speed: ${a.speed}`, ...(a.grant ? grantLines(a.grant) : []));
-  } else if (a.action === 'accept') {
-    lines.push('action: accept challenge', `game: ${a.game}`, `you play: ${a.colour}`, stake(a.stake_usd), ...(a.grant ? grantLines(a.grant) : []));
-  } else if (a.action === 'grant') {
-    lines.push('action: grant a game key', `game: ${a.game}`, `you play: ${a.colour}`, stake(a.stake_usd), ...grantLines(a.grant));
-  } else if (a.action === 'revoke') {
-    lines.push('action: end game key', `game: ${a.game}`);
-  } else if (a.action === 'scoresheet') {
-    lines.push('action: sign the scoresheet (I accept the result)', `game: ${a.game}`, `result: ${a.result}`, `plies: ${a.plies}`, `move chain: ${a.chain_head}`);
-  } else {
-    lines.push('action: predict (calibration only)', `game: ${a.game}`, `side: ${a.side} wins`, `probability: ${a.probability}`);
-  }
-  lines.push(`wallet: ${wallet.toLowerCase()}`, `time: ${timestamp}`);
-  return lines.join('\n');
-}
+export { arenaStatement, type ArenaAction } from '../arena/statement';
 
 const MAX_SKEW_MS = 5 * 60 * 1000;
 
@@ -271,6 +236,13 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     }
     return { jwk, thumbprint: jwkThumbprint(jwk) };
   }
+  /** The wallet grants as published with a game: with them anyone can check every game-key signature. */
+  async function publishedGrants(g: GameRow) {
+    return (await store.gameKeys(g.id)).map((k) => ({ participant: k.participant, thumbprint: k.thumbprint, public_jwk: k.public_jwk, capabilities: k.capabilities,
+      grant_statement: k.grant_statement, grant_signature: k.grant_signature, granted_at: k.granted_at, revoked_at: k.revoked_at, revoked_reason: k.revoked_reason,
+      active: !k.revoked_at && g.status !== 'finished' }));
+  }
+
   /** A thumbprint belongs to one player per game: granting the opponent's public key is refused. */
   async function keyTaken(g: GameRow, me: string, thumbprint: string, res: Response): Promise<boolean> {
     if (!(await store.gameKeys(g.id)).some((k) => k.thumbprint === thumbprint && k.participant !== me)) return false;
@@ -546,9 +518,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
       : [];
     // The wallet grants are published with the game: with them, anyone can verify every game-key
     // signature in the record (src/arena/game-key.ts verifyGameRecord) without trusting this server.
-    const grants = (await store.gameKeys(g.id)).map((k) => ({ participant: k.participant, thumbprint: k.thumbprint, public_jwk: k.public_jwk, capabilities: k.capabilities,
-      grant_statement: k.grant_statement, grant_signature: k.grant_signature, granted_at: k.granted_at, revoked_at: k.revoked_at, revoked_reason: k.revoked_reason,
-      active: !k.revoked_at && g.status !== 'finished' }));
+    const grants = await publishedGrants(g);
     res.json({ ...publicGame(g, now()), grants, predictions: { count: preds.length, mean_brier: scored.length ? +(scored.reduce((a, x) => a + x, 0) / scored.length).toFixed(4) : null } });
   });
 
@@ -675,9 +645,13 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     if (!me) return;
     if (!colorOf(g, me.ref)) return void res.status(403).json({ error: 'not_a_participant' });
     if (g.status !== 'finished') return void res.status(409).json({ error: 'game_not_finished' });
-    const actual = { result: `${g.result} (${g.termination})`, chain_head: chainHead(g.id, g.moves) };
+    // Checked against what the RECORD proves (the moves replayed with chess.js, plus the verified signed
+    // events), never against the stored result column: an unverifiable record is refused outright.
+    const v = await verifyGameRecord(publicGame(g, now()), await publishedGrants(g));
+    if (!v.ok || !v.result) return void res.status(409).json({ error: 'record_unverified', message: 'The record of this game does not verify, so no scoresheet can be accepted for it.', problems: v.problems });
+    const actual = { result: `${v.result.result} (${v.result.termination})`, chain_head: chainHead(g.id, g.moves), result_basis: v.result_basis };
     if (result !== actual.result || head !== actual.chain_head) return void res.status(409).json({ error: 'scoresheet_mismatch', message: 'That is not this game\'s result and move chain, so it was not recorded as accepted.', actual });
-    const ok = await store.markResultAccepted(g.id, me.ref, { result, chain_head: head, plies: g.moves.length, signed_at: iso(now()), by: me.statement ? 'wallet' : 'agent_key', ...(me.statement ? { statement: me.statement, signature: me.signature } : {}) });
+    const ok = await store.markResultAccepted(g.id, me.ref, { result, chain_head: head, plies: g.moves.length, result_basis: v.result_basis, signed_at: iso(now()), by: me.statement ? 'wallet' : 'agent_key', ...(me.statement ? { statement: me.statement, signature: me.signature } : {}) });
     if (!ok) return void res.status(409).json({ error: 'no_signals_row' });
     res.json({ accepted_result: true });
   });
@@ -774,6 +748,13 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
   page.use(flagGate);
   page.get('/', (_req, res) => { res.type('html').send(ARENA_HTML); });
   page.get('/arena.js', (_req, res) => { res.type('application/javascript; charset=utf-8').send(ARENA_JS); });
+  // The referee's own rules (chess.js, BSD-2-Clause), so the page can replay a result itself.
+  page.get('/rules.js', (_req, res) => { res.type('application/javascript; charset=utf-8').send(ARENA_RULES_JS); });
+  page.get('/chess.js', (_req, res) => {
+    const js = chessModuleJs();
+    if (!js) return void res.status(404).json({ error: 'rules_unavailable' });
+    res.type('application/javascript; charset=utf-8').send(js);
+  });
 
   return { api, page };
 }
