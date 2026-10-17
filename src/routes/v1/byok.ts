@@ -82,16 +82,7 @@ interface Principal { wallet: string; owner: OwnerRef; }
  * proof without needing an account to already exist — otherwise creating your
  * first account would require having one.
  */
-export async function provenWallet(
-  req: Request,
-  res: Response,
-  /**
-   * The statement the wallet must have signed. Default: authMessage (method + path + wallet + time),
-   * which every route here uses. The arena passes its own statement, which also names the action
-   * (the move, the challenge terms, the prediction) so a signature cannot be resent with another body.
-   */
-  statement: (wallet: string, timestamp: string) => string = (w, t) => authMessage(req.method, req.baseUrl + req.path, w, t),
-): Promise<string | null> {
+export async function provenWallet(req: Request, res: Response): Promise<string | null> {
   const wallet = String(req.headers['x-hd-wallet'] ?? '').trim();
   const signature = String(req.headers['x-hd-signature'] ?? '').trim();
   const timestamp = String(req.headers['x-hd-timestamp'] ?? '').trim();
@@ -100,7 +91,7 @@ export async function provenWallet(
     res.status(401).json({
       error: 'signature_required',
       message: 'Send x-hd-wallet, x-hd-timestamp and x-hd-signature. Your key custody is not protected by a header anyone could guess.',
-      sign_this: statement(wallet || '<your wallet>', '<ISO timestamp>'),
+      sign_this: authMessage(req.method, req.baseUrl + req.path, wallet || '<your wallet>', '<ISO timestamp>'),
     });
     return null;
   }
@@ -111,7 +102,7 @@ export async function provenWallet(
     return null;
   }
 
-  const checked = await verifyWalletMessage(wallet, statement(wallet, timestamp), signature);
+  const checked = await verifyWalletMessage(wallet, authMessage(req.method, req.baseUrl + req.path, wallet, timestamp), signature);
   if (!checked.ok) {
     if (checked.reason === 'not_checked') {
       // We could not look. Saying "bad signature" would send someone to re-sign something

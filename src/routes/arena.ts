@@ -18,8 +18,10 @@
  * WHO IS CALLING. Two existing schemes, no new one:
  *   - an agent sends its own API key; authMiddleware validates it and it must be bound to an agent
  *     (an operator key names nobody and is refused);
- *   - a human signs with a wallet (x-hd-wallet, x-hd-timestamp, x-hd-signature), checked by byok.ts's
- *     provenWallet, and must have connected that wallet once (accountOfWallet). The statement is the
+ *   - a human signs with a wallet (x-hd-wallet, x-hd-timestamp, x-hd-signature), checked by
+ *     `provenArenaWallet` below under the same rules as byok.ts's provenWallet (5-minute window, the
+ *     shared verifyWalletMessage, the same three outcomes), and must have connected that wallet once
+ *     (accountOfWallet). The statement is the
  *     arena's own (`arenaStatement` below), NOT the shared authMessage: it names the action in plain
  *     words (the move with its game and ply; the challenge's opponent, colour, stake, time control and
  *     speed; the prediction's side and probability). The server rebuilds it from the body, so a
@@ -45,7 +47,8 @@ import { createHash } from 'node:crypto';
 import { trustedClientIp } from '../middleware/client-ip';
 import { db } from '../db';
 import { authMiddleware } from '../middleware/auth';
-import { accountOfWallet, provenWallet } from './v1/byok';
+import { accountOfWallet } from './v1/byok';
+import { verifyWalletMessage } from '../services/wallet-signature';
 import { resolveOwner, type AgentRef, type OwnerClaim, type OwnerResolution } from '../services/agent-owner-resolver';
 import { ownerRelation } from '../services/owner-distinct-shadow';
 import { peekHaltState } from '../services/emergency-halt';
@@ -109,6 +112,36 @@ export function arenaStatement(a: ArenaAction, wallet: string, timestamp: string
   return lines.join('\n');
 }
 
+const MAX_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * Prove the caller's wallet signed `statement`. The same rules and answers as byok.ts provenWallet,
+ * whose statement is the shared authMessage; it is left byte-for-byte unchanged, so /account/connect
+ * and byok behave exactly as before. Returns null after writing the refusal.
+ */
+async function provenArenaWallet(req: Request, res: Response, statement: (wallet: string, timestamp: string) => string): Promise<string | null> {
+  const wallet = String(req.headers['x-hd-wallet'] ?? '').trim();
+  const signature = String(req.headers['x-hd-signature'] ?? '').trim();
+  const timestamp = String(req.headers['x-hd-timestamp'] ?? '').trim();
+  if (!wallet || !signature || !timestamp) {
+    res.status(401).json({ error: 'signature_required', message: 'Send x-hd-wallet, x-hd-timestamp and x-hd-signature over the statement below.', sign_this: statement(wallet || '<your wallet>', '<ISO timestamp>') });
+    return null;
+  }
+  const age = Date.now() - Date.parse(timestamp);
+  if (!Number.isFinite(age) || Math.abs(age) > MAX_SKEW_MS) {
+    res.status(401).json({ error: 'stale_signature', message: 'Timestamp is missing, malformed, or more than 5 minutes from now.' });
+    return null;
+  }
+  const checked = await verifyWalletMessage(wallet, statement(wallet, timestamp), signature);
+  if (!checked.ok) {
+    // not_checked = we could not look (an RPC for a smart wallet); refuse, but say so truthfully.
+    if (checked.reason === 'not_checked') res.status(503).json({ error: 'signature_not_checked', message: checked.detail });
+    else res.status(401).json({ error: 'bad_signature', message: 'The signature does not match this exact action for this wallet.' });
+    return null;
+  }
+  return wallet;
+}
+
 /** Replay delay before the next event. `sinceLastMs` = time already spent since the previous event went out. */
 export function replayDelayMs(gapMs: number, speed: Speed, sinceLastMs = 0): number {
   return speed === 'machine' ? 0 : Math.max(0, Math.max(0, gapMs) / Number(speed) - sinceLastMs);
@@ -157,7 +190,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
         return null;
       }
       let signed = '';
-      const wallet = await provenWallet(req, res, (w, ts) => (signed = arenaStatement(act, w, ts)));
+      const wallet = await provenArenaWallet(req, res, (w, ts) => (signed = arenaStatement(act, w, ts)));
       if (!wallet) return null;
       if (!(await accountOf(wallet))) {
         res.status(403).json({ error: 'no_account', message: 'That wallet proved control but has no account yet. POST /api/v1/account/connect once, then play.' });
