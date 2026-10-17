@@ -92,7 +92,10 @@ export type OwnerSource =
   | 'agent_delegations'
   | 'agent_custodianship_links'
   | 'agent_kya_registry'
-  | 'repid_agents.builder_id';
+  | 'repid_agents.builder_id'
+  /** Never emitted by resolveOwner. The arena (src/routes/arena.ts) builds this claim for a human
+   *  player whose wallet signed the request, so ownerRelation can compare a human with an agent. */
+  | 'wallet_signature';
 
 export type OwnerKeyKind = 'builder_id' | 'human_sbt_token' | 'wallet' | 'opaque';
 

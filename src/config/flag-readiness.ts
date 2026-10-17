@@ -52,9 +52,9 @@
 //     module classifies booleans; if a secret ever needs reporting it gets its
 //     own allowlist, its own statuses and its own argument.
 //
-// ── WHY PUBLIC IS SAFE FOR THESE TWO ────────────────────────────────────────
+// ── WHY PUBLIC IS SAFE FOR THESE ────────────────────────────────────────────
 //
-// Both flags' states are ALREADY user-visible by design:
+// Every listed flag's state is ALREADY user-visible by design:
 //
 //   SELF_SERVE_ACCOUNTS_ENABLED  `POST /api/v1/account/connect` answers 503
 //                                `disabled` when off and 401 `signature_required`
@@ -66,6 +66,8 @@
 //                                deployment" straight to a caller, and
 //                                `GET /api/v1/human/agents` returns `enabled`
 //                                verbatim. It is shipped copy, not a secret.
+//   ARENA_ENABLED                `GET /arena` answers 404 when off and the page when
+//                                on, to any keyless caller (added 2026-10-16).
 //
 // Publishing "a feature is off" tells an attacker that a surface they cannot
 // reach is one they still cannot reach. What it buys everyone else is the
@@ -148,6 +150,10 @@ export const PUBLIC_FLAGS: readonly { name: string; why: string }[] = [
   {
     name: 'HUMAN_AGENT_BIND_ENABLED',
     why: 'GET /api/v1/human/agents returns this flag as `enabled`, and listing-bridge returns "not enabled on this deployment" as user-facing prose.',
+  },
+  {
+    name: 'ARENA_ENABLED',
+    why: 'GET /arena and every /api/v1/arena route answer 404 when off and serve the arena when on, to any keyless caller.',
   },
 ];
 
