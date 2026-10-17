@@ -177,7 +177,8 @@ export function supabaseArenaStore(db: any): ArenaStore {
       const at = new Date().toISOString();
       // Revoke first, then insert: the partial unique index (one active key per game and side) then always holds.
       check(await db.from('arena_game_keys').update({ revoked_at: at, revoked_reason: 'replaced' }).eq('game_id', row.game_id).eq('participant', row.participant).is('revoked_at', null));
-      check(await db.from('arena_game_keys').insert({ ...row, granted_at: at, revoked_at: null, revoked_reason: null }));
+      // Upsert, not insert: re-granting the SAME key makes its own row active again with the new grant.
+      check(await db.from('arena_game_keys').upsert({ ...row, granted_at: at, revoked_at: null, revoked_reason: null }, { onConflict: 'game_id,participant,thumbprint' }));
     },
     async gameKeys(gameId) {
       return check(await db.from('arena_game_keys').select('*').eq('game_id', gameId).order('granted_at', { ascending: true })) as GameKeyRow[];

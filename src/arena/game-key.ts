@@ -67,10 +67,12 @@ export function chainHead(game: string, moves: readonly { uci: string }[]): stri
 /**
  * What the game key signs. The page builds the same text (src/arena/page.ts, pinned equal by
  * tests/arena-game-keys.test.ts). `ply` is the next ply and `prev` the chain head when the action is
- * taken, so a move signature is good for exactly one position in exactly one game.
+ * taken, so a move signature is good for exactly one position in exactly one game. `player` binds
+ * it to one seat: a player who re-grants the OPPONENT's public key as their own still cannot have
+ * the opponent's signatures counted as theirs.
  */
-export function gameKeyPayload(a: { game: string; act: KeyAct; ply: number; prev: string; uci?: string }, time: string): string {
-  const lines = ['HyperDAG AgentChess game key', `game: ${a.game}`, `action: ${ACT_WORDS[a.act]}`, `ply: ${a.ply}`, `prev: ${a.prev}`];
+export function gameKeyPayload(a: { game: string; player: string; act: KeyAct; ply: number; prev: string; uci?: string }, time: string): string {
+  const lines = ['HyperDAG AgentChess game key', `game: ${a.game}`, `player: ${a.player}`, `action: ${ACT_WORDS[a.act]}`, `ply: ${a.ply}`, `prev: ${a.prev}`];
   if (a.act === 'move') lines.push(`move: ${a.uci ?? ''}`);
   lines.push(`time: ${time}`);
   return lines.join('\n');
@@ -105,43 +107,70 @@ export interface ChainEvent { act: KeyAct; by: string; ply: number; prev: string
 export interface PublishedGrant { participant: string; thumbprint: string; public_jwk: PublicJwk; grant_statement: string; grant_signature: string }
 
 /**
- * Check a published game record WITHOUT trusting the server: the chain links, every game-key
- * signature verifies under a key whose thumbprint the player's wallet signed for this game, and
- * every such grant recovers to that player's wallet. Returns every problem found, not just the first.
+ * Check a published game record WITHOUT trusting the server. FAIL CLOSED: anything the record
+ * cannot prove is a problem, never a skip.
+ *   - every move carries `hash`, and it follows from the moves before it;
+ *   - every move names the seated player (`by`): white on odd plies, black on even;
+ *   - a HUMAN seat's every move and event carries a game-key signature that verifies, under a key
+ *     whose thumbprint that player's wallet signed for this game and this colour. A human seat can
+ *     never have an unsigned ply, so stripping signatures and recomputing hashes is caught;
+ *   - an unsigned move is valid only for an AGENT seat (an `agent:` ref) that holds no human grant;
+ *   - every grant is for a seated human, names this game, this colour and this key, and recovers
+ *     to that player's wallet. Grants are cached per participant AND thumbprint, so two players
+ *     published with the same thumbprint each go through the wallet check.
+ * Returns every problem found, not just the first.
  */
-export async function verifyGameRecord(game: { id: string; moves: readonly ChainMove[]; events?: readonly ChainEvent[] }, grants: readonly PublishedGrant[]): Promise<{ ok: boolean; problems: string[] }> {
+export async function verifyGameRecord(
+  game: { id: string; white: string; black: string; moves: readonly ChainMove[]; events?: readonly ChainEvent[] },
+  grants: readonly PublishedGrant[],
+): Promise<{ ok: boolean; problems: string[] }> {
   const problems: string[] = [];
+  const seatColour = (ref: string) => (ref === game.white ? 'white' : ref === game.black ? 'black' : null);
+  const isHuman = (ref: string) => ref.startsWith('human:');
+  for (const g of grants) {
+    if (!seatColour(g.participant) || !isHuman(g.participant)) problems.push(`grant ${g.thumbprint}: ${g.participant} is not a human player in this game`);
+  }
   const grantOk = new Map<string, boolean>();
-  const grantFor = async (by: string | undefined, key: string | undefined): Promise<PublishedGrant | null> => {
+  const grantFor = async (by: string, key: string | undefined): Promise<PublishedGrant | null> => {
     const g = grants.find((x) => x.participant === by && x.thumbprint === key);
     if (!g) return null;
-    if (!grantOk.has(key as string)) {
-      const wallet = g.participant.replace(/^human:/, '');
-      const signed = await verifyWalletMessage(wallet, g.grant_statement, g.grant_signature);
-      grantOk.set(key as string, signed.ok && jwkThumbprint(g.public_jwk) === g.thumbprint
-        && g.grant_statement.includes(`game: ${game.id}\n`) && g.grant_statement.includes(`game key: ${g.thumbprint}\n`));
+    const id = `${g.participant}|${g.thumbprint}`;
+    if (!grantOk.has(id)) {
+      const signed = await verifyWalletMessage(g.participant.replace(/^human:/, ''), g.grant_statement, g.grant_signature);
+      grantOk.set(id, signed.ok && jwkThumbprint(g.public_jwk) === g.thumbprint
+        && g.grant_statement.includes(`game: ${game.id}\n`) && g.grant_statement.includes(`game key: ${g.thumbprint}\n`)
+        && g.grant_statement.includes(`you play: ${seatColour(g.participant)}\n`));
     }
-    return grantOk.get(key as string) ? g : null;
+    return grantOk.get(id) ? g : null;
+  };
+  /** A human seat must have signed; an agent seat holding no human grant may be unsigned. */
+  const checkSigned = async (label: string, by: string, x: { key?: string; sig?: string; time?: string }, payload: (time: string) => string) => {
+    if (!isHuman(by)) {
+      if (grants.some((g) => g.participant === by)) problems.push(`${label}: an agent seat holds a human grant`);
+      if (x.sig) problems.push(`${label}: an agent seat carries a game-key signature`);
+      return;
+    }
+    if (!x.sig || !x.key) return void problems.push(`${label}: a human seat with no game-key signature`);
+    const g = await grantFor(by, x.key);
+    if (!g) return void problems.push(`${label}: no valid wallet grant for key ${x.key} of ${by}`);
+    if (!verifyGameKey(g.public_jwk, payload(x.time ?? ''), x.sig)) problems.push(`${label}: game-key signature does not verify`);
   };
   let prev = chainGenesis(game.id);
   const heads = [prev]; // heads[n] = the chain after n moves
   for (const [i, m] of game.moves.entries()) {
-    const ply = i + 1, hash = chainNext(prev, ply, m.uci);
-    if (m.hash !== undefined && m.hash !== hash) problems.push(`ply ${ply}: hash does not follow from the moves before it`);
-    if (m.sig) {
-      const g = await grantFor(m.by, m.key);
-      if (!g) problems.push(`ply ${ply}: no valid wallet grant for key ${m.key ?? '?'} of ${m.by ?? '?'}`);
-      else if (!verifyGameKey(g.public_jwk, gameKeyPayload({ game: game.id, act: 'move', ply, prev, uci: m.uci }, m.time ?? ''), m.sig)) problems.push(`ply ${ply}: game-key signature does not verify`);
-    }
+    const ply = i + 1, hash = chainNext(prev, ply, m.uci), seat = ply % 2 === 1 ? game.white : game.black;
+    if (m.hash === undefined) problems.push(`ply ${ply}: no hash`);
+    else if (m.hash !== hash) problems.push(`ply ${ply}: hash does not follow from the moves before it`);
+    if (m.by !== seat) problems.push(`ply ${ply}: made by ${m.by ?? 'nobody named'}, but ${seat} is to move`);
+    await checkSigned(`ply ${ply}`, seat, m, (time) => gameKeyPayload({ game: game.id, player: seat, act: 'move', ply, prev, uci: m.uci }, time));
     prev = hash;
     heads.push(hash);
   }
   for (const e of game.events ?? []) {
-    if (!e.sig) continue;
-    if (heads[e.ply - 1] !== e.prev) problems.push(`${e.act} at ply ${e.ply}: prev is not the chain head at that ply`);
-    const g = await grantFor(e.by, e.key);
-    if (!g) problems.push(`${e.act} at ply ${e.ply}: no valid wallet grant for key ${e.key ?? '?'}`);
-    else if (!verifyGameKey(g.public_jwk, gameKeyPayload({ game: game.id, act: e.act, ply: e.ply, prev: e.prev }, e.time ?? ''), e.sig)) problems.push(`${e.act} at ply ${e.ply}: game-key signature does not verify`);
+    const label = `${e.act} at ply ${e.ply}`;
+    if (!seatColour(e.by)) { problems.push(`${label}: ${e.by} is not a player in this game`); continue; }
+    if (heads[e.ply - 1] !== e.prev) problems.push(`${label}: prev is not the chain head at that ply`);
+    await checkSigned(label, e.by, e, (time) => gameKeyPayload({ game: game.id, player: e.by, act: e.act, ply: e.ply, prev: e.prev }, time));
   }
   return { ok: problems.length === 0, problems };
 }

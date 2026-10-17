@@ -165,7 +165,7 @@ export const ARENA_JS = String.raw`(function () {
   // What the game key signs (src/arena/game-key.ts gameKeyPayload).
   var ACT_WORDS = { move: 'move', resign: 'resign', offer_draw: 'offer draw', accept_draw: 'accept draw' };
   function gameKeyPayload(a, time) {
-    var lines = ['HyperDAG AgentChess game key', 'game: ' + a.game, 'action: ' + ACT_WORDS[a.act], 'ply: ' + a.ply, 'prev: ' + a.prev];
+    var lines = ['HyperDAG AgentChess game key', 'game: ' + a.game, 'player: ' + a.player, 'action: ' + ACT_WORDS[a.act], 'ply: ' + a.ply, 'prev: ' + a.prev];
     if (a.act === 'move') lines.push('move: ' + (a.uci || ''));
     lines.push('time: ' + time);
     return lines.join('\n');
@@ -177,16 +177,75 @@ export const ARENA_JS = String.raw`(function () {
     for (var i = 0; i < moves.length; i++) { h = await sha256hex(h + '\n' + (i + 1) + '\n' + moves[i].uci); out.push(h); }
     return out; // out[n] = the chain after n moves
   }
-  // Compare a server copy with this browser's own chain: what it recomputes, and what it signed.
-  async function chainProblems(game, moves, signedByMe) {
-    var hs = await chainHashes(game, moves), problems = [];
-    moves.forEach(function (m, i) { if (m.hash && m.hash !== hs[i + 1]) problems.push('ply ' + (i + 1) + ': the server hash does not follow from the moves'); });
-    Object.keys(signedByMe || {}).forEach(function (ply) {
-      var mine = signedByMe[ply], theirs = moves[Number(ply) - 1];
-      if (!theirs || theirs.uci !== mine.uci || hs[Number(ply) - 1] !== mine.prev) problems.push('ply ' + ply + ': this browser signed ' + mine.uci + ', the server shows ' + (theirs ? theirs.uci : 'nothing'));
+  // Check a server copy of the game the same way src/arena/game-key.ts verifyGameRecord does, and FAIL
+  // CLOSED: every move must carry its hash and name the seated player; a human seat's every move and
+  // event must carry a game-key signature that verifies under a key whose grant names this game, this
+  // colour and this key; an unsigned move is fine only for an agent seat holding no human grant. That
+  // covers the OPPONENT's moves too. Then compare with what this browser signed itself. (The grants'
+  // wallet signatures are checked separately, by walletGrantProblems.)
+  async function chainProblems(g, signedByMe) {
+    var moves = g.moves || [], hs = await chainHashes(g.id, moves), problems = [], grants = g.grants || [], keys = {};
+    function colour(ref) { return ref === g.white ? 'white' : ref === g.black ? 'black' : null; }
+    function human(ref) { return String(ref).indexOf('human:') === 0; }
+    grants.forEach(function (x) { if (!colour(x.participant) || !human(x.participant)) problems.push('grant ' + x.thumbprint + ': ' + x.participant + ' is not a human player in this game'); });
+    async function keyFor(by, thumb) {
+      var id = by + '|' + thumb;
+      if (!(id in keys)) {
+        var x = grants.find(function (y) { return y.participant === by && y.thumbprint === thumb; });
+        var ok = !!x && (await thumbprint(x.public_jwk)) === thumb && x.grant_statement.indexOf('game: ' + g.id + '\n') >= 0
+          && x.grant_statement.indexOf('game key: ' + thumb + '\n') >= 0 && x.grant_statement.indexOf('you play: ' + colour(by) + '\n') >= 0;
+        keys[id] = ok ? await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: x.public_jwk.x, y: x.public_jwk.y }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']) : null;
+      }
+      return keys[id];
+    }
+    async function checkSigned(label, by, x, payload) {
+      if (!human(by)) {
+        if (grants.some(function (y) { return y.participant === by; })) problems.push(label + ': an agent seat holds a human grant');
+        if (x.sig) problems.push(label + ': an agent seat carries a game-key signature');
+        return;
+      }
+      if (!x.sig || !x.key) { problems.push(label + ': a human seat with no game-key signature'); return; }
+      var k = await keyFor(by, x.key);
+      if (!k) { problems.push(label + ': no valid grant for key ' + x.key + ' of ' + by); return; }
+      var ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, k, b64urlBytes(x.sig), new TextEncoder().encode(payload));
+      if (!ok) problems.push(label + ': game-key signature does not verify');
+    }
+    for (var i = 0; i < moves.length; i++) {
+      var m = moves[i], ply = i + 1, seat = ply % 2 === 1 ? g.white : g.black;
+      if (!m.hash) problems.push('ply ' + ply + ': no hash');
+      else if (m.hash !== hs[ply]) problems.push('ply ' + ply + ': the server hash does not follow from the moves');
+      if (m.by !== seat) problems.push('ply ' + ply + ': made by ' + (m.by || 'nobody named') + ', but ' + seat + ' was to move');
+      await checkSigned('ply ' + ply, seat, m, gameKeyPayload({ game: g.id, player: seat, act: 'move', ply: ply, prev: hs[i], uci: m.uci }, m.time || ''));
+    }
+    var events = g.events || [];
+    for (var j = 0; j < events.length; j++) {
+      var e = events[j], label = e.act + ' at ply ' + e.ply;
+      if (!colour(e.by)) { problems.push(label + ': ' + e.by + ' is not a player in this game'); continue; }
+      if (hs[e.ply - 1] !== e.prev) problems.push(label + ': prev is not the chain head at that ply');
+      await checkSigned(label, e.by, e, gameKeyPayload({ game: g.id, player: e.by, act: e.act, ply: e.ply, prev: e.prev }, e.time || ''));
+    }
+    Object.keys(signedByMe || {}).forEach(function (n) {
+      var mine = signedByMe[n], theirs = moves[Number(n) - 1];
+      if (!theirs || theirs.uci !== mine.uci || hs[Number(n) - 1] !== mine.prev) problems.push('ply ' + n + ': this browser signed ' + mine.uci + ', the server shows ' + (theirs ? theirs.uci : 'nothing'));
     });
     return problems;
   }
+  // The grants' wallet signatures: recovered through the connected wallet (personal_ecRecover), since
+  // this page carries no secp256k1 code of its own. Without a wallet that offers it, they are NOT CHECKED
+  // here, and the page says so rather than counting them as good.
+  async function walletGrantProblems(g) {
+    if (!window.ethereum) return { notChecked: true, problems: [] };
+    var problems = [];
+    for (var i = 0; i < (g.grants || []).length; i++) {
+      var x = g.grants[i];
+      try {
+        var who = await window.ethereum.request({ method: 'personal_ecRecover', params: [hex(x.grant_statement), x.grant_signature] });
+        if ('human:' + String(who).toLowerCase() !== x.participant) problems.push('grant ' + x.thumbprint + ': not signed by ' + x.participant);
+      } catch (e) { return { notChecked: true, problems: problems }; }
+    }
+    return { notChecked: false, problems: problems };
+  }
+  function b64urlBytes(s) { var t = atob(String(s).replace(/-/g, '+').replace(/_/g, '/')), out = new Uint8Array(t.length); for (var i = 0; i < t.length; i++) out[i] = t.charCodeAt(i); return out; }
   function b64url(bytes) { var s = ''; for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
   async function thumbprint(jwk) { var d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('{"crv":"P-256","kty":"EC","x":"' + jwk.x + '","y":"' + jwk.y + '"}'))); return b64url(d); }
 
@@ -224,7 +283,7 @@ export const ARENA_JS = String.raw`(function () {
     var g = await getJson(API + '/games/' + S.game.id), rec = await idbGet(keyId(S.game.id));
     if (!rec) { $('grant').disabled = false; throw new Error('This browser has no game key for this game. Grant one (one wallet signature; the game clock keeps running).'); }
     var hs = await chainHashes(g.id, g.moves), ply = g.moves.length + 1, time = new Date().toISOString();
-    var payload = gameKeyPayload({ game: g.id, act: act, ply: ply, prev: hs[hs.length - 1], uci: uci }, time);
+    var payload = gameKeyPayload({ game: g.id, player: me(), act: act, ply: ply, prev: hs[hs.length - 1], uci: uci }, time);
     var sig = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, rec.pair.privateKey, new TextEncoder().encode(payload)));
     if (act === 'move') { rec.signed = rec.signed || {}; rec.signed[ply] = { uci: uci, prev: hs[hs.length - 1] }; await idbPut(keyId(g.id), rec); }
     try { return await send(path, body, { 'x-arena-key-signature': b64url(sig), 'x-arena-key-time': time }); }
@@ -353,9 +412,12 @@ export const ARENA_JS = String.raw`(function () {
 
   // The page's own copy of the chain: recompute it, compare it with what this browser signed, flag any difference.
   async function checkChain(g) {
-    var rec = me() ? await idbGet(keyId(g.id)) : null, problems = await chainProblems(g.id, g.moves, rec && rec.signed), c = $('chain');
+    var rec = me() ? await idbGet(keyId(g.id)) : null, problems = await chainProblems(g, rec && rec.signed), w = await walletGrantProblems(g), c = $('chain');
+    problems = problems.concat(w.problems);
     c.className = problems.length ? 'err' : 'ok';
-    c.textContent = problems.length ? 'Warning: the server copy of this game differs from this browser: ' + problems.join('; ') : 'Move chain checked in this browser: ' + g.moves.length + ' moves.';
+    c.textContent = problems.length
+      ? 'Warning: this browser cannot verify the server copy of this game: ' + problems.join('; ')
+      : 'Move chain checked in this browser: ' + g.moves.length + ' moves, every human move signed by its granted key.' + (w.notChecked ? ' The grants\' wallet signatures were not checked here (no wallet that can recover them).' : ' The grants\' wallet signatures check out.');
   }
   async function refresh() { S.game = await getJson(API + '/games/' + S.game.id); render(); await checkChain(S.game); }
 

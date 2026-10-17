@@ -67,7 +67,9 @@ export function memStore() {
     async addGameKey(row) {
       const at = new Date().toISOString();
       for (const k of keys) if (k.game_id === row.game_id && k.participant === row.participant && !k.revoked_at) { k.revoked_at = at; k.revoked_reason = 'replaced'; }
-      keys.push({ ...structuredClone(row), granted_at: at, revoked_at: null, revoked_reason: null });
+      const same = keys.findIndex((k) => k.game_id === row.game_id && k.participant === row.participant && k.thumbprint === row.thumbprint);
+      const next = { ...structuredClone(row), granted_at: at, revoked_at: null, revoked_reason: null };
+      if (same >= 0) keys[same] = next; else keys.push(next);
     },
     async gameKeys(id) { return structuredClone(keys.filter((k) => k.game_id === id)); },
     async revokeGameKey(id, participant, at) { for (const k of keys) if (k.game_id === id && k.participant === participant && !k.revoked_at) { k.revoked_at = at; k.revoked_reason = 'ended_by_wallet'; } },

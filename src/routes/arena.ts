@@ -271,6 +271,12 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     }
     return { jwk, thumbprint: jwkThumbprint(jwk) };
   }
+  /** A thumbprint belongs to one player per game: granting the opponent's public key is refused. */
+  async function keyTaken(g: GameRow, me: string, thumbprint: string, res: Response): Promise<boolean> {
+    if (!(await store.gameKeys(g.id)).some((k) => k.thumbprint === thumbprint && k.participant !== me)) return false;
+    res.status(409).json({ error: 'game_key_in_use', message: 'That key is already granted to the other player in this game. Make a new key.' });
+    return true;
+  }
   const grantRow = (g: GameRow, me: Principal, k: { jwk: PublicJwk; thumbprint: string }) => ({
     game_id: g.id, participant: me.ref, thumbprint: k.thumbprint, public_jwk: k.jwk, capabilities: [...KEY_ACTS],
     grant_statement: me.statement ?? '', grant_signature: me.signature ?? '',
@@ -289,8 +295,10 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
       return null;
     }
     const ply = g.moves.length + 1, prev = chainHead(g.id, g.moves);
-    const payload = gameKeyPayload({ game: g.id, act: a.act, ply, prev, uci: a.uci }, time);
-    const row = (await store.gameKeys(g.id)).find((k) => verifyGameKey(k.public_jwk, payload, sig));
+    // Each grant is tried with ITS player in the payload, active grants first: a re-granted key
+    // resolves to its live row, not an older revoked one.
+    const rows = (await store.gameKeys(g.id)).sort((x, y) => Number(!!x.revoked_at) - Number(!!y.revoked_at));
+    const row = rows.find((k) => verifyGameKey(k.public_jwk, gameKeyPayload({ game: g.id, player: k.participant, act: a.act, ply, prev, uci: a.uci }, time), sig));
     if (!row) {
       // The expected ply and prev let an honest client resync; they reveal nothing that GET does not.
       res.status(401).json({ error: 'bad_key_signature', message: 'No game key granted for this game verifies this exact action (game, ply, previous move hash, move, time).', ply, prev });
@@ -506,6 +514,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     if (now() - Date.parse(g.created_at) > CHALLENGE_TTL_MS) return void res.status(410).json({ error: 'challenge_expired' });
     const challenged = g.challenger === g.white ? g.black : g.white;
     if (me.ref !== challenged) return void res.status(403).json({ error: 'not_the_challenged_side', message: 'Only the challenged player can accept.' });
+    if (key && (await keyTaken(g, me.ref, key.thumbprint, res))) return;
     const rated = await currentRatings();
     const rw = rated[g.white]?.rating ?? DEFAULTS.anchor, rb = rated[g.black]?.rating ?? DEFAULTS.anchor;
     const pre = { rating_white: rw, rating_black: rb, E_white: +expected(rw, rb).toFixed(4), spread: spreads(rw, rb, SPREAD_HORIZON_PLIES) };
@@ -633,6 +642,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
       : null));
     if (!me) return;
     if (g.status === 'finished') return void res.status(409).json({ error: 'game_over', message: 'A game key ends with its game.' });
+    if (await keyTaken(g, me.ref, key.thumbprint, res)) return;
     await store.addGameKey(grantRow(g, me, key));
     res.status(201).json({ game_key: { thumbprint: key.thumbprint }, note: 'Any earlier key of yours for this game no longer acts. The game clock did not pause.' });
   });
