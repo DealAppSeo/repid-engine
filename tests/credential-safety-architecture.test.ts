@@ -77,6 +77,7 @@ const ALLOW: Array<{ file: string; rule: string; snippet?: string; why: string }
   { file: 'src/classify/free-votes.ts', rule: 'secret-equality', snippet: 'hostKey(p) === hostKey(v)', why: '`provider:model` dedupe key' },
   { file: 'src/classify/free-votes.ts', rule: 'secret-equality', snippet: 'hostKey(a) === hostKey(b)', why: '`provider:model` dedupe key' },
   { file: 'src/repid/repid-attestation.ts', rule: 'secret-equality', snippet: 'signing_pubkey.trim() !== km.publicKeyB64', why: 'a PUBLIC key, published on every attestation' },
+  { file: 'src/arena/game-key.ts', rule: 'secret-equality', snippet: 'x.thumbprint === key', why: 'the RFC 7638 thumbprint of a PUBLIC game key, published with every grant' },
   { file: 'src/scoring/confirmed-outcome.ts', rule: 'secret-equality', snippet: 'actorOwner.ownerKey.toLowerCase() === cpOwner.ownerKey.toLowerCase()', why: 'an owner id (builder id / wallet / SBT token id)' },
   { file: 'src/services/agent-owner-resolver.ts', rule: 'secret-equality', snippet: 'a.ownerKey.toLowerCase() === b.ownerKey.toLowerCase()', why: 'an owner id (builder id / wallet / SBT token id)' },
   { file: 'src/scoring/grounding.ts', rule: 'secret-equality', snippet: 'log.address.toLowerCase() !== token', why: 'an ERC-20 token contract address' },

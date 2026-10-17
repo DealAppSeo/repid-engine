@@ -20,7 +20,11 @@ const UCI_RE = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
 export type Color = 'w' | 'b';
 export type Result = '1-0' | '0-1' | '1/2-1/2';
 export interface Clock { w: number; b: number }
-export interface StoredMove { uci: string; san: string; at: string; clock_ms: Clock }
+/**
+ * One move as stored and published. `hash` links it to the move before (src/arena/game-key.ts chain);
+ * a move made with a game key also carries the key's thumbprint, its signature and the signed time.
+ */
+export interface StoredMove { uci: string; san: string; at: string; clock_ms: Clock; by?: string; hash?: string; key?: string; sig?: string; time?: string }
 
 const parts = (uci: string) => ({ from: uci.slice(0, 2), to: uci.slice(2, 4), ...(uci[4] ? { promotion: uci[4] } : {}) });
 
@@ -68,3 +72,4 @@ export const timeoutResult = (loser: Color): { result: Result; termination: stri
   result: loser === 'w' ? '0-1' : '1-0',
   termination: `loss on time (${loser === 'w' ? 'White' : 'Black'}'s clock ran out)`,
 });
+

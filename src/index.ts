@@ -390,6 +390,11 @@ app.use((req, res, next) => {
   // the exact one-end-wired failure this feature exists to fix. The route is
   // authed, length-capped, and its Supabase insert is parameterized.
   if (req.path === '/api/v1/lessons') return next();
+  // AgentChess arena: a game key travels as a P-256 JWK whose x and y are base64url, an alphabet that
+  // includes '-', so about 1 grant in 50 would carry '--' and be refused here at random. Every arena
+  // body field is checked by an allow-list and a per-field format (uuid, wallet, enum, JWK) in
+  // src/routes/arena.ts, and every write is parameterized.
+  if (req.path.startsWith('/api/v1/arena/')) return next();
   const SKIP_SANITIZER_KEYS = new Set(['description', 'success_criteria', 'expected_output', 'notes', 'title', 'constitution_text', 'interest', 'linkedin', 'github', 'notes_text']);
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {

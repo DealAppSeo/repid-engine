@@ -29,87 +29,10 @@ jest.mock('../src/auth/api-keys', () => {
 import { arenaStatement, createArenaRouters, replayDelayMs, type ArenaAction } from '../src/routes/arena';
 import { authMessage } from '../src/routes/v1/byok';
 import { ARENA_JS } from '../src/arena/page';
-import { supabaseArenaStore, type ArenaStore, type GameRow, type PredictionRow, type RatingRow, type SignalRow } from '../src/arena/store';
-import type { OwnerClaim, OwnerResolution } from '../src/services/agent-owner-resolver';
-
-const A1 = '11111111-1111-4111-8111-111111111111';
-const A2 = '22222222-2222-4222-8222-222222222222';
-const A3 = '33333333-3333-4333-8333-333333333333';
-const human = Wallet.createRandom();
-
-/** Ownership fixture: A1 and A2 share a builder; A3 has a different (signed) builder, so A3 vs A1 is distinct. */
-const claim = (ownerKey: string, ownerKeyKind: OwnerClaim['ownerKeyKind'], assurance: OwnerClaim['assurance']): OwnerClaim =>
-  ({ source: 'repid_agents.builder_id', assurance, ownerKey, ownerKeyKind, capUsdcPerTx: null, capUsdcTotal: null });
-const OWNERS: Record<string, OwnerClaim[]> = {
-  [A1]: [claim('aaaaaaaa-0000-4000-8000-000000000001', 'builder_id', 'administrative')],
-  [A2]: [claim('aaaaaaaa-0000-4000-8000-000000000001', 'builder_id', 'administrative')],
-  [A3]: [claim('cccccccc-0000-4000-8000-000000000003', 'builder_id', 'attested_unverified')],
-};
-const resolve = async ({ id }: { id?: string }): Promise<OwnerResolution> => {
-  const claims = OWNERS[id ?? ''];
-  if (!claims) return { status: 'unknown', agentId: null, owner: null, claims: [], conflicts: [], reason: 'agent_not_found', probes: [] };
-  return { status: 'resolved', agentId: id ?? null, owner: claims[0] ?? null, claims, conflicts: [], reason: null, probes: [] };
-};
-const accountOf = async (wallet: string) => (wallet.toLowerCase() === human.address.toLowerCase() ? { kind: 'builder' as const, id: 'bbbbbbbb-0000-4000-8000-000000000002', wallet } : null);
-
-/** In-memory ArenaStore with the same compare-and-set contract as the Supabase one. */
-function memStore() {
-  const games = new Map<string, GameRow>(), ratings = new Map<string, RatingRow>();
-  const signals: SignalRow[] = [], preds: PredictionRow[] = [], sigs = new Set<string>();
-  let n = 0;
-  const calls: string[] = [];
-  const store: ArenaStore = {
-    async ensureTables() { calls.push('ensureTables'); },
-    async insertGame(row) {
-      calls.push('insertGame');
-      const g: GameRow = { ...row, id: `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`, version: 0, created_at: new Date().toISOString(), started_at: null, last_move_at: null, finished_at: null, result: null, termination: null, pre: null };
-      games.set(g.id, g); return structuredClone(g);
-    },
-    async getGame(id) { const g = games.get(id); return g ? structuredClone(g) : null; },
-    async updateGame(id, version, patch) {
-      calls.push('updateGame');
-      const g = games.get(id);
-      if (!g || g.version !== version) return null;
-      const next = { ...g, ...structuredClone(patch), version: version + 1 } as GameRow;
-      games.set(id, next); return structuredClone(next);
-    },
-    async listGames(status, participant) { return [...games.values()].filter((g) => g.status === status && (!participant || g.white === participant || g.black === participant)); },
-    async finishedGames() { return [...games.values()].filter((g) => g.status === 'finished' && g.rated).sort((a, b) => String(a.finished_at).localeCompare(String(b.finished_at))); },
-    async upsertRatings(rows) { for (const r of rows) ratings.set(r.participant, r); },
-    async listRatings() { return [...ratings.values()].sort((a, b) => b.rating - a.rating); },
-    async insertSignals(rows) { signals.push(...rows); },
-    async insertPrediction(row) { if (preds.some((p) => p.game_id === row.game_id && p.predictor === row.predictor)) return 'duplicate'; preds.push(row); return 'ok'; },
-    async listPredictions(id) { return preds.filter((p) => p.game_id === id); },
-    async claimSignature(row) { if (sigs.has(row.statement_sha256)) return 'duplicate'; sigs.add(row.statement_sha256); return 'ok'; },
-  };
-  return { store, games, ratings, signals, preds, calls };
-}
-
-function appWith(store: ArenaStore, pollMs = 10) {
-  const app = express();
-  app.use(express.json());
-  const { api, page } = createArenaRouters({ store, resolve, accountOf, pollMs });
-  app.use('/api/v1/arena', api);
-  app.use('/arena', page);
-  return app;
-}
-const agent = (id: string) => ({ 'x-api-key': `key-for-${id}` });
-/** A human's headers for one arena action: a wallet signature over the arena statement for it. */
-async function signedArena(w: Wallet, action: ArenaAction) {
-  const ts = new Date().toISOString();
-  return { 'x-hd-wallet': w.address, 'x-hd-timestamp': ts, 'x-hd-signature': await w.signMessage(arenaStatement(action, w.address, ts)) };
-}
-const challengeBy = (_w: Wallet, opponent: string, extra: Partial<Extract<ArenaAction, { action: 'challenge' }>> = {}): ArenaAction =>
-  ({ action: 'challenge', opponent: `agent:${opponent}`, colour: 'white', stake_usd: 0, time_control: 'normal', speed: '1', ...extra });
-async function liveGame(app: express.Express, white = A3, black = A1) {
-  const c = await request(app).post('/api/v1/arena/challenges').set(agent(white)).send({ white, black, stake_usd: 1, time_control: 'fast' });
-  expect(c.status).toBe(201);
-  const a = await request(app).post(`/api/v1/arena/challenges/${c.body.challenge.id}/accept`).set(agent(black)).send();
-  expect(a.status).toBe(200);
-  return a.body.game.id as string;
-}
-const move = (app: express.Express, id: string, by: string, uci: string) =>
-  request(app).post(`/api/v1/arena/games/${id}/move`).set(agent(by)).send({ uci });
+import { supabaseArenaStore } from '../src/arena/store';
+import {
+  A1, A2, A3, human, OWNERS, claim, resolve, accountOf, memStore, appWith, agent, signedArena, challengeBy, liveGame, move,
+} from './helpers/arena-fixtures';
 
 beforeEach(() => { process.env.ARENA_ENABLED = 'true'; });
 afterAll(() => { delete process.env.ARENA_ENABLED; });
@@ -138,11 +61,9 @@ describe('flag OFF = 404, nothing else', () => {
     const pageStatement = fn('arenaStatement');
     for (const a of [
       challengeBy(human, A1, { colour: 'black', stake_usd: 0.1, time_control: 'slow', speed: '0.25' }),
-      { action: 'accept', game: A2 },
-      { action: 'move', game: A2, ply: 7, uci: 'e7e8q' },
+      { action: 'accept', game: A2, colour: 'black', stake_usd: 10 },
       { action: 'predict', game: A2, side: 'black', probability: 0.35 },
     ] as ArenaAction[]) expect(pageStatement(a, human.address, ts)).toBe(arenaStatement(a, human.address, ts));
-    expect(arenaStatement({ action: 'move', game: A2, ply: 7, uci: 'e7e8q' }, human.address, ts)).toContain('move: e7e8q');
   });
 
   it('only the exact string true turns it on', async () => {
@@ -257,24 +178,15 @@ describe('move auth: only the side to move, only as itself', () => {
     return c.body.challenge.id as string;
   }
 
-  it('a human plays by signing the arena statement for the move; a forged or other-action signature is refused', async () => {
+  it('a wallet no longer signs moves: a human moves with the game key (one popup per game, not per move)', async () => {
     const app = appWith(memStore().store), id = await humanGame(app);
-    const mvPath = `/api/v1/arena/games/${id}/move`, e2e4: ArenaAction = { action: 'move', game: id, ply: 1, uci: 'e2e4' };
-    const forged = { ...(await signedArena(Wallet.createRandom(), e2e4)), 'x-hd-wallet': human.address };
-    expect((await request(app).post(mvPath).set(forged).send({ uci: 'e2e4' })).body.error).toBe('bad_signature');
-    // A signature for another action (the challenge) does not carry over.
-    const other = await signedArena(human, challengeBy(human, A1, { stake_usd: 0.1 }));
-    expect((await request(app).post(mvPath).set(other).send({ uci: 'e2e4' })).body.error).toBe('bad_signature');
-    const ok = await request(app).post(mvPath).set(await signedArena(human, e2e4)).send({ uci: 'e2e4' });
-    expect(ok.status).toBe(200);
-    expect(ok.body.game.turn).toBe('black');
+    const r = await request(app).post(`/api/v1/arena/games/${id}/move`).set(await signedArena(human, challengeBy(human, A1, { stake_usd: 0.1 }))).send({ uci: 'e2e4' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('use_game_key');
   });
 
-  it('BODY SWAP: a signature over one move, challenge or prediction cannot carry another', async () => {
+  it('BODY SWAP: a signature over one challenge or prediction cannot carry another (moves: see arena-game-keys)', async () => {
     const app = appWith(memStore().store), id = await humanGame(app);
-    // move: signed e2e4, sent e2e3
-    const mv = await signedArena(human, { action: 'move', game: id, ply: 1, uci: 'e2e4' });
-    expect((await request(app).post(`/api/v1/arena/games/${id}/move`).set(mv).send({ uci: 'e2e3' })).body.error).toBe('bad_signature');
     // challenge: signed a 0.1 stake on normal against A3, as white; sent other terms
     const ch = await signedArena(human, challengeBy(human, A3, { stake_usd: 0.1 }));
     for (const body of [
