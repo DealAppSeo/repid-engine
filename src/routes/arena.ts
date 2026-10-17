@@ -55,6 +55,7 @@ export const STAKES_USD = [0, 0.1, 1, 10] as const;
 export const SPEEDS: readonly Speed[] = ['machine', '1', '0.5', '0.25'];
 const isSpeed = (x: unknown): x is Speed => typeof x === 'string' && (SPEEDS as readonly string[]).includes(x);
 const CHALLENGE_TTL_MS = 24 * 3600_000;
+const MAX_STREAMS_PER_NETWORK = 10;
 /** Horizon for the survival spread locked at accept (AC's default ply cap). Not a game length limit. */
 const SPREAD_HORIZON_PLIES = 120;
 
@@ -240,6 +241,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
   api.use(flagGate, tablesGate);
   // Every write authenticates (a signature check or a key lookup), so each one is braked per network
   // on top of the global /api/v1 limiter. 120 a minute is far above a person or a bot playing chess.
+  const openStreams = new Map<string, number>(); // ponytail: per-process count; share it (Redis) if the engine runs more than one replica
   const writeLimiter = rateLimit({
     windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false,
     keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
@@ -386,6 +388,12 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
     if (!g0) return;
     const speed = req.query.speed === undefined ? g0.default_speed : String(req.query.speed);
     if (!isSpeed(speed)) return void res.status(400).json({ error: 'bad_speed', allowed: SPEEDS });
+    // Strix (LOW, CWE-400): a public stream is a held socket plus a DB read a second, so one network gets a
+    // bounded number at once. A live game ends on its own clock; a pending one ends at its TTL (below).
+    const ip = trustedClientIp(req), open = openStreams.get(ip) ?? 0;
+    if (open >= MAX_STREAMS_PER_NETWORK) return void res.status(429).json({ error: 'too_many_streams', message: `At most ${MAX_STREAMS_PER_NETWORK} open arena streams per network.` });
+    openStreams.set(ip, open + 1);
+    res.on('close', () => { const n = (openStreams.get(ip) ?? 1) - 1; if (n > 0) openStreams.set(ip, n); else openStreams.delete(ip); });
 
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     let closed = false;
@@ -418,6 +426,7 @@ export function createArenaRouters(deps: ArenaDeps = {}): { api: Router; page: R
         continue;
       }
       if (g.status === 'finished') { send('end', { result: g.result, termination: g.termination, finished_at: g.finished_at }); break; }
+      if (g.status === 'pending' && now() - Date.parse(g.created_at) > CHALLENGE_TTL_MS) { send('end', { result: null, termination: 'challenge expired', finished_at: null }); break; }
       await sleep(pollMs);
       if (now() - lastBeat > 15_000) { if (!closed) res.write(': keep-alive\n\n'); lastBeat = now(); }
       const was = g.status;

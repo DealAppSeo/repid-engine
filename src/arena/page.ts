@@ -231,7 +231,7 @@ export const ARENA_JS = String.raw`(function () {
       render(); showClocks();
       if (myColor()) getJson(API + '/games/' + id).then(function (g) { S.game = g; render(); if (myTurn()) say('Your move.'); }).catch(function () {});
     });
-    S.es.addEventListener('end', function (e) { var d = JSON.parse(e.data); S.game.status = 'finished'; $('result').textContent = 'Result: ' + d.result + ' (' + d.termination + ')'; S.es.close(); render(); });
+    S.es.addEventListener('end', function (e) { var d = JSON.parse(e.data); S.game.status = 'finished'; $('result').textContent = 'Result: ' + (d.result || 'none') + ' (' + d.termination + ')'; S.es.close(); render(); });
     say((S.game.status === 'pending' ? 'Waiting for the challenge to be accepted. ' : '') + 'Streaming at speed ' + speed + '.');
   }
   render();

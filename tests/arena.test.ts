@@ -9,6 +9,7 @@
  *   - the SSE replay paces moves by the chosen speed.
  */
 import express from 'express';
+import http from 'node:http';
 import request from 'supertest';
 import { Wallet } from 'ethers';
 
@@ -383,6 +384,37 @@ describe('SSE stream and replay speed', () => {
     expect(text).not.toMatch(/^event: start$/m);
     expect(text.match(/^id: (\d+)$/gm)).toEqual(['id: 3', 'id: 4']);
     expect(text).toMatch(/event: end/);
+  });
+
+  it('a stream on a challenge past its TTL ends instead of polling forever', async () => {
+    const m = memStore(), app = appWith(m.store);
+    const c = await request(app).post('/api/v1/arena/challenges').set(agent(A3)).send({ white: A3, black: A1 });
+    m.games.get(c.body.challenge.id)!.created_at = new Date(Date.now() - 25 * 3600_000).toISOString();
+    const r = await sse(app, `/api/v1/arena/games/${c.body.challenge.id}/stream?speed=machine`);
+    expect(r.text).toMatch(/event: end\ndata: \{"result":null,"termination":"challenge expired"/);
+  });
+
+  it('one network may hold at most 10 open streams; a closed one frees its slot', async () => {
+    const m = memStore(), app = appWith(m.store, 50), id = await liveGame(app);
+    const server = app.listen(0);
+    const port = (server.address() as { port: number }).port;
+    const open = (): Promise<{ status: number; req: http.ClientRequest }> => new Promise((resolve) => {
+      const req = http.get({ port, path: `/api/v1/arena/games/${id}/stream?speed=machine` }, (res) => { resolve({ status: res.statusCode ?? 0, req }); res.resume(); });
+    });
+    try {
+      const held = [];
+      for (let i = 0; i < 10; i++) held.push(await open());
+      expect(held.every((h) => h.status === 200)).toBe(true);
+      const eleventh = await open();
+      expect(eleventh.status).toBe(429);
+      held[0]!.req.destroy();
+      await new Promise((r) => setTimeout(r, 100));
+      const again = await open();
+      expect(again.status).toBe(200);
+      for (const h of [...held, eleventh, again]) h.req.destroy();
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
   });
 
   it('paces the replay by the chosen speed', async () => {
