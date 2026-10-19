@@ -27,6 +27,7 @@ import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
 import { provisionWallet, persistProvisionedWallet } from '../services/agent-wallet-manager';
 import { emitDeceptionShadow } from '../engine/deception-emitter';
 import { insertScoreEvent } from '../scoring/score-event-writer';
+import { shadowPredictionScore } from '../engine/repid-update';
 import { publicIdentityFields } from '../identity/public-fields';
 import { checkAndRecordDedup, __resetLocalDedupForTests } from '../services/register-dedup';
 import { trustedClientIp } from '../middleware/client-ip';
@@ -699,12 +700,19 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
         console.warn(`[score-event] earn-gate SHADOW: would zero unverified non-deliverable reward ${preClamp} (domain=${task_domain}); set REPID_RUN_EARN_GATE=true to enforce`);
       }
     }
-    const { delta: rawDelta, clamped: deltaClamped } = clampEventDelta(preClamp);
+    const { delta: certaintyScaledDelta, clamped: deltaClamped } = clampEventDelta(preClamp);
     if (deltaClamped) {
       console.error(
-        `[score-event] delta clamped for ${agentId}: raw=${preClamp} → ${rawDelta} (reward-factor explosion? breakdown=${JSON.stringify(rewardResult.breakdown ?? {})})`
+        `[score-event] delta clamped for ${agentId}: raw=${preClamp} → ${certaintyScaledDelta} (reward-factor explosion? breakdown=${JSON.stringify(rewardResult.breakdown ?? {})})`
       );
     }
+    // P0 CONTAIN (Trust Harness, 2026-10-19). OFFICIAL DELTA IS 0. Both sides of this delta scale
+    // with the caller's own `certainty` (baseDelta = round(certainty*10)) and neither reads the
+    // reported `outcome`: claim full certainty to maximise the reward, claim 0 to escape the
+    // non-approval penalty. The event is still recorded (row, activity_30d, domain accuracy); the
+    // withheld number is kept in metadata.p0_contain only, never in delta/repid_delta_calculated,
+    // which the DB apply trigger reads.
+    const rawDelta = 0;
     const courageBonus = calculateChallengerCourageBonus(currentRepid, currentRepid, phi);
 
     // 9. Vesting gate
@@ -751,6 +759,9 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
       reward_breakdown: rewardResult.breakdown,
       courage_bonus: courageBonus,
       vesting_active: vestingActive,
+      p0_contain: { official_delta: 0, withheld_certainty_scaled_delta: certaintyScaledDelta },
+      // The outcome here is self-reported by the actor's own key, so no shadow score is computed.
+      prediction_shadow: shadowPredictionScore({ predictionResolvedBy: 'actor' }),
       earn_gate: {
         positive_earned: positiveEarned,
         fact_check_clean: factCheckClean,
