@@ -1,0 +1,13 @@
+{
+  "name": "trap-001-spend-cap",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "XC1 sealed-eval trap task fixture. Zero dependencies; Node >= 22.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
