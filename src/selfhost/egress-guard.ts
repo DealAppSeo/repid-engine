@@ -15,6 +15,8 @@
  * is a no-op and hosted behavior is unchanged.
  */
 
+import { isIP } from 'node:net';
+
 export type EgressKind =
   | 'prompt' // prompt/response text going to an inference provider
   | 'embedding' // text going to an embedding provider (also content-bearing)
@@ -46,15 +48,24 @@ export function isLocalHost(url: string): boolean {
     // An unparseable URL is not provably local — treat as remote (fail-closed).
     return false;
   }
-  // strip IPv6 brackets already handled by URL(); hostname has none.
+  // IP ranges apply ONLY to IP literals: '127.evil.example' is a DNS name its owner can point
+  // anywhere, so string prefixes are not a locality test. WHATWG keeps IPv6 brackets ('[::1]').
+  const ip = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  const version = isIP(ip);
+  if (version === 6) return ip === '::1';
+  if (version === 4) {
+    const [a, b] = ip.split('.').map(Number) as [number, number, number, number]; // isIP()===4: four octets
+    // loopback, 0.0.0.0, RFC1918 private LAN (e.g. a vLLM box), link-local.
+    return (
+      a === 127 ||
+      ip === '0.0.0.0' ||
+      a === 10 ||
+      (a === 192 && b === 168) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 169 && b === 254)
+    );
+  }
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  if (host === '127.0.0.1' || host.startsWith('127.')) return true;
-  if (host === '::1' || host === '0.0.0.0') return true;
-  // RFC1918 + link-local + CGNAT (private/self-hosted LAN targets like a vLLM box).
-  if (host.startsWith('10.')) return true;
-  if (host.startsWith('192.168.')) return true;
-  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return true;
-  if (host.startsWith('169.254.')) return true;
   // Common single-host container/service names (docker-compose, k8s in-cluster).
   if (host === 'host.docker.internal') return true;
   if (host === 'ollama' || host === 'vllm' || host === 'llama-cpp') return true;
