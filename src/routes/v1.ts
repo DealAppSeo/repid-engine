@@ -3,7 +3,7 @@ import { db } from '../db';
 import { matchEnvOperatorKey } from '../auth/api-keys';
 import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
 import { buildAgentLogRow } from '../engine/agent-log-row';
-import { generateProofReal, logProofGeneration } from '../zkp/plonky3-real';
+import { generateProofReal, logProofGeneration, ProverUnavailableError } from '../zkp/plonky3-real';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { fireWebhook } from '../services/webhook';
 import { isOperatorKey } from '../middleware/auth';
@@ -370,12 +370,19 @@ router.post('/batch/prove', async (req: Request, res: Response) => {
   const max = max_batch_size || 100;
   if (requests.length > max || requests.length > 100) return res.status(400).json({ error: 'max_batch_size exceeded limit 100' });
 
-  const proofs = await Promise.all(requests.map(async (r: any) => {
-    const timestamp = new Date().toISOString();
-    const result = await generateProofReal(r.agent_id, r.requester_pubkey, r.tier, timestamp);
-    await logProofGeneration(db, r.agent_id, r.tier);
-    return { ...r, proof: result.proof, proof_source: result.proof_source, timestamp };
-  }));
+  let proofs;
+  try {
+    proofs = await Promise.all(requests.map(async (r: any) => {
+      const timestamp = new Date().toISOString();
+      const result = await generateProofReal(r.agent_id, r.requester_pubkey, r.tier, timestamp);
+      await logProofGeneration(db, r.agent_id, r.tier);
+      return { ...r, proof: result.proof, proof_source: result.proof_source, timestamp };
+    }));
+  } catch (e) {
+    // LOCAL_MODE only: one unavailable proof fails the batch; no HMAC stand-ins are returned.
+    if (e instanceof ProverUnavailableError) return res.status(503).json({ status: e.status, error: e.message });
+    throw e;
+  }
 
   const { error } = await db.from('trinity_agent_logs').insert(buildAgentLogRow({ action: 'zkp_batch_generated', agent: 'repid-engine', metadata: { batch_size: requests.length } }));
     if (error) console.error(error);

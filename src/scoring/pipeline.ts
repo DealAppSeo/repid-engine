@@ -56,7 +56,7 @@ import {
 } from '../services/proof-enqueue-filter';
 import { resolveIssuerIdentity } from './issuer-identity';
 import { shadowProofTier } from './proof-tier-shadow'; // item 11 shadow — inert unless PROOF_TIER_SHADOW_ENABLED=true
-import { proverBaseUrl, proverAuthHeaders } from '../config/prover';
+import { proverBaseUrl, proverAuthHeaders, proverRedirect } from '../config/prover';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -556,7 +556,9 @@ export async function runScoreEvent(
       '[scoring/pipeline] proof-enqueue filter: SKIP HAL_SCORE_EVENT churn proof (enforce mode)'
     );
   }
-  const triggerProof = rawTriggerProof && !proofFilter.skip;
+  // No reachable prover (LOCAL_MODE allows loopback only) = no proof: no id, no queue row, no request.
+  const prover = proverBaseUrl();
+  const triggerProof = rawTriggerProof && !proofFilter.skip && prover !== null;
   const zk_proof_id = triggerProof ? crypto.randomUUID() : null;
 
   // 5b. ISSUER IDENTITY (additive, flag-gated, default OFF — see
@@ -787,13 +789,14 @@ export async function runScoreEvent(
         // The proof drain copies this onto repid_zkp_proofs; the public receipt reads it there.
         contract_id: insertPayload.contract_id ?? null,
         status: 'pending',
-        zkp_service_url: proverBaseUrl(),
+        zkp_service_url: prover,
       })
       .then(
         () => {
-          fetch(`${proverBaseUrl()}/zkp/repid-proof`, {
+          fetch(`${prover}/zkp/repid-proof`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
+            redirect: proverRedirect(),
             body: JSON.stringify({ 
               agent_id: input.agent_id, 
               score: Math.round(new_repid),
@@ -889,7 +892,9 @@ export async function applyValidationEvent(
     eventType: event_type,
   });
 
-  const triggerProof = await shouldTriggerProof(agent_id, Math.abs(delta));
+  // No reachable prover (LOCAL_MODE allows loopback only) = no proof: no id, no queue row, no request.
+  const prover = proverBaseUrl();
+  const triggerProof = prover !== null && (await shouldTriggerProof(agent_id, Math.abs(delta)));
   const zk_proof_id = triggerProof ? crypto.randomUUID() : null;
 
   // HAL enrichment (2026-05-22): callers may pass real HAL via halOverride.
@@ -1073,12 +1078,13 @@ export async function applyValidationEvent(
         // it onto repid_zkp_proofs, which is where the receipt looks.
         contract_id: insertPayload.contract_id,
         status: 'pending',
-        zkp_service_url: proverBaseUrl(),
+        zkp_service_url: prover,
       })
       .then(() => {
-        fetch(`${proverBaseUrl()}/zkp/repid-proof`, {
+        fetch(`${prover}/zkp/repid-proof`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
+          redirect: proverRedirect(),
           body: JSON.stringify({ 
             agent_id, 
             score: Math.round(new_repid),

@@ -67,7 +67,7 @@
  * additive table — see sqlProposed. This module never applies DDL.
  */
 import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
-import { proverAuthHeaders } from '../config/prover';
+import { localProverGate, proverAuthHeaders, proverRedirect } from '../config/prover';
 import { buildBoundStatement } from '../zkp/proof-statement-guard';
 import { hasTruthySimFlag } from '../utils/truthy';
 import type { ServiceContractRow } from '../types';
@@ -787,13 +787,15 @@ export function createZkpAuditService(deps: ZkpAuditDeps): ZkpAuditService {
     contractId: string;
     purpose?: string;
   }): Promise<ProverResponse> {
-    const base = (deps.proverUrl ?? '').trim();
-    if (base.length === 0) {
+    const base = localProverGate((deps.proverUrl ?? '').trim());
+    if (!base) {
       // DEGRADE CLOSED. The in-repo `plonky3-real.ts` would silently return an
       // HMAC here; that path is exactly what a fraudulent provider wants.
       throw new ZkpAuditError(
         'PROVER_UNAVAILABLE',
-        'no prover URL configured (ZKP_SERVICE_URL) — refusing to fall back to the in-repo HMAC/sha256 stub'
+        base === null
+          ? 'LOCAL_MODE: prover is not loopback — refusing to send the subject id and score off this machine'
+          : 'no prover URL configured (ZKP_SERVICE_URL) — refusing to fall back to the in-repo HMAC/sha256 stub'
       );
     }
 
@@ -819,6 +821,7 @@ export function createZkpAuditService(deps: ZkpAuditDeps): ZkpAuditService {
       const res = await httpFetch(`${base.replace(/\/+$/, '')}/zkp/repid-proof`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
+        redirect: proverRedirect(),
         body: JSON.stringify(body),
         signal: controller.signal,
       });

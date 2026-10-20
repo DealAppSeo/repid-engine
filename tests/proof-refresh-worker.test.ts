@@ -234,3 +234,29 @@ describe('a postcard error is logged and never thrown into the server', () => {
     expect(logs.some((l) => l.includes('tick failed: circuit open'))).toBe(true);
   });
 });
+
+describe('LOCAL_MODE: no agent id or score leaves the machine', () => {
+  afterEach(() => { delete process.env.LOCAL_MODE; });
+
+  it('a reachable remote prover (even when injected) is never called and nothing is queued', async () => {
+    process.env.PROOF_REFRESH_ENABLED = 'true';
+    process.env.LOCAL_MODE = 'true';
+    for (const proverUrl of ['https://prover.test/', 'https://zkp-postcard-production.up.railway.app', null]) {
+      const { deps, logs } = makeDeps([cand()], { proverUrl });
+      const s = await runOnce(CFG, deps);
+      expect(s.ran).toBe(false);
+      expect(deps.query).not.toHaveBeenCalled();
+      expect(deps.enqueue).not.toHaveBeenCalled();
+      expect(deps.fetchImpl).not.toHaveBeenCalled();
+      expect(logs.some((l) => l.includes('LOCAL_MODE calls a loopback prover only'))).toBe(true);
+    }
+  });
+
+  it('a loopback prover is still called', async () => {
+    process.env.PROOF_REFRESH_ENABLED = 'true';
+    process.env.LOCAL_MODE = 'true';
+    const { deps, posts } = makeDeps([cand()], { proverUrl: 'http://127.0.0.1:9' });
+    await runOnce(CFG, deps);
+    expect(posts.map((p) => p.url)).toEqual(['http://127.0.0.1:9/zkp/repid-proof']);
+  });
+});

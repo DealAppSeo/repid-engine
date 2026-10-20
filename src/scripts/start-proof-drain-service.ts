@@ -29,6 +29,7 @@ async function main(): Promise<void> {
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     requireEnv('SUPABASE_SERVICE_KEY');
   const zkpServiceUrl = proverBaseUrl();
+  if (!zkpServiceUrl) throw new Error('no prover reachable: LOCAL_MODE calls a loopback ZKP_SERVICE_URL only');
 
   const pollIntervalMs = process.env.PROOF_DRAIN_POLL_INTERVAL_MS ? parseInt(process.env.PROOF_DRAIN_POLL_INTERVAL_MS, 10) : 2000;
   const idleSleepMs = process.env.PROOF_DRAIN_IDLE_SLEEP_MS ? parseInt(process.env.PROOF_DRAIN_IDLE_SLEEP_MS, 10) : 10000;
