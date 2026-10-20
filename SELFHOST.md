@@ -20,6 +20,7 @@ This change adds three env-guarded seams that address both, all **default-OFF**
 |-----|---------|--------|
 | `LOCAL_MODE` | off | Boot without a hosted Supabase. A missing `SUPABASE_URL`/key is backfilled with the loopback default `http://127.0.0.1:54321` instead of throwing. Announced loudly at boot. |
 | `ONLY_ATTESTATIONS_LEAVE` | off | Data-locality boundary. Prompt/response **text** may not egress to a non-local host; proofs / EAS anchors / chain RPC still may. Enforced at the HAL provider call choke point (`src/hal/cross-llm-client.ts` → `assertPromptEgressAllowed`). |
+| `ZKP_SERVICE_URL` / `PLONKY3_PROVER_URL` under `LOCAL_MODE` | unset = no prover | A proof **request** carries the raw agent id and score, so in `LOCAL_MODE` the prover is called only at a loopback URL (`localhost`, `127.0.0.1`, `[::1]`). The hosted pin is never a default; any other host is refused before a byte is sent. With no loopback prover, score events record no proof, and `/prove-repid` and `/batch/prove` answer 503 `PROVER_UNAVAILABLE` (no HMAC stand-in). `src/config/prover.ts` → `localProverGate`. |
 | `LOCAL_LLM_BASE_URL` (or `OPENAI_BASE_URL`) | unset | OpenAI-compatible base URL for the quorum. Redirects every `openai-compat` provider to `<base>/chat/completions` — e.g. an Ollama (`http://localhost:11434/v1`) or vLLM box. `anthropic-native` is never redirected (wrong wire shape). |
 
 "Local" for the boundary = loopback, RFC1918/private LAN, link-local, and the
