@@ -39,6 +39,12 @@ import {
   applyToScore,
   appliedScoreReconciles,
   appliedScoreMetadata,
+  decayMode,
+  decayActivityFromRows,
+  decaySkipFor,
+  DECAY_PERIOD_MS,
+  type DecayActivity,
+  type DecayAssessment,
 } from './decay-bridge';
 import { recordDeltaStatementDetached } from '../zkp/repid-delta-bridge';
 import { appendToAuditChain } from '../services/auditChainWriter';
@@ -187,7 +193,7 @@ async function loadAgent(agentId: string): Promise<{
   current_repid: number;
   tier: string;
   vesting_cliff_active: boolean;
-  /** Needed by decay — see scoring/decay-bridge.ts. */
+  /** Read by decay only when REPID_DECAY_MODE is off; shadow and enforce read the ledger (assessEventDecay). */
   activity_30d: number;
 } | null> {
   const { data, error } = await db
@@ -206,6 +212,37 @@ async function loadAgent(agentId: string): Promise<{
     vesting_cliff_active,
     activity_30d: Number((data as any).activity_30d ?? 0),
   };
+}
+
+/**
+ * Decay for one score event. Its input is the agent's own ledger over the last 30 days, not
+ * repid_agents.activity_30d: this pipeline writes every score event and never updated that column,
+ * so it bore no relation to real activity (MEASURED 2026-10-20: actively trading agents read 0,
+ * near-idle ones read in the hundreds). Off reads nothing and behaves exactly as before. An unreadable
+ * ledger never lets decay land: an unknown is not evidence of idleness.
+ */
+async function assessEventDecay(
+  agent: { id: string; current_repid: number; activity_30d: number },
+  rawDelta: number,
+): Promise<DecayAssessment> {
+  if (decayMode() === 'off') return assessDecay({ currentRepid: agent.current_repid, activity30d: agent.activity_30d });
+  let activity: DecayActivity | null = null;
+  try {
+    const since = new Date(Date.now() - DECAY_PERIOD_MS).toISOString();
+    const { data, error } = await db
+      .from('repid_score_events')
+      .select('is_shadow, metadata')
+      .eq('agent_id', agent.id)
+      .gte('created_at', since);
+    if (!error && Array.isArray(data)) activity = decayActivityFromRows(data);
+  } catch {
+    // unread: decaySkipFor reports activity_unread and decay does not land
+  }
+  return assessDecay({
+    currentRepid: agent.current_repid,
+    activity30d: activity ? activity.activity30d : agent.activity_30d,
+    skip: decaySkipFor({ rawDelta, activity }),
+  });
 }
 
 async function loadExistingByKey(key: string): Promise<ScoreEventResult | null> {
@@ -503,8 +540,9 @@ export async function runScoreEvent(
   const old_repid = agent.current_repid;
   // DECAY (Option C step 1). In shadow this computes the counterfactual and
   // changes nothing; only 'enforce' moves the score. The base is the decayed
-  // score, so the delta lands on top of decay exactly as updateRepId did it.
-  const decay = assessDecay({ currentRepid: old_repid, activity30d: agent.activity_30d });
+  // score, so the delta lands on top of decay exactly as updateRepId did it — once per
+  // period, never on a zero delta (assessEventDecay).
+  const decay = await assessEventDecay(agent, effectiveDeltaApplied);
   // Decompose the movement so the row can reconcile. See decay-bridge.ts::applyToScore
   // for why the base is rounded before the delta lands, and for the two ways the score
   // could move without appearing in repid_delta_applied (decay, and the #314 clamp).
@@ -884,7 +922,7 @@ export async function applyValidationEvent(
   if (!agent) throw new Error(`Agent not found: ${agent_id}`);
 
   const old_repid = agent.current_repid;
-  const decay = assessDecay({ currentRepid: old_repid, activity30d: agent.activity_30d });
+  const decay = await assessEventDecay(agent, delta);
   const decayBase = decayedScoreFor(decay);
   // Was Math.max(0, …): floor 0 against a DB floor of 10, and no ceiling at all.
   const new_repid = clampRepidLoud(decayBase + delta, {
