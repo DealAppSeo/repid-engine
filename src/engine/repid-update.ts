@@ -1,7 +1,7 @@
 import { db } from '../db';
 import { getEcosystemNeedWeight, updateSupplyRate } from '../layers/ecosystem-need';
 import { scoreChallengeOutcome } from '../layers/challenge-scoring';
-import { scorePrediction } from '../layers/prediction-scoring';
+import { properScoreReward } from '../decisioning/anfis-poa-feed';
 import { applyDecay, computeRedemptionModifier } from '../layers/decay';
 import { auditConstitutionalCompliance } from '../layers/constitutional-audit';
 import { checkAndAwardBadges, BadgeAward } from './badges';
@@ -51,6 +51,13 @@ export interface RepIdUpdateInput {
   certaintyAtClaim?: number;
   pStated?: number;
   pCorrect?: number;
+  /**
+   * P0 CONTAIN. Who resolved a PREDICTION_RESOLVE outcome, set SERVER-SIDE by the route from the
+   * authenticated key (POST /score overwrites any body value). 'actor' = the agent's own bound key;
+   * 'operator_key' = a non-bound key, i.e. a party other than the actor. Absent = unknown, which is
+   * treated as ineligible for the shadow score. It never moves the official score.
+   */
+  predictionResolvedBy?: 'actor' | 'operator_key';
   predictionDaysAgo?: number;
   networkImportance?: number;
   isPeacemaker?: boolean;
@@ -402,6 +409,41 @@ export function evidencePresent(input: RepIdUpdateInput): boolean {
   return typeof ref === 'string' && ref.trim().length > 0;
 }
 
+export interface PredictionShadow {
+  official_delta: 0;
+  scorer: 'brier';
+  eligible: boolean;
+  /** Why it is ineligible; absent when eligible. */
+  reason?: 'resolved_by_actor' | 'resolver_unknown' | 'missing_inputs';
+  resolved_by: 'actor' | 'operator_key' | null;
+  /** 1 - (p - y)^2 in [0,1]; only when eligible. */
+  brier_reward?: number;
+  p_stated?: number;
+  correct?: boolean;
+}
+
+/**
+ * Shadow proper score for a resolved prediction. Pure: no I/O, never moves a score.
+ * Eligible only when someone other than the actor resolved the outcome; a self-resolved or
+ * unknown-resolver outcome gets no score at all (a self-graded outcome is not an outcome).
+ * `correct` uses the old scorer's own rule (pCorrect >= 0.5) so the two are comparable.
+ */
+export function shadowPredictionScore(
+  input: Pick<RepIdUpdateInput, 'pStated' | 'pCorrect' | 'predictionResolvedBy'>,
+): PredictionShadow {
+  const resolvedBy = input.predictionResolvedBy ?? null;
+  const base = { official_delta: 0 as const, scorer: 'brier' as const, resolved_by: resolvedBy };
+  if (resolvedBy !== 'operator_key') {
+    return { ...base, eligible: false, reason: resolvedBy === 'actor' ? 'resolved_by_actor' : 'resolver_unknown' };
+  }
+  if (typeof input.pStated !== 'number' || typeof input.pCorrect !== 'number' ||
+      !Number.isFinite(input.pStated) || !Number.isFinite(input.pCorrect)) {
+    return { ...base, eligible: false, reason: 'missing_inputs' };
+  }
+  const correct = input.pCorrect >= 0.5;
+  return { ...base, eligible: true, brier_reward: properScoreReward(input.pStated, correct), p_stated: input.pStated, correct };
+}
+
 export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateResult> {
   // Phase 3 dogfooding gate: co-sign -> RepID only if flag ON (default OFF until CC honest-HAL merge)
   const isDogfoodCoSignEvent = input.eventType === 'HANDOFF_COSIGN_VERIFIED' || input.eventType === 'HANDOFF_COSIGN_FALSE_PASS_SLASH';
@@ -462,6 +504,8 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     // have a legitimate internal (proof-carrying) emitter. Absent === not exempt.
     enforce_exempt?: boolean;
   } | null = null;
+  // P0 CONTAIN: shadow-only proper score for PREDICTION_RESOLVE (null for every other event).
+  let predictionShadow: PredictionShadow | null = null;
   const challengeTypes = new Set([
     'CHALLENGE_WIN','CHALLENGE_LOSS','CHALLENGE_DRAW',
     'EPISTEMIC_VIOLATION','CONSTITUTIONAL_VIOLATION'
@@ -567,12 +611,12 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       constitutionalAdherence: input.constitutionalAdherence,
     });
   } else if (input.eventType === 'PREDICTION_RESOLVE') {
-    rawDelta = Math.round(scorePrediction({
-      pStated: input.pStated ?? 0.5,
-      pCorrect: input.pCorrect ?? 0,
-      daysAgo: input.predictionDaysAgo ?? 0,
-      networkImportance: input.networkImportance ?? 1.0,
-    }));
+    // P0 CONTAIN (Trust Harness, 2026-10-19). OFFICIAL DELTA IS 0. The old scorer paid
+    // log(1/pStated) on a correct call, so claiming LOW confidence paid the most, and both pStated
+    // and pCorrect come from the caller. The event is still recorded (audit row, activity); only
+    // a strictly proper Brier reward is computed, in SHADOW, into metadata.prediction_shadow.
+    rawDelta = 0;
+    predictionShadow = shadowPredictionScore(input);
   } else if (input.eventType === 'STAKE') {
     // STOPGAP (2026-07-21): a client-supplied stakeProof is UNVERIFIED → delta 0.
     // The prior comment claimed a `/stake/onchain/verify` route confirmed a
@@ -817,6 +861,9 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       // In shadow (default) the top-level `delta` is UNCHANGED — would_gate only
       // flags what enforce WOULD have zeroed.
       self_report_evidence: selfReportEvidenceMeta,
+      // P0 CONTAIN: metadata only. Never the delta / repid_delta_calculated columns, which the
+      // DB apply trigger reads. Absent on every non-prediction row, so their shape is unchanged.
+      ...(predictionShadow ? { prediction_shadow: predictionShadow } : {}),
       // CONFIRMED-OUTCOME SCORING (flag CONFIRMED_OUTCOME_SCORING_ENABLED). Present only
       // when the flag is ON and the event carried a confirmedOutcome payload: records the
       // settler, the PROVISIONAL/SETTLED label (reusing the kernel's vocabulary), whether

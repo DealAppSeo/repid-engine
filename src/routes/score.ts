@@ -40,8 +40,14 @@ export async function scoreHandler(req: Request, res: Response) {
     });
   }
 
+  // P0 CONTAIN: who resolved a PREDICTION_RESOLVE outcome comes from the KEY, never the body (the
+  // spread puts this last, so a body `predictionResolvedBy` is overwritten). A bound key can only
+  // score its own agent (guard above), so it is the actor resolving its own prediction. Only feeds
+  // the shadow score; the official delta for PREDICTION_RESOLVE is 0 either way.
+  const predictionResolvedBy = typeof principal === 'string' && principal.trim() ? 'actor' : 'operator_key';
+
   try {
-    return res.json(await updateRepId(req.body));
+    return res.json(await updateRepId({ ...req.body, predictionResolvedBy }));
   } catch (err: any) {
     return res.status(err.message?.includes('not found') ? 404 : 500)
       .json({ error: err.message });
