@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import { onlyAttestationsLeave } from './selfhost/egress-guard';
+import { latchProverLocalMode } from './config/prover';
 dotenv.config();
 
 // --- SELF-HOST / DATA-LOCAL boundary flags -------------------------------
@@ -87,6 +88,8 @@ if (!config.supabaseUrl || !config.supabaseKey) {
 }
 
 if (LOCAL_MODE) {
+  // A local store means a loopback-only prover, whatever happens to the env later (src/config/prover.ts).
+  latchProverLocalMode();
   // NO SILENT DEGRADATION: announce the data-local boundary loudly at boot so an
   // operator never mistakes a local process for a hosted one.
   const usingLocalDb = config.supabaseUrl === LOCAL_SUPABASE_URL_DEFAULT;

@@ -67,7 +67,7 @@
  * additive table — see sqlProposed. This module never applies DDL.
  */
 import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
-import { localProverGate, proverAuthHeaders } from '../config/prover';
+import { localProverGate, proverAuthHeaders, proverRedirect } from '../config/prover';
 import { buildBoundStatement } from '../zkp/proof-statement-guard';
 import { hasTruthySimFlag } from '../utils/truthy';
 import type { ServiceContractRow } from '../types';
@@ -821,6 +821,7 @@ export function createZkpAuditService(deps: ZkpAuditDeps): ZkpAuditService {
       const res = await httpFetch(`${base.replace(/\/+$/, '')}/zkp/repid-proof`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
+        redirect: proverRedirect(),
         body: JSON.stringify(body),
         signal: controller.signal,
       });

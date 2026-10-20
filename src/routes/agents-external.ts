@@ -30,7 +30,7 @@ import { insertScoreEvent } from '../scoring/score-event-writer';
 import { publicIdentityFields } from '../identity/public-fields';
 import { checkAndRecordDedup, __resetLocalDedupForTests } from '../services/register-dedup';
 import { trustedClientIp } from '../middleware/client-ip';
-import { proverBaseUrl, proverAuthHeaders } from '../config/prover';
+import { proverBaseUrl, proverAuthHeaders, proverRedirect } from '../config/prover';
 import { deliverSignedWebhook } from '../services/webhook-delivery';
 
 const router = Router();
@@ -302,6 +302,7 @@ router.post('/register', async (req: Request, res: Response) => {
         fetch(`${zkpUrl}/zkp/repid-proof`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
+          redirect: proverRedirect(),
           body: JSON.stringify({
             agent_id: agentId,
             score: STARTING_REPID,
@@ -909,6 +910,7 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
       fetch(`${prover}/zkp/repid-proof`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
+        redirect: proverRedirect(),
         body: JSON.stringify({
           agent_id: agentId,
           score: newScore,

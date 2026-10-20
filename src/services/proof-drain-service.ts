@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { localProverGate, proverAuthHeaders } from '../config/prover';
+import { localProverGate, proverAuthHeaders, proverRedirect } from '../config/prover';
 import { pgQuery } from '../db/direct-pg';
 import { buildPostcardCommitment, generateNonce, SHA256_COMMITMENT_TAG } from '../zkp/commitment';
 import { buildBoundStatement } from '../zkp/proof-statement-guard'; // corpus hygiene: fail-closed agent binding on every real-proof statement
@@ -95,7 +95,9 @@ async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
 
 export function createProofDrainService(config: ProofDrainServiceConfig): ProofDrainService {
   // Refuse at construction, before any job is claimed: an injected remote URL cannot bypass LOCAL_MODE.
-  if (localProverGate(config.zkpServiceUrl) === null) {
+  // Every prover call uses this captured value, so mutating config afterwards cannot either (XC1 F2).
+  const proverUrl = localProverGate(config.zkpServiceUrl);
+  if (proverUrl === null) {
     throw new Error('proof drain refused: LOCAL_MODE calls a loopback prover only');
   }
   const pollIntervalMs = config.pollIntervalMs ?? 2000;
@@ -640,9 +642,10 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), proverTimeoutMs);
       try {
-        const r = await httpFetch(`${config.zkpServiceUrl}/zkp/repid-proof`, {
+        const r = await httpFetch(`${proverUrl}/zkp/repid-proof`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
+          redirect: proverRedirect(),
           body: JSON.stringify({
             agent_id: job.agent_id,
             score,

@@ -56,7 +56,7 @@ import {
 } from '../services/proof-enqueue-filter';
 import { resolveIssuerIdentity } from './issuer-identity';
 import { shadowProofTier } from './proof-tier-shadow'; // item 11 shadow — inert unless PROOF_TIER_SHADOW_ENABLED=true
-import { proverBaseUrl, proverAuthHeaders } from '../config/prover';
+import { proverBaseUrl, proverAuthHeaders, proverRedirect } from '../config/prover';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -796,6 +796,7 @@ export async function runScoreEvent(
           fetch(`${prover}/zkp/repid-proof`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
+            redirect: proverRedirect(),
             body: JSON.stringify({ 
               agent_id: input.agent_id, 
               score: Math.round(new_repid),
@@ -1083,6 +1084,7 @@ export async function applyValidationEvent(
         fetch(`${prover}/zkp/repid-proof`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
+          redirect: proverRedirect(),
           body: JSON.stringify({ 
             agent_id, 
             score: Math.round(new_repid),

@@ -12,7 +12,7 @@
  * stand-in — every path that would fall back throws ProverUnavailableError.
  */
 
-import { localProverGate, proverAuthHeaders, proverLocalMode } from '../config/prover';
+import { localProverGate, proverAuthHeaders, proverLocalMode, proverRedirect } from '../config/prover';
 import { createHmac } from 'crypto';
 import { markDegraded } from '../lib/degraded';
 import { buildAgentLogRow } from '../engine/agent-log-row';
@@ -114,6 +114,7 @@ export async function generateProofReal(
   const init: RequestInit = {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...proverAuthHeaders() },
+    redirect: proverRedirect(),
     body: JSON.stringify(body),
   };
 

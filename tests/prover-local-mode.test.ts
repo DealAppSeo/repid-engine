@@ -15,7 +15,7 @@ import net, { type AddressInfo } from 'net';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { PINNED_PROVER_URL, isLoopbackUrl, localProverGate, proverBaseUrl } from '../src/config/prover';
+import { PINNED_PROVER_URL, isLoopbackUrl, localProverGate, proverBaseUrl, proverRedirect } from '../src/config/prover';
 
 const SYNTH = '00000000-0000-4000-8000-0000000000c1';
 const LOCAL = { LOCAL_MODE: 'true' } as NodeJS.ProcessEnv;
@@ -83,6 +83,30 @@ describe('the gate', () => {
       if (saved !== undefined) process.env.LOCAL_MODE = saved;
     }
   });
+
+  it('a local store latches it whatever the load order: prover.ts first, LOCAL_MODE later, then deleted (XC1 F3)', () => {
+    const saved = process.env.LOCAL_MODE;
+    delete process.env.LOCAL_MODE;
+    let fresh!: typeof import('../src/config/prover');
+    jest.isolateModules(() => {
+      fresh = require('../src/config/prover');
+      expect(fresh.proverBaseUrl(process.env)).toBe(process.env.ZKP_SERVICE_URL || PINNED_PROVER_URL);
+      process.env.LOCAL_MODE = 'true';
+      require('../src/config'); // picks the local store and latches the gate
+    });
+    delete process.env.LOCAL_MODE;
+    try {
+      expect(fresh.proverBaseUrl(process.env)).toBeNull();
+      expect(fresh.proverRedirect(process.env)).toBe('error');
+    } finally {
+      if (saved !== undefined) process.env.LOCAL_MODE = saved;
+    }
+  });
+
+  it('redirects: refused in LOCAL_MODE, fetch default (follow) when hosted', () => {
+    expect(proverRedirect({} as NodeJS.ProcessEnv)).toBe('follow');
+    expect(proverRedirect(LOCAL)).toBe('error');
+  });
 });
 
 describe('LOCAL_MODE end to end: the production prover is reachable and never contacted', () => {
@@ -102,8 +126,11 @@ describe('LOCAL_MODE end to end: the production prover is reachable and never co
   let app: express.Express;
   let savedEnv: NodeJS.ProcessEnv;
 
-  const remote = () => fetched.filter((u) => !isLoopbackUrl(u));
-  const remoteSockets = () => connects.filter((h) => !/^(127\.0\.0\.1|::1|localhost):/.test(h));
+  // The harness judges "loopback" on its own, not with the function under test (XC1 review).
+  const loop = (u: string) => { try { return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(u).hostname); } catch { return false; } };
+  const loopHost = (h: string) => /^(127\.0\.0\.1|::1|localhost):/.test(h);
+  const remote = () => fetched.filter((u) => !loop(u));
+  const remoteSockets = () => connects.filter((h) => !loopHost(h));
   const proverEnv = (u?: string) => {
     if (u) process.env.ZKP_SERVICE_URL = u; else delete process.env.ZKP_SERVICE_URL;
     delete process.env.PLONKY3_PROVER_URL;
@@ -116,6 +143,13 @@ describe('LOCAL_MODE end to end: the production prover is reachable and never co
       req.resume();
       req.on('end', () => {
         if (req.url?.endsWith('/fail/prove/trade_auth')) { res.statusCode = 500; res.end('{}'); return; }
+        // A loopback "prover" that bounces the POST to the production host (XC1 F1).
+        if (req.url?.startsWith('/redirect/')) {
+          res.statusCode = req.url.includes('trade_auth') ? 308 : 307;
+          res.setHeader('Location', PINNED_PROVER_URL + req.url.slice('/redirect'.length));
+          res.end();
+          return;
+        }
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ proof_bytes: 'bG9jYWw=' }));
       });
@@ -139,7 +173,10 @@ describe('LOCAL_MODE end to end: the production prover is reachable and never co
     net.Socket.prototype.connect = function (this: net.Socket, ...args: any[]) {
       const o = Array.isArray(args[0]) ? args[0][0] : args[0]; // net.connect passes [options, cb]
       // Anything not plainly host+port is recorded as UNKNOWN, which counts as remote below.
-      connects.push(o && typeof o === 'object' && o.port !== undefined ? `${o.host ?? 'localhost'}:${o.port}` : `UNKNOWN:${JSON.stringify(o)}`);
+      const hostPort = o && typeof o === 'object' && o.port !== undefined ? `${o.host ?? 'localhost'}:${o.port}` : `UNKNOWN:${JSON.stringify(o)}`;
+      connects.push(hostPort);
+      // BLOCK, not just record: a non-loopback socket never opens from this test.
+      if (!loopHost(hostPort)) throw new Error(`EGRESS BLOCKED by test: ${hostPort}`);
       return (realConnect as any).apply(this, args);
     } as any;
 
@@ -147,7 +184,7 @@ describe('LOCAL_MODE end to end: the production prover is reachable and never co
     (global as any).fetch = async (input: any, init?: any) => {
       const url = typeof input === 'string' ? input : input?.url ?? String(input);
       fetched.push(url);
-      if (isLoopbackUrl(url)) return (realFetch as any)(input, init);
+      if (loop(url)) return (realFetch as any)(input, init);
       // REACHABLE: answer the way the production prover would. A leak would succeed here.
       const body = { proof_bytes: 'cmVhY2hhYmxl', proof_type: 'plonky3' };
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
@@ -253,6 +290,48 @@ describe('LOCAL_MODE end to end: the production prover is reachable and never co
   it('the proof drain refuses a remote prover at construction, before any job is read', () => {
     expect(() => drain.createProofDrainService({ supabase: {} as any, zkpServiceUrl: PINNED_PROVER_URL })).toThrow(/loopback/);
     expect(() => drain.createProofDrainService({ supabase: {} as any, zkpServiceUrl: localUrl })).not.toThrow();
+  });
+
+  describe('a loopback prover that redirects to the production host (XC1 F1)', () => {
+    const before = () => connects.length;
+    const newRemoteSockets = (n: number) => connects.slice(n).filter((h) => !loopHost(h));
+
+    it('applyValidationEvent: the 307 is not followed; the body stays on this machine', async () => {
+      proverEnv(`${localUrl}/redirect`);
+      const n = before();
+      const hits = localHits.length;
+      await pipeline.applyValidationEvent(SYNTH, 'VALIDATION_PASSED', 25, {}, { hal_score: 0.9, hal_decision: 'clean' });
+      for (let i = 0; i < 100 && localHits.length === hits; i++) await new Promise((r) => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, 200));
+      expect(localHits.slice(hits)).toEqual(['/redirect/zkp/repid-proof']); // it did reach the loopback prover
+      expect(newRemoteSockets(n)).toEqual([]);
+    });
+
+    it('generateProofReal: the 308 is not followed and nothing comes back labelled real', async () => {
+      process.env.PLONKY3_PROVER_URL = `${localUrl}/redirect`;
+      const n = before();
+      await expect(plonky3.generateProofReal(SYNTH, 'pub', 'postcard', 't')).rejects.toBeInstanceOf(plonky3.ProverUnavailableError);
+      delete process.env.PLONKY3_PROVER_URL;
+      expect(newRemoteSockets(n)).toEqual([]);
+    });
+
+    it('proof-refresh-worker on the real fetch: the 307 is not followed', async () => {
+      const { runOnce } = require('../src/workers/proof-refresh-worker');
+      process.env.PROOF_REFRESH_ENABLED = 'true';
+      const n = before();
+      const summary = await runOnce({ maxAgeDays: 6, maxAgents: 25, intervalMs: 3_600_000 }, {
+        query: async () => [{ agent_id: SYNTH, agent_name: 'SYNTH', current_repid: 300, last_proof_at: new Date(Date.now() - 10 * 86_400_000).toISOString(), event_id: 'ev-1', repid_after: 300 }],
+        enqueue: async () => ({ error: null }),
+        fetchImpl: (...a: any[]) => (global.fetch as any)(...a),
+        proverUrl: `${localUrl}/redirect`,
+        isHalted: async () => false,
+        log: () => undefined,
+        warn: () => undefined,
+      });
+      delete process.env.PROOF_REFRESH_ENABLED;
+      expect(summary.proverFailed).toBe(1);
+      expect(newRemoteSockets(n)).toEqual([]);
+    });
   });
 
   it('across every case above: zero non-loopback fetches and zero non-loopback sockets', () => {

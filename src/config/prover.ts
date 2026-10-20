@@ -16,13 +16,28 @@ export const PINNED_PROVER_URL = 'https://zkp-postcard-production.up.railway.app
  * LOCAL_MODE PRIVACY (2026-10-20). A prover request carries an agent id and its score. A local engine
  * must not send those off the machine, so in LOCAL_MODE the prover is used only when it is on
  * loopback, the pin is never a default, and anything else resolves to null: no request is made.
- * Hosted (LOCAL_MODE off) is unchanged. Latched at load AND read per call, so unsetting LOCAL_MODE
- * after boot cannot re-open egress. tests/prover-local-mode.test.ts holds this.
+ * Hosted (LOCAL_MODE off) is unchanged. Latched at load, latched again by src/config.ts when it picks
+ * the local store, and read per call, so unsetting LOCAL_MODE after boot cannot re-open egress.
+ * tests/prover-local-mode.test.ts holds this.
  */
-const LOCAL_AT_LOAD = (process.env.LOCAL_MODE || '').trim().toLowerCase() === 'true';
+let localLatched = (process.env.LOCAL_MODE || '').trim().toLowerCase() === 'true';
+
+/** src/config.ts calls this when it picks the local store, so a local DB always means a local-only prover. */
+export function latchProverLocalMode(): void {
+  localLatched = true;
+}
 
 export function proverLocalMode(env: NodeJS.ProcessEnv = process.env): boolean {
-  return LOCAL_AT_LOAD || (env.LOCAL_MODE || '').trim().toLowerCase() === 'true';
+  return localLatched || (env.LOCAL_MODE || '').trim().toLowerCase() === 'true';
+}
+
+/**
+ * Every prover fetch passes `redirect: proverRedirect()`. LOCAL_MODE: 'error', because a loopback
+ * prover answering 307/308 would otherwise have fetch re-send the body to any host (XC1 F1).
+ * Hosted: 'follow', fetch's default, so hosted is unchanged.
+ */
+export function proverRedirect(env: NodeJS.ProcessEnv = process.env): 'error' | 'follow' {
+  return proverLocalMode(env) ? 'error' : 'follow';
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);

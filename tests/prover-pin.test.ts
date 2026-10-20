@@ -83,6 +83,18 @@ describe('every prover call carries the bearer token (F-10, Sean 2026-10-07)', (
     expect(missing).toEqual([]);
   });
 
+  it('every source file that calls the prover passes redirect: proverRedirect() (LOCAL_MODE refuses redirects, XC1 F1)', () => {
+    const missing = files
+      .filter((f) => PROVER_CALL.test(code(f)))
+      .filter((f) => {
+        const src = code(f);
+        const calls = (src.match(new RegExp(PROVER_CALL.source, 'g')) ?? []).length;
+        return (src.match(/redirect: proverRedirect\(\)/g) ?? []).length < calls;
+      })
+      .map((f) => relative(ROOT, f));
+    expect(missing).toEqual([]);
+  });
+
   it('the header is a bearer token when ZKP_SERVICE_TOKEN is set, and absent when it is not', () => {
     expect(proverAuthHeaders({ ZKP_SERVICE_TOKEN: 'tok' } as NodeJS.ProcessEnv)).toEqual({ Authorization: 'Bearer tok' });
     expect(proverAuthHeaders({} as NodeJS.ProcessEnv)).toEqual({});

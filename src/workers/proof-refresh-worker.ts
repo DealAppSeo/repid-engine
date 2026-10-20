@@ -38,7 +38,7 @@ import crypto from 'crypto';
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
 import { shouldParkForHalt } from '../services/emergency-halt';
-import { localProverGate, proverAuthHeaders, proverBaseUrl } from '../config/prover';
+import { localProverGate, proverAuthHeaders, proverBaseUrl, proverRedirect } from '../config/prover';
 
 const WORKER = 'proof-refresh';
 
@@ -204,7 +204,7 @@ export async function runOnce(cfg: RefreshConfig = readConfig(), deps: RefreshDe
   // Gated here as well as in defaultDeps, so injected deps cannot bypass LOCAL_MODE either.
   const prover = localProverGate(deps.proverUrl ?? '');
   if (!prover) {
-    deps.warn('no prover reachable (LOCAL_MODE calls a loopback prover only) — tick skipped, nothing sent');
+    deps.warn('no prover URL (unset, or refused because LOCAL_MODE calls a loopback prover only) — tick skipped, nothing sent');
     return summary;
   }
   if (running) {
@@ -254,6 +254,7 @@ export async function runOnce(cfg: RefreshConfig = readConfig(), deps: RefreshDe
         const res = await deps.fetchImpl(`${base}/zkp/repid-proof`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
+          redirect: proverRedirect(),
           body: JSON.stringify({ agent_id: d.agentId, score: d.score, metadata: { job_id: jobId, refresh: true } }),
           signal: controller.signal,
         });
