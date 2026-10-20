@@ -9,6 +9,7 @@ import {
   isLocalHost,
   classifyEgress,
   assertPromptEgressAllowed,
+  assertLocalDataStore,
   EgressBoundaryError,
 } from '../src/selfhost/egress-guard';
 
@@ -36,6 +37,58 @@ describe('egress-guard: isLocalHost', () => {
 
   test('an unparseable URL is treated as remote (fail-closed)', () => {
     expect(isLocalHost('not a url')).toBe(false);
+  });
+});
+
+// IP ranges apply only to IP literals. A DNS name that merely STARTS like a private IP
+// ('127.evil.example') resolves wherever its owner points it, so it is remote.
+describe('egress-guard: isLocalHost classifies the parsed host, not a string prefix', () => {
+  test.each([
+    'http://127.evil.example/v1',
+    'http://10.0.0.1.nip.io/v1',
+    'http://192.168.x.example/v1',
+    'http://172.16.evil.example/v1',
+    'http://169.254.evil.example/v1',
+    'http://localhost.evil.example/v1',
+    'http://127.0.0.1@evil.example/v1', // userinfo: the host is evil.example
+    'http://172.15.0.1/v1', // just outside 172.16/12
+    'http://172.32.0.1/v1',
+    'postgresql://u:p@010.0.0.1:5432/db', // opaque host; libc may read 010 as octal 8
+  ])('refuses %s', (url) => {
+    expect(isLocalHost(url)).toBe(false);
+  });
+
+  test.each([
+    'http://127.0.0.1:11434/v1',
+    'http://[::1]:11434/v1', // WHATWG hostname is '[::1]', brackets included
+    'http://10.1.2.3:8000/v1',
+    'http://192.168.1.10:8000/v1',
+    'http://172.20.0.5:8000/v1',
+    'http://169.254.1.1:8000/v1',
+    'http://0.0.0.0:8000/v1',
+    'http://localhost:11434/v1',
+    'http://foo.localhost:11434/v1',
+    'http://host.docker.internal:11434/v1',
+    'http://ollama:11434/v1',
+    'http://vllm:8000/v1',
+    'http://llama-cpp:8080/v1',
+    'redis://[::1]:6379',
+    'postgresql://u:p@127.0.0.1:5432/db',
+  ])('keeps %s local', (url) => {
+    expect(isLocalHost(url)).toBe(true);
+  });
+
+  test('every boundary check built on it refuses a prefix-spoofed host', () => {
+    expect(() => assertPromptEgressAllowed('http://127.evil.example/v1/chat/completions', 'prompt', true)).toThrow(
+      EgressBoundaryError,
+    );
+    expect(() => assertLocalDataStore('postgresql://u:p@10.0.0.1.nip.io:5432/db', 'DATABASE_URL', true)).toThrow(
+      EgressBoundaryError,
+    );
+    expect(() => assertLocalDataStore('redis://192.168.attacker.example:6379', 'REDIS_URL', true)).toThrow(
+      EgressBoundaryError,
+    );
+    expect(() => assertLocalDataStore('redis://[::1]:6379', 'REDIS_URL', true)).not.toThrow();
   });
 });
 
