@@ -9,7 +9,9 @@
  *   identity  the agent exists on the IdentityRegistry
  *   file      keccak256 of the file at feedbackURI equals the feedbackHash the write committed to
  *   fields    the file's agentRegistry, agentId, clientAddress, value and tags match the event
- *   payment   the file's proofOfPayment names a real token Transfer from payer to payee
+ *   payment   the file's proofOfPayment names a real token Transfer, or a native ETH transfer, from payer to payee
+ *
+ * A data: feedbackURI is decoded in place, never fetched.
  *
  * Exit 0 VERIFIED, 2 NOT_CHECKED, 1 FAILED. Base Sepolia by default; --rpc or BASE_SEPOLIA_RPC_URL
  * picks the endpoint.
@@ -22,6 +24,7 @@ import {
   assessIdentity,
   assessPayment,
   assessWrite,
+  decodeDataUri,
   exitCodeOf,
   FETCH_TIMEOUT_MS,
   MAX_FILE_BYTES,
@@ -139,7 +142,7 @@ async function main(): Promise<number> {
       legs.push(/revert|nonexistent/i.test(msg) ? assessIdentity(null, null) : assessIdentity(null, msg));
     }
 
-    const fetched = await fetchFeedbackFile(decoded.feedbackURI);
+    const fetched = decodeDataUri(decoded.feedbackURI) ?? (await fetchFeedbackFile(decoded.feedbackURI));
     const fileLeg = assessFile(decoded.feedbackHash, fetched);
     legs.push(fileLeg);
 
@@ -153,8 +156,10 @@ async function main(): Promise<number> {
     let paymentReceipt: Parameters<typeof assessPayment>[1] = null;
     if (proof && String(proof.chainId) === String(net.chainId)) {
       try {
-        const r = await provider.getTransactionReceipt(proof.txHash);
-        paymentReceipt = r ? { status: r.status, logs: r.logs.map((l) => ({ address: l.address, topics: [...l.topics] })) } : null;
+        const [r, t] = await Promise.all([provider.getTransactionReceipt(proof.txHash), provider.getTransaction(proof.txHash)]);
+        paymentReceipt = r
+          ? { status: r.status, logs: r.logs.map((l) => ({ address: l.address, topics: [...l.topics] })), tx: t ? { from: t.from, to: t.to, value: t.value } : undefined }
+          : null;
       } catch (e) {
         paymentReceipt = { error: e instanceof Error ? e.message : String(e) };
       }

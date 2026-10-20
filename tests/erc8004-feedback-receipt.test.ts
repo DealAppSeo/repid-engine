@@ -43,7 +43,7 @@ jest.mock('../src/db', () => ({ db: { from: (t: string) => from(t) } }));
 jest.mock('../src/db/direct-pg', () => ({ pgQuery: jest.fn() }));
 
 import { buildFeedbackFile, feedbackHashOf, feedbackFileUrl, payeeFromPaymentHeader, proofOfPaymentFrom } from '../src/services/erc8004-feedback-file';
-import { assessFields, assessFile, assessIdentity, assessPayment, assessWrite, exitCodeOf, fetchTargetProblem, isPublicAddress, overall, type DecodedFeedback } from '../src/services/erc8004-feedback-verify';
+import { assessFields, assessFile, assessIdentity, assessPayment, assessWrite, decodeDataUri, exitCodeOf, fetchTargetProblem, isPublicAddress, overall, type DecodedFeedback } from '../src/services/erc8004-feedback-verify';
 import { prepareFeedbackFile } from '../src/workers/feedback-loop-worker';
 import { createAgentsReputationRouter } from '../src/routes/agents-reputation';
 import reputationAbiRaw from '../src/contracts/ReputationRegistry.abi.json';
@@ -288,6 +288,31 @@ describe('the verifier, leg by leg', () => {
     expect(assessPayment(proof, null, 84532).outcome).toBe('FAILED');
     expect(assessPayment(proof, { error: 'rpc down' }, 84532).outcome).toBe('NOT_CHECKED');
     expect(assessPayment(null, null, 84532).outcome).toBe('NOT_CHECKED');
+  });
+
+  it('payment: a native ETH transfer has no log, so it is matched on the transaction itself', () => {
+    const proof = JSON.parse(file).proofOfPayment;
+    const native = (from: string, to: string | null, value: bigint) => ({ status: 1, logs: [], tx: { from, to, value } });
+    expect(assessPayment(proof, native(PAYER, PAYEE, 10n ** 14n), 84532)).toMatchObject({ outcome: 'VERIFIED', detail: expect.stringContaining('0.0001 ETH') });
+    expect(assessPayment(proof, native(PAYER.toLowerCase(), PAYEE.toLowerCase(), 1n), 84532).outcome).toBe('VERIFIED');
+    expect(assessPayment(proof, native(PAYER, PAYEE, 0n), 84532).outcome).toBe('FAILED');
+    expect(assessPayment(proof, native(OPERATOR, PAYEE, 1n), 84532).outcome).toBe('FAILED');
+    expect(assessPayment(proof, native(PAYER, OPERATOR, 1n), 84532).outcome).toBe('FAILED');
+    expect(assessPayment(proof, native(PAYER, null, 1n), 84532).outcome).toBe('FAILED');
+    expect(assessPayment(proof, { status: 0, logs: [], tx: { from: PAYER, to: PAYEE, value: 1n } }, 84532).outcome).toBe('FAILED');
+  });
+
+  it('file: a data: URI is decoded in place, never fetched, and hashed like a served file', () => {
+    const h = ethers.keccak256(bytes);
+    const b64 = 'data:application/json;base64,' + Buffer.from(file, 'utf8').toString('base64');
+    expect(assessFile(h, decodeDataUri(b64)!).outcome).toBe('VERIFIED');
+    expect(assessFile(h, decodeDataUri('data:application/json,' + encodeURIComponent(file))!).outcome).toBe('VERIFIED');
+    expect(assessFile(h, decodeDataUri('data:application/json;base64,' + Buffer.from(file + ' ').toString('base64'))!).outcome).toBe('FAILED');
+    expect(decodeDataUri('https://example.com/f.json')).toBeNull();
+    expect(assessFile(h, decodeDataUri('data:application/json;base64,not*base64')!).outcome).toBe('NOT_CHECKED');
+    expect(assessFile(h, decodeDataUri('data:application/json;base64')!).outcome).toBe('NOT_CHECKED');
+    expect(assessFile(h, decodeDataUri('data:,%E0%A4%A')!).outcome).toBe('NOT_CHECKED');
+    expect(assessFile(h, decodeDataUri('data:;base64,' + 'A'.repeat(1_400_000))!).outcome).toBe('NOT_CHECKED');
   });
 
   it('VERIFIED only when every leg is; exit codes 0 / 2 / 1', () => {
