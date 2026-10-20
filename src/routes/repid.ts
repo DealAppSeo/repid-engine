@@ -19,7 +19,7 @@ import {
   verifyRepIDAttestation,
 } from '../repid/repid-attestation';
 import { db } from '../db';
-import { logProofGeneration } from '../zkp/plonky3-real';
+import { logProofGeneration, ProverUnavailableError } from '../zkp/plonky3-real';
 import { generateProof } from '../zk-proof/prover';
 import { fireWebhook } from '../services/webhook';
 import { publicError } from './public-error';
@@ -486,12 +486,19 @@ repidAdminRouter.post('/prove-repid', async (req: Request, res: Response) => {
   }
 
   const timestamp = new Date().toISOString();
-  const result = await generateProof({
-    agent_id,
-    requester_pubkey,
-    requested_tier,
-    timestamp,
-  });
+  let result;
+  try {
+    result = await generateProof({
+      agent_id,
+      requester_pubkey,
+      requested_tier,
+      timestamp,
+    });
+  } catch (e) {
+    // LOCAL_MODE only: no proof and no HMAC stand-in, so no log row and no webhook either.
+    if (e instanceof ProverUnavailableError) return res.status(503).json({ status: e.status, error: e.message });
+    throw e;
+  }
   await logProofGeneration(db, agent_id, requested_tier);
   fireWebhook('proof.generated', {
     proof: result.proof,

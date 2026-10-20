@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { proverAuthHeaders } from '../config/prover';
+import { localProverGate, proverAuthHeaders } from '../config/prover';
 import { pgQuery } from '../db/direct-pg';
 import { buildPostcardCommitment, generateNonce, SHA256_COMMITMENT_TAG } from '../zkp/commitment';
 import { buildBoundStatement } from '../zkp/proof-statement-guard'; // corpus hygiene: fail-closed agent binding on every real-proof statement
@@ -94,6 +94,10 @@ async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
 }
 
 export function createProofDrainService(config: ProofDrainServiceConfig): ProofDrainService {
+  // Refuse at construction, before any job is claimed: an injected remote URL cannot bypass LOCAL_MODE.
+  if (localProverGate(config.zkpServiceUrl) === null) {
+    throw new Error('proof drain refused: LOCAL_MODE calls a loopback prover only');
+  }
   const pollIntervalMs = config.pollIntervalMs ?? 2000;
   const idleSleepMs = config.idleSleepMs ?? 10000;
   const batchSize = config.batchSize ?? 20;

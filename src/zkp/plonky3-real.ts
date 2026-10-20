@@ -7,16 +7,27 @@
  * or the prover returns a malformed response. Every return value
  * carries an explicit `proof_source` so callers can surface honesty
  * to consumers.
+ *
+ * LOCAL_MODE: only a loopback prover is called, and there is no HMAC
+ * stand-in — every path that would fall back throws ProverUnavailableError.
  */
 
-import { proverAuthHeaders } from '../config/prover';
+import { localProverGate, proverAuthHeaders, proverLocalMode } from '../config/prover';
 import { createHmac } from 'crypto';
 import { markDegraded } from '../lib/degraded';
 import { buildAgentLogRow } from '../engine/agent-log-row';
 
 const HMAC_SECRET = process.env.PROOF_SECRET || 'repid-default-secret';
-const PROVER_URL = process.env.PLONKY3_PROVER_URL || process.env.ZKP_SERVICE_URL || '';
 const PROVER_TIMEOUT_MS = 5000;
+
+/** LOCAL_MODE gets this instead of an HMAC that looks like a proof. Routes answer 503 PROVER_UNAVAILABLE. */
+export class ProverUnavailableError extends Error {
+  readonly status = 'PROVER_UNAVAILABLE';
+  constructor(reason: string) {
+    super(`PROVER_UNAVAILABLE: ${reason}`);
+    this.name = 'ProverUnavailableError';
+  }
+}
 
 export type ProofSource = 'plonky3_real' | 'hmac_fallback';
 
@@ -36,6 +47,7 @@ export interface ProofResult {
  * `reason` names why we degraded (env unset / timeout / malformed proof_bytes).
  */
 function fallbackResult(body: ProveTradeAuthBody, reason: string): ProofResult {
+  if (proverLocalMode()) throw new ProverUnavailableError(reason.replace(/ — falling back to HMAC stub.*$/, ''));
   return markDegraded(
     { proof: hmacFallback(body), proof_source: 'hmac_fallback' as ProofSource, is_real: false },
     reason,
@@ -71,7 +83,8 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
  * Async — calls the real prover first, falls back to HMAC.
  *
  * Tries once, retries once on timeout/network error, then falls back.
- * Never throws — every failure path returns the HMAC fallback.
+ * Hosted: never throws — every failure path returns the HMAC fallback.
+ * LOCAL_MODE: throws ProverUnavailableError on every one of those paths.
  */
 export async function generateProofReal(
   agentId: string,
@@ -86,11 +99,18 @@ export async function generateProofReal(
     timestamp,
   };
 
-  if (!PROVER_URL) {
-    return fallbackResult(body, 'PLONKY3_PROVER_URL is unset — falling back to HMAC stub (NOT a real proof)');
+  // Read per call, not at import, so the LOCAL_MODE gate judges the env this call runs under.
+  const base = localProverGate(process.env.PLONKY3_PROVER_URL || process.env.ZKP_SERVICE_URL || '');
+  if (!base) {
+    return fallbackResult(
+      body,
+      base === null
+        ? 'LOCAL_MODE: no loopback prover configured (remote and unset prover URLs are refused)'
+        : 'PLONKY3_PROVER_URL is unset — falling back to HMAC stub (NOT a real proof)',
+    );
   }
 
-  const url = PROVER_URL.replace(/\/$/, '') + '/prove/trade_auth';
+  const url = base.replace(/\/$/, '') + '/prove/trade_auth';
   const init: RequestInit = {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...proverAuthHeaders() },
@@ -110,6 +130,7 @@ export async function generateProofReal(
       }
       return { proof: j.proof_bytes, proof_source: 'plonky3_real', is_real: true };
     } catch (e: any) {
+      if (e instanceof ProverUnavailableError) throw e; // LOCAL_MODE refusal from the try block above
       // AbortError (timeout) or network error — retry once.
       const isTimeout = e?.name === 'AbortError' || /timeout|aborted/i.test(String(e?.message ?? e));
       if (attempt === 0 && isTimeout) continue;

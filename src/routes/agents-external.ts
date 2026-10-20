@@ -286,6 +286,8 @@ router.post('/register', async (req: Request, res: Response) => {
 
       const jobId = crypto.randomUUID();
       const zkpUrl = proverBaseUrl();
+      // LOCAL_MODE with no loopback prover: proof_status says 'unavailable'; nothing is sent.
+      if (!zkpUrl) throw new Error('no prover reachable (LOCAL_MODE calls a loopback prover only)');
       const { error: queueErr } = await db.from('repid_proof_queue').insert({
         job_id: jobId,
         agent_id: agentId,
@@ -892,25 +894,28 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
     }
     await db.from('repid_agents').update(agentUpdate).eq('id', agentId);
 
-    // Async proof generation stub
-    const proof_job_id = crypto.randomUUID();
-    await db.from('repid_proof_queue').insert({
-      job_id: proof_job_id,
-      agent_id: agentId,
-      event_id: eventRow?.id,
-      status: 'pending',
-      zkp_service_url: proverBaseUrl()
-    });
-    
-    fetch(`${proverBaseUrl()}/zkp/repid-proof`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
-      body: JSON.stringify({ 
-        agent_id: agentId, 
-        score: newScore,
-        metadata: { job_id: proof_job_id }
-      })
-    }).catch(err => console.error('Proof queue error:', err));
+    // Async proof generation stub. No reachable prover (LOCAL_MODE: loopback only) = proof_job_id null.
+    const prover = proverBaseUrl();
+    const proof_job_id = prover ? crypto.randomUUID() : null;
+    if (prover) {
+      await db.from('repid_proof_queue').insert({
+        job_id: proof_job_id,
+        agent_id: agentId,
+        event_id: eventRow?.id,
+        status: 'pending',
+        zkp_service_url: prover
+      });
+
+      fetch(`${prover}/zkp/repid-proof`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
+        body: JSON.stringify({
+          agent_id: agentId,
+          score: newScore,
+          metadata: { job_id: proof_job_id }
+        })
+      }).catch(err => console.error('Proof queue error:', err));
+    }
 
     // Webhook stub
     if ((agent as any).webhook_url && ((agent as any).webhook_events || []).includes('score_event')) {

@@ -446,6 +446,20 @@ describe('REAL-PROOF-ONLY (the stub is never sellable)', () => {
     ).rejects.toMatchObject({ code: 'PROVER_UNAVAILABLE' });
   });
 
+  it('LOCAL_MODE: a reachable remote prover is never called; the subject id and score stay on this machine', async () => {
+    const db = makeDb(happyScript({ repid_zkp_proofs: [] }));
+    const f = fakeFetch(proverResponse());
+    process.env.LOCAL_MODE = 'true';
+    try {
+      await expect(
+        service({ db, fetchImpl: f.impl }).produceAudit(paidContract())
+      ).rejects.toMatchObject({ code: 'PROVER_UNAVAILABLE' });
+    } finally {
+      delete process.env.LOCAL_MODE;
+    }
+    expect(f.calls).toHaveLength(0);
+  });
+
   it('a non-2xx prover response is an error, not a fallback', async () => {
     const db = makeDb(happyScript({ repid_zkp_proofs: [] }));
     const f = fakeFetch({ error: 'boom' }, { ok: false, status: 503 });

@@ -38,7 +38,7 @@ import crypto from 'crypto';
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
 import { shouldParkForHalt } from '../services/emergency-halt';
-import { PINNED_PROVER_URL, proverAuthHeaders } from '../config/prover';
+import { localProverGate, proverAuthHeaders, proverBaseUrl } from '../config/prover';
 
 const WORKER = 'proof-refresh';
 
@@ -49,7 +49,6 @@ export const DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** First tick lands a few minutes after boot, not at boot (crash-loop safety). */
 const FIRST_TICK_DELAY_MS = 5 * 60 * 1000;
 const PROVER_TIMEOUT_MS = 30_000;
-const DEFAULT_PROVER_URL = PINNED_PROVER_URL;
 
 export interface RefreshCandidate {
   agent_id: string;
@@ -166,7 +165,7 @@ export interface RefreshDeps {
   query: (sql: string, params: unknown[]) => Promise<RefreshCandidate[]>;
   enqueue: (row: { job_id: string; agent_id: string; event_id: string; status: 'pending'; zkp_service_url: string }) => Promise<{ error: { message: string } | null }>;
   fetchImpl: typeof fetch;
-  proverUrl: string;
+  proverUrl: string | null;
   isHalted: () => Promise<boolean>;
   log: (msg: string) => void;
   warn: (msg: string) => void;
@@ -180,7 +179,7 @@ function defaultDeps(): RefreshDeps {
       return { error: error ? { message: error.message } : null };
     },
     fetchImpl: (...a) => fetch(...a),
-    proverUrl: process.env.ZKP_SERVICE_URL || DEFAULT_PROVER_URL,
+    proverUrl: proverBaseUrl(),
     isHalted: () => shouldParkForHalt(db, WORKER),
     log: (m) => console.log(`[${WORKER}] ${m}`),
     warn: (m) => console.error(`[${WORKER}] ${m}`),
@@ -202,6 +201,12 @@ let running = false;
 export async function runOnce(cfg: RefreshConfig = readConfig(), deps: RefreshDeps = defaultDeps()): Promise<TickSummary> {
   const summary: TickSummary = { ran: false, candidates: 0, enqueued: 0, proverOk: 0, proverFailed: 0, skipped: {} };
   if (process.env.PROOF_REFRESH_ENABLED !== 'true') return summary;
+  // Gated here as well as in defaultDeps, so injected deps cannot bypass LOCAL_MODE either.
+  const prover = localProverGate(deps.proverUrl ?? '');
+  if (!prover) {
+    deps.warn('no prover reachable (LOCAL_MODE calls a loopback prover only) — tick skipped, nothing sent');
+    return summary;
+  }
   if (running) {
     deps.warn('previous tick still running — skipping (re-entrancy guard)');
     return summary;
@@ -218,7 +223,7 @@ export async function runOnce(cfg: RefreshConfig = readConfig(), deps: RefreshDe
     ]);
     summary.candidates = rows.length;
 
-    const base = deps.proverUrl.replace(/\/+$/, '');
+    const base = prover.replace(/\/+$/, '');
     for (const d of decide(rows, cfg)) {
       if (d.action === 'skip') {
         summary.skipped[d.reason] = (summary.skipped[d.reason] ?? 0) + 1;

@@ -12,9 +12,56 @@
  */
 export const PINNED_PROVER_URL = 'https://zkp-postcard-production.up.railway.app';
 
-/** The prover base URL a service should call: its `ZKP_SERVICE_URL`, else the pinned one. */
-export function proverBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return env.ZKP_SERVICE_URL || PINNED_PROVER_URL;
+/**
+ * LOCAL_MODE PRIVACY (2026-10-20). A prover request carries an agent id and its score. A local engine
+ * must not send those off the machine, so in LOCAL_MODE the prover is used only when it is on
+ * loopback, the pin is never a default, and anything else resolves to null: no request is made.
+ * Hosted (LOCAL_MODE off) is unchanged. Latched at load AND read per call, so unsetting LOCAL_MODE
+ * after boot cannot re-open egress. tests/prover-local-mode.test.ts holds this.
+ */
+const LOCAL_AT_LOAD = (process.env.LOCAL_MODE || '').trim().toLowerCase() === 'true';
+
+export function proverLocalMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return LOCAL_AT_LOAD || (env.LOCAL_MODE || '').trim().toLowerCase() === 'true';
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** http(s) on this machine's loopback, judged on the parsed host (never a prefix match). */
+export function isLoopbackUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && LOOPBACK_HOSTS.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+const warned = new Set<string>();
+
+/** Every prover URL in src/ passes through here. Hosted: `url` unchanged. LOCAL_MODE: loopback or null. */
+export function localProverGate(url: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (!proverLocalMode(env) || isLoopbackUrl(url)) return url;
+  let host = 'an unset or unparseable URL';
+  try {
+    if (url) host = new URL(url).host;
+  } catch { /* keep the default */ }
+  const msg =
+    `[prover] LOCAL_MODE: refusing prover at ${host}; nothing is sent. ` +
+    'Set ZKP_SERVICE_URL to a loopback prover (http://127.0.0.1:<port>) to prove locally.';
+  if (!warned.has(msg)) {
+    warned.add(msg);
+    console.warn(msg);
+  }
+  return null;
+}
+
+/**
+ * The prover base URL a service should call: its `ZKP_SERVICE_URL`, else the pinned one.
+ * LOCAL_MODE: only a loopback `ZKP_SERVICE_URL`, else null, and the caller skips the proof.
+ */
+export function proverBaseUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  return localProverGate(env.ZKP_SERVICE_URL || PINNED_PROVER_URL, env);
 }
 
 /**
