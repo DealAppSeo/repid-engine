@@ -16,6 +16,7 @@
  */
 
 import { isIP } from 'node:net';
+import { parse as parsePgConnectionString } from 'pg-connection-string';
 
 export type EgressKind =
   | 'prompt' // prompt/response text going to an inference provider
@@ -43,11 +44,16 @@ const CONTENT_BEARING: ReadonlySet<EgressKind> = new Set<EgressKind>([
 export function isLocalHost(url: string): boolean {
   let host: string;
   try {
-    host = new URL(url).hostname.toLowerCase();
+    host = new URL(url).hostname;
   } catch {
     // An unparseable URL is not provably local — treat as remote (fail-closed).
     return false;
   }
+  return isLocalHostname(host);
+}
+
+function isLocalHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
   // IP ranges apply ONLY to IP literals: '127.evil.example' is a DNS name its owner can point
   // anywhere, so string prefixes are not a locality test. WHATWG keeps IPv6 brackets ('[::1]').
   const ip = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
@@ -182,30 +188,24 @@ export function assertPromptEgressAllowed(
  * unparseable connection string is treated as remote (fail-closed).
  *
  * No-op when the boundary is off (hosted behavior byte-identical) or the host is
- * local/private. A connection string parsed by `new URL()` — the `postgresql://`,
- * `postgres://`, `redis://`, and `rediss://` schemes all parse and expose a
- * `.hostname`, which is what `isLocalHost` classifies.
+ * local/private. What is classified is the host the store's CLIENT will dial,
+ * which is not always `new URL().hostname` — see `storeDialHost`.
  *
  * @param connectionString  DATABASE_URL / REDIS_URL (or equivalent)
- * @param storeLabel        which store, for the error message ('DATABASE_URL' / 'REDIS_URL')
+ * @param storeLabel        which client consumes it: 'DATABASE_URL' = `pg`, 'REDIS_URL' = `ioredis`
  * @param boundaryOn        override for ONLY_ATTESTATIONS_LEAVE (tests pass explicitly)
  */
 export function assertLocalDataStore(
   connectionString: string,
-  storeLabel: string,
+  storeLabel: 'DATABASE_URL' | 'REDIS_URL',
   boundaryOn?: boolean,
 ): void {
   // Boundary off → no-op (hosted behavior unchanged).
   if (!boundaryEngaged(boundaryOn)) return;
+  const host = storeDialHost(connectionString, storeLabel);
   // Local / private host → the content never left the operator's box.
-  if (isLocalHost(connectionString)) return;
+  if (host !== null && isLocalStoreHost(host)) return;
 
-  let host: string | null = null;
-  try {
-    host = new URL(connectionString).hostname.toLowerCase();
-  } catch {
-    host = null;
-  }
   const decision: EgressDecision = {
     allowed: false,
     kind: 'datastore',
@@ -215,9 +215,40 @@ export function assertLocalDataStore(
   };
   throw new EgressBoundaryError(
     decision,
-    `[egress-guard] refusing ${storeLabel} connection to non-local host ${host ?? 'unparseable-url'} — ` +
+    `[egress-guard] refusing ${storeLabel} connection to non-local host ${host ?? '(none or unparseable)'} — ` +
       `ONLY_ATTESTATIONS_LEAVE is set, so the datastore (rows + cached prompt/response text) may not ` +
       `leave the local box. Point ${storeLabel} at a local store (e.g. localhost / 127.0.0.1 / a private ` +
       `LAN host) or unset the boundary.`,
   );
+}
+
+/**
+ * The host the store's client will dial; null = none or unparseable (refused).
+ *
+ * DATABASE_URL: `pg` runs pg-connection-string's parse() on the connection string, and parse()
+ * lets a `?host=` query parameter override the URL authority (last one wins), so
+ * `postgresql://u:p@127.0.0.1/db?host=evil.example` dials evil.example. The guard runs the same
+ * parse() (tests/selfhost-datastore-egress.test.ts checks it is the copy pg loads). An empty host
+ * falls back to PGHOST / 'localhost' at connect time, which is not provable here, so it is refused.
+ * parse() also reads any sslcert/sslkey/sslrootcert file, as pg would; a read error refuses.
+ *
+ * REDIS_URL: ioredis keeps the URL host over a `?host=` parameter (checked in the same test), so
+ * the URL hostname is classified. ioredis does dial a `?path=` socket path instead of the host;
+ * that is NOT classified here yet (on Windows '//server/pipe/…' is a pipe on another machine).
+ */
+function storeDialHost(connectionString: string, storeLabel: 'DATABASE_URL' | 'REDIS_URL'): string | null {
+  try {
+    if (storeLabel === 'DATABASE_URL') return parsePgConnectionString(connectionString).host || null;
+    return new URL(connectionString).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+function isLocalStoreHost(host: string): boolean {
+  // pg dials a '/'-prefixed host as a Unix socket path: a file on this box, so local. Not
+  // '//x/…' or '/\x\…': Windows reads those as UNC paths, i.e. a named pipe on machine x
+  // (checked on loopback: net.connect({ path: '//localhost/pipe/p' }) reaches \\.\pipe\p).
+  if (host.startsWith('/')) return !/^\/[/\\]/.test(host);
+  return isLocalHostname(host);
 }

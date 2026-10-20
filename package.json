@@ -136,6 +136,7 @@
     "ioredis": "^5.11.1",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.1",
+    "pg-connection-string": "^2.14.1",
     "solc": "^0.8.37",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3",
