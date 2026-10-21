@@ -55,6 +55,53 @@ export interface DecayAssessment {
   activity_30d: number;
   /** True only when the score was actually changed. */
   applied: boolean;
+  /**
+   * True on the one event per DECAY_PERIOD_MS where decay lands (enforce) or would land
+   * (shadow). Later events in the window read it back and skip, so decay is per period, not
+   * per event, and the shadow marks exactly the event enforce would decay.
+   */
+  period_hit: boolean;
+  /** Why decay was not allowed to land on this event, or null. */
+  skipped: DecaySkip | null;
+}
+
+/**
+ * Decay is a function of 30-day inactivity, so it lands at most once per 30-day window.
+ *
+ * MEASURED 2026-10-20 (flag experiments, E1): before this, enforce re-decayed the base on EVERY
+ * score event — seven events within seconds took ~200 points from one agent — and decayed
+ * zero-delta events, so a simulated contract (guaranteed to move no RepID) moved it.
+ */
+export const DECAY_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
+
+export type DecaySkip = 'zero_delta' | 'decayed_this_period' | 'activity_unread';
+
+/** An agent's real activity over the last DECAY_PERIOD_MS, read from its own ledger rows. */
+export interface DecayActivity {
+  activity30d: number;
+  decayedThisPeriod: boolean;
+}
+
+/**
+ * From the agent's repid_score_events in the window. Shadow rows (the settlement trigger's
+ * `is_shadow` writes) are observations, not activity. Pure.
+ */
+export function decayActivityFromRows(
+  rows: ReadonlyArray<{ is_shadow?: boolean | null; metadata?: any }>,
+): DecayActivity {
+  const real = rows.filter((r) => r.is_shadow !== true);
+  return {
+    activity30d: real.length,
+    decayedThisPeriod: real.some((r) => r.metadata?.decay?.period_hit === true),
+  };
+}
+
+/** Why decay may not land on this event, or null when it may. Pure. */
+export function decaySkipFor(p: { rawDelta: number; activity: DecayActivity | null }): DecaySkip | null {
+  if (Math.round(p.rawDelta) === 0) return 'zero_delta';
+  if (!p.activity) return 'activity_unread';
+  if (p.activity.decayedThisPeriod) return 'decayed_this_period';
+  return null;
 }
 
 /**
@@ -68,6 +115,8 @@ export function assessDecay(params: {
   currentRepid: number;
   activity30d: number;
   mode?: DecayMode;
+  /** Set by the event path (decaySkipFor). Absent means the event may take decay. */
+  skip?: DecaySkip | null;
 }): DecayAssessment {
   const mode = params.mode ?? decayMode();
   const from = params.currentRepid;
@@ -82,6 +131,8 @@ export function assessDecay(params: {
       factor: 1,
       activity_30d,
       applied: false,
+      period_hit: false,
+      skipped: null,
     };
   }
 
@@ -94,6 +145,8 @@ export function assessDecay(params: {
   // does not silently depend on the internals of a module outside this directory.
   const decayed = Math.round(applyDecay(from, activity_30d));
   const would_remove = Math.max(0, from - decayed);
+  const skipped = params.skip ?? null;
+  const lands = would_remove > 0 && skipped === null;
 
   return {
     mode,
@@ -102,7 +155,9 @@ export function assessDecay(params: {
     would_remove,
     factor,
     activity_30d,
-    applied: mode === 'enforce' && would_remove > 0,
+    applied: mode === 'enforce' && lands,
+    period_hit: lands,
+    skipped,
   };
 }
 
@@ -225,6 +280,8 @@ export function decayMetadata(a: DecayAssessment): Record<string, unknown> {
       would_remove: a.would_remove,
       factor: Number(a.factor.toFixed(6)),
       activity_30d: a.activity_30d,
+      period_hit: a.period_hit,
+      skipped: a.skipped,
     },
   };
 }

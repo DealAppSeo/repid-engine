@@ -14,8 +14,10 @@
 
 import {
   assessDecay,
+  decayActivityFromRows,
   decayedScoreFor,
   decayMetadata,
+  decaySkipFor,
   parseDecayMode,
 } from '../src/scoring/decay-bridge';
 
@@ -121,5 +123,38 @@ describe('bounds and bad input', () => {
     const low = assessDecay({ currentRepid: 100, activity30d: 0, mode: 'enforce' });
     const high = assessDecay({ currentRepid: 9000, activity30d: 0, mode: 'enforce' });
     expect(high.would_remove).toBeGreaterThan(low.would_remove);
+  });
+});
+
+describe('the event gate — once per period, never on a zero delta, never on an unread ledger', () => {
+  const read = { activity30d: 0, decayedThisPeriod: false };
+
+  it('skips a zero delta first, then an unread ledger, then a window that already decayed', () => {
+    expect(decaySkipFor({ rawDelta: 0, activity: null })).toBe('zero_delta');
+    expect(decaySkipFor({ rawDelta: 0.4, activity: read })).toBe('zero_delta');
+    expect(decaySkipFor({ rawDelta: 10, activity: null })).toBe('activity_unread');
+    expect(decaySkipFor({ rawDelta: -10, activity: { ...read, decayedThisPeriod: true } })).toBe('decayed_this_period');
+    expect(decaySkipFor({ rawDelta: 10, activity: read })).toBeNull();
+  });
+
+  it('a skipped event reports the counterfactual but neither applies nor marks the period', () => {
+    const a = assessDecay({ currentRepid: 1611, activity30d: 0, mode: 'enforce', skip: 'decayed_this_period' });
+    expect(a.would_remove).toBeGreaterThan(0);
+    expect(a).toMatchObject({ applied: false, period_hit: false, skipped: 'decayed_this_period' });
+    expect(decayedScoreFor(a)).toBe(1611);
+  });
+
+  it('shadow marks the period exactly where enforce would apply, and still moves nothing', () => {
+    const sh = assessDecay({ currentRepid: 1611, activity30d: 0, mode: 'shadow', skip: null });
+    const en = assessDecay({ currentRepid: 1611, activity30d: 0, mode: 'enforce', skip: null });
+    expect(sh.period_hit).toBe(en.applied);
+    expect(decayedScoreFor(sh)).toBe(1611);
+    expect(decayMetadata(sh).decay).toMatchObject({ period_hit: true, skipped: null });
+  });
+
+  it('activity counts real ledger rows only, and remembers a period hit', () => {
+    expect(decayActivityFromRows([{ metadata: {} }, { is_shadow: false }, { is_shadow: true }, { is_shadow: null }])).toEqual({ activity30d: 3, decayedThisPeriod: false });
+    expect(decayActivityFromRows([{ metadata: { decay: { period_hit: true } } }]).decayedThisPeriod).toBe(true);
+    expect(decayActivityFromRows([{ is_shadow: true, metadata: { decay: { period_hit: true } } }]).decayedThisPeriod).toBe(false);
   });
 });
