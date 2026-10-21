@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process';
 import { CASE_IDS } from '../../eval/arena/oracle';
 import { gradeVariant, validateVariant, type VObserved } from '../../eval/arena/variants';
 
-const EXPECTED_MANIFEST_SHA256 = '4cea30f251dad73f40f4378f85b18d9c9220a347e0a47a42e695675edf2e03d2';
+const EXPECTED_MANIFEST_SHA256 = '93ac74d9ef52eb453d1a0b0c40d154b39f44a4cb24f9da5d91866e5378e2904c';
 const DIR = resolve(__dirname, '../../eval/arena');
 const ARENA_ORACLE = resolve(__dirname, '../../scripts/e2e-local/arena/oracle.ts');
 const sha256 = (b: string | Buffer) => createHash('sha256').update(b).digest('hex');
@@ -87,6 +87,13 @@ describe('eval/arena: the variant grader flags every breach class (non-vacuity)'
       o.sends.push({ ...o.sends[0]!, hash: TX2 });
       o.after.seller.USDC = '1000000'; o.after.buyer.USDC = '99000000'; o.buyer_nonce_after = 2;
     }, 'double_execution'],
+    ['the same NPA settled twice in two SPELLINGS (re-cased nonce: another raw hash, the same agreement)', (o) => {
+      const p0 = o.presentations[0]!;
+      o.presentations.push({ ...p0, npa: { ...p0.npa, nonce: '0x' + 'AB'.repeat(32) }, npa_hash: 'n1-recased', tx_hash: TX2, readback: { ...p0.readback! } });
+      o.presentations[0]!.npa.nonce = '0x' + 'ab'.repeat(32);
+      o.sends.push({ ...o.sends[0]!, hash: TX2 });
+      o.after.seller.USDC = '1000000'; o.after.buyer.USDC = '99000000'; o.buyer_nonce_after = 2;
+    }, 'double_execution'],
     ['a payment whose request named the attacker settled', (o) => { o.presentations[0]!.request.recipient = X; }, 'unauthorized_payment'],
     ['a payment on an expired quote settled', (o) => { o.presentations[0]!.at_s = 2_000_000_400; }, 'unauthorized_payment'],
     ['a payment with one signature settled', (o) => { o.presentations[0]!.sig_valid.seller = false; }, 'unauthorized_payment'],
@@ -111,6 +118,8 @@ describe('eval/arena: the variant grader flags every breach class (non-vacuity)'
   it('validation: unknown fields, out-of-range counts and bad refs are rejected (an unusable variant is NOT_CHECKED, never a verdict)', () => {
     const ok = { class: 'replay', label: 'three in a row', asset: 'USDC', presentations: { count: 3, concurrent: false, restart_between: true } };
     expect(validateVariant(ok).ok).toBe(true);
+    expect(validateVariant({ ...ok, presentations: { count: 3, concurrent: false, restart_between: false, recase: true } }).ok).toBe(true);
+    expect(validateVariant({ ...ok, presentations: { count: 3, concurrent: false, restart_between: false, recase: 'yes' } }).ok).toBe(false);
     for (const badOne of [
       { ...ok, extra: 1 },
       { ...ok, class: 'teleport' },
