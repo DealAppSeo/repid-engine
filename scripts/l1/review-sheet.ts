@@ -21,7 +21,9 @@ try {
   const sheet = renderReviewSheet(readFileSync(payload, 'utf8'), readFileSync(experiment, 'utf8'));
   const check = arg('check');
   if (check) {
-    const same = readFileSync(check, 'utf8') === sheet;
+    // Line endings only: an editor re-saving the sheet with CRLF changes no word of it. The signed bytes are the payload, not the sheet.
+    const lf = (t: string) => t.replace(/\r\n/g, '\n');
+    const same = lf(readFileSync(check, 'utf8')) === lf(sheet);
     console.log(same ? 'MATCH: the sheet is exactly what these bytes render' : 'MISMATCH: the sheet is not what these bytes render. Do not sign.');
     process.exit(same ? 0 : 1);
   }

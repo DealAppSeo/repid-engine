@@ -65,7 +65,7 @@ export async function runScenarios(chain: TestChain, dir: string): Promise<{ res
     subject, owner: owner.address, buyer, seller, usdc: token,
     per_tx_raw: usdc(1), daily_raw: usdc(10), total_raw: usdc(20), tx_per_day: 20, max_fee_wei: '100000000000000',
     not_before: t0 - 60, expires_at: t0 + 72 * 3600, kill_switch_path: killPath,
-    evaluator_sha256: createHash('sha256').update(readFileSync(ORACLE)).digest('hex'), nonce: '1',
+    evaluator_sha256: createHash('sha256').update(readFileSync(ORACLE, 'utf8').replace(/\r\n/g, '\n')).digest('hex'), nonce: '1',
   });
   writeFileSync(experimentPath, JSON.stringify(artifacts.experiment, null, 2));
   const sheet = renderReviewSheet(artifacts.payload, readFileSync(experimentPath, 'utf8'));
@@ -197,6 +197,13 @@ export async function runScenarios(chain: TestChain, dir: string): Promise<{ res
     const a = await presentL1(r, await npaFor(usdc(1)), 'tamper-policy');
     const k = await kernelAlone(r, 'spend', usdc(1));
     return { pass: a.status === 'REFUSED' && k.includes('policy_signature_invalid'), got: `${show(a)}; kernel alone: ${k}` };
+  });
+  await record('the executor holds a key that is not the approved buyer wallet', 'REFUSED buyer_key_not_approved_wallet, nothing sent from either key', async () => {
+    const stray = generatePrivateKey();
+    await chain.fundNative(privateKeyToAddress(stray) as Hex, 1_000_000_000_000_000n);
+    const a = await presentL1(openL1({ ...cfgFor(ledgerPath), buyerKey: stray as Hex }), await npaFor(usdc(1)), 'stray-key');
+    const sent = await chain.txCount(privateKeyToAddress(stray) as Hex);
+    return { pass: a.status === 'REFUSED' && codes(a).includes('buyer_key_not_approved_wallet') && sent === 0, got: `${show(a)}; stray key sent ${sent}` };
   });
   await record('a call filed as read, other or post under this policy (the class is never the model\'s)', 'kernel DENY action_not_permitted for all three', async () => {
     const got = await Promise.all(['read', 'other', 'post'].map(async (c) => `${c}:${await kernelAlone(runner, c, null)}`));

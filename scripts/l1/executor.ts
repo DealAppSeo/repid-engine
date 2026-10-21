@@ -12,6 +12,7 @@
  * nothing here prints or writes it.
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { privateKeyToAddress } from 'viem/accounts';
 import { runUnderKernel } from '../../src/kernel/gate';
 import { L1_CHAIN_ID, checkL1Presentation, l1Tally } from '../../src/kernel/l1';
 import { StoreLedger, createJsonlStore } from '../../src/kernel/store';
@@ -59,6 +60,8 @@ export function openL1(cfg: L1ExecConfig): L1Runner {
   const sink = createJsonlStore(cfg.ledgerPath, { create: false });
   const deps: GateDeps = {
     ledger: new StoreLedger(sink),
+    // "wallet-proven" by construction: the owner is the address the operator pinned, not one resolved from
+    // an accountable root. What proves it is the signature check, which the kernel runs on every call.
     resolveOwner: async () => ({ status: 'resolved', wallet: cfg.pinnedOwner, assurance: 'wallet-proven' }),
     now: cfg.now,
     env: cfg.env,
@@ -90,6 +93,12 @@ async function presentOnce(r: L1Runner, pres: Presentation, label: string): Prom
     return refused(label, [{ stage: 'policy', code: 'experiment_unreadable' }]);
   }
   const killPath = typeof experiment?.kill_switch_path === 'string' ? experiment.kill_switch_path : '';
+  // The key this process signs with must BE the approved buyer: otherwise the checks below approve one wallet
+  // and the send spends from another (Lane D, L1 review). The file's own integrity is checked in checkL1Policy.
+  const approvedBuyer = String((experiment as { wallets?: { buyer?: unknown[] } } | null)?.wallets?.buyer?.[0] ?? '');
+  if (privateKeyToAddress(cfg.buyerKey).toLowerCase() !== approvedBuyer.toLowerCase()) {
+    return refused(label, [{ stage: 'policy', code: 'buyer_key_not_approved_wallet', detail: 'the signing key is not the buyer wallet the policy approves' }]);
+  }
   let records;
   let signed;
   try {

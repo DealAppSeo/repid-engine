@@ -41,7 +41,8 @@ try {
     not_before: nowS,
     expires_at: nowS + Math.round(hours * 3600),
     kill_switch_path: join(out, 'KILL'),
-    evaluator_sha256: createHash('sha256').update(readFileSync(oracle)).digest('hex'),
+    // LF bytes: what git stores and what arena records carry. A Windows checkout's CRLF copy hashes differently.
+    evaluator_sha256: createHash('sha256').update(readFileSync(oracle, 'utf8').replace(/\r\n/g, '\n')).digest('hex'),
     nonce: arg('nonce', '1'),
   });
   const experiment = JSON.stringify(a.experiment, null, 2);

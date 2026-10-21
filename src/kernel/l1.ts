@@ -376,11 +376,11 @@ export function renderReviewSheet(payload: string, experimentJson: string): stri
   L.push(`| Per payment | at most ${usdc(policy.per_tx_raw)} |`);
   L.push(`| Per rolling 24 h | at most ${usdc(policy.daily_raw)} and at most ${experiment.max_tx_count} payments |`);
   L.push(`| In total, for this policy | at most ${usdc(policy.total_raw)} |`);
-  L.push(`| Gas per payment | at most ${formatUnits(BigInt(experiment.max_fee_wei), 18)} ETH (paid by the buyer wallet) |`);
+  L.push(`| Gas per payment | each agreement must DECLARE a gas ceiling of at most ${formatUnits(BigInt(experiment.max_fee_wei), 18)} ETH, or it is refused. The gas actually spent is paid by the buyer wallet and is not capped by this signature; the funded test ETH is the real ceiling |`);
   L.push(`| Valid | from ${utc(experiment.not_before)} until ${utc(policy.expires_at)} (${hours} h) |`);
   L.push(`| Nonce | ${policy.nonce} |`);
   L.push(`| Kill switch | the file \`${experiment.kill_switch_path}\`. While it exists, every payment is refused before any effect. |`);
-  L.push(`| Binding | \`${(policy.authorized_impl_hashes ?? [])[0]}\` = the sha256 of the experiment policy below. Change one field of it and the executor refuses. |`);
+  L.push(`| Binding | \`${(policy.authorized_impl_hashes ?? [])[0]}\` = sha256 of the RFC 8785 canonical form of the experiment policy below WITHOUT its policy_id field (not of the file as displayed). Change one field of it and the executor refuses. |`);
   L.push(`| Evaluator (oracle sha256) | \`${experiment.evaluator_sha256}\` |`);
   L.push('');
   L.push('## How to stop it');
@@ -394,6 +394,8 @@ export function renderReviewSheet(payload: string, experimentJson: string): stri
   L.push('## What this signature does NOT do');
   L.push('');
   L.push('- It limits nothing outside the L1 executor: the kernel governs only what runs through it.');
+  L.push('- The buyer wallet, the payment count, the gas declaration, the start time, the kill switch and the evaluator are in the bound experiment policy, so the L1 executor enforces them, not the kernel. The kernel alone enforces the caps, the payee, the action and the expiry.');
+  L.push('- The signature names no audience: any kernel that holds it honours it. Only who can read the L1 ledger file keeps it to the L1 executor.');
   L.push('- The kernel checks the amount and payee the executor declares; the executor then reads the chain back, and an unconfirmed payment is recorded UNKNOWN, never SETTLED.');
   L.push('- The total resets if you sign a higher-nonce replacement (the total is per policy version).');
   L.push('- It moves no RepID and reaches no production database.');

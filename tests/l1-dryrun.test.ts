@@ -19,7 +19,7 @@ describe('L1 dry run (in-memory chain, chain id 84532)', () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   it('ran every scenario, and every one held', () => {
-    expect(results.length).toBe(19);
+    expect(results.length).toBe(20);
     expect(results.filter((r) => !r.pass).map((r) => ({ name: r.name, got: r.got }))).toEqual([]);
   });
   it('every refusal left the chain untouched; every settled payment is exactly one transaction', () => {
