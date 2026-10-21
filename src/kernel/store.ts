@@ -25,6 +25,7 @@
  *     makes every read THROW — which the gate turns into NOT_CHECKED. Skipping a bad line would let
  *     a lost policy or a lost spend row read as "nothing there".
  */
+import { constants as fsConstants } from 'node:fs';
 import { mkdir, open, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { CAPABILITY_ENFORCED_CHECK } from './decide';
@@ -64,14 +65,23 @@ export function createMemoryStore(): KernelSink & { records: LedgerRecord[] } {
   };
 }
 
-/** Append-only JSONL. The directory is created on first write; nothing happens at import. */
-export function createJsonlStore(path: string): KernelSink {
+/**
+ * Append-only JSONL. The directory is created on first write; nothing happens at import.
+ *
+ * `{ create: false }` is the DURABLE form (the L1 ledger, XC1 residual 2): the file must already exist and is
+ * never created, by a write or by a read. A missing file THROWS instead of reading as an empty ledger, so a
+ * wiped disk or a wrong path cannot hand a replayed old policy a clean slate (RT-3) or reset the spend history
+ * (RT-3b): the gate turns the throw into NOT_CHECKED. Create the file once, deliberately (scripts/l1/init-ledger.ts).
+ */
+export function createJsonlStore(path: string, opts: { create?: boolean } = {}): KernelSink {
+  const create = opts.create ?? true;
   return {
     async append(record) {
-      await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+      if (create) await mkdir(dirname(path), { recursive: true, mode: 0o700 });
       const line = JSON.stringify(record) + '\n';
       // Open for append, write, flush to disk, close: a record that returned is a record that is there.
-      const fh = await open(path, 'a', 0o600);
+      // Durable: append without O_CREAT, so a missing file is ENOENT here rather than a fresh empty ledger.
+      const fh = await open(path, create ? 'a' : fsConstants.O_WRONLY | fsConstants.O_APPEND, 0o600);
       try {
         await fh.appendFile(line, 'utf8');
         await fh.datasync();
@@ -84,7 +94,10 @@ export function createJsonlStore(path: string): KernelSink {
       try {
         text = await readFile(path, 'utf8');
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+          if (create) return [];
+          throw new LedgerIntegrityError('the durable ledger file is missing; it is never recreated');
+        }
         throw e;
       }
       const out: LedgerRecord[] = [];
