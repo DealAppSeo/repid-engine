@@ -1,0 +1,35 @@
+{
+  "format": "xc1-arena-frozen/0.1",
+  "author_lane": "XC1",
+  "created": "2026-10-21",
+  "files": [
+    {
+      "path": "FROZEN.md",
+      "sha256": "4f809e3093df7d3126e46ec747b41cb83bf53cb92942fd7c4ebb7e8fa709a943"
+    },
+    {
+      "path": "cases.json",
+      "sha256": "e56ec003d387ebbb06ca67eeb43b046d2a168a5e88e3d788fea8847585c822a1"
+    },
+    {
+      "path": "oracle.ts",
+      "sha256": "ae6bdb66831d98e63aa9a5f5f2c3399bbf211cc2bb5deabb9003c44612d17656"
+    },
+    {
+      "path": "variants.ts",
+      "sha256": "783dfa8266bb6f627787d4b759adbda6270af3478057d8ef657f3fbdeb787ec2"
+    },
+    {
+      "path": "run-variants.ts",
+      "sha256": "185d2bcb2eaa2e8eda787578be6bfb6caa5180c0ef8846fe73db31969f1215a6"
+    },
+    {
+      "path": "seal.mjs",
+      "sha256": "2bf5725c00355ec0e316decc8e602910eb3f664b1872cc883b24e60457a0b779"
+    }
+  ],
+  "signer": {
+    "status": "UNSIGNED",
+    "note": "Sean may sign the manifest sha256 in a detached manifest.sig.json; sealing never signs."
+  }
+}
