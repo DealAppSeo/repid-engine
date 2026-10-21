@@ -597,7 +597,7 @@ describe('receipts: forged, tampered, replayed', () => {
   // validateReceipt() and verifyReceiptChain() both accept. The only authentication of a receipt is
   // "the engine's own ledger holds this id" (GET /receipt/:id), and that ledger is the ephemeral
   // temp-dir file. The receipt itself says "receipt_signature (unsigned in the MVP)" in does_not_attest.
-  it.failing('RT-7 a receipt fabricated from NOTHING, with no engine and no genuine receipt, must not validate as an authentic ALLOW (BREACHED today: unsigned)', () => {
+  it('RT-7 a receipt fabricated from NOTHING, with no engine and no genuine receipt, must not validate as an authentic ALLOW (BREACHED today: unsigned)', () => {
     // Everything below is public: the checks table is exported, the amounts are the forger's choice.
     const checks = REQUIRED_CHECKS.spend.map((name) => ({ name, outcome: 'PASS' as const, source: 'forged' }));
     const wallet = '0x00000000000000000000000000000000000000aa';

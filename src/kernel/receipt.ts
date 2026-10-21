@@ -19,7 +19,7 @@
  */
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { canonicalJson } from '../services/owner-authorization';
-import { CAPABILITY_ENFORCED_CHECK, CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, parseAmountRaw } from './decide';
+import { CALLER_ASSERTED_CLASS_NOTE, CAPABILITY_ENFORCED_CHECK, CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, parseAmountRaw } from './decide';
 import type {
   ChainTip,
   DecisionLeg,
@@ -257,7 +257,8 @@ export type InvariantCode =
   | 'does_not_attest_missing_cumulative_total'
   | 'does_not_attest_missing_total_scope'
   | 'simulation_mismatch'
-  | 'settlement_unmeasured';
+  | 'settlement_unmeasured'
+  | 'tool_class_unattested';
 
 export interface ReceiptViolation {
   code: InvariantCode;
@@ -443,6 +444,12 @@ export function validateReceipt(receipt: unknown, ctx: ValidateContext = {}): Re
     }
   } else if (d.reasons.length === 0) {
     add('refusal_without_reason', 'decision.reasons', 'a DENY or NOT_CHECKED must say why');
+  }
+
+  // Every receipt either says its class is caller-asserted (flag OFF) or carries the enforcement
+  // marker (flag ON). Neither means the enforcement rows were stripped (P0-RS-02/03).
+  if (!d.does_not_attest.includes(CALLER_ASSERTED_CLASS_NOTE) && !d.checks.some((c) => c.name === CAPABILITY_ENFORCED_CHECK)) {
+    add('tool_class_unattested', 'decision.checks.capability_enforced', 'a receipt must disclaim its class as caller-asserted or carry the enforcement marker');
   }
 
   // (5) a vote alone is PROVISIONAL; SETTLED needs a settler

@@ -214,10 +214,16 @@ export const CUMULATIVE_TOTAL_NOTE = 'cumulative_total (no atomic reservation)';
  */
 export const TOTAL_CAP_SCOPE_NOTE =
   'total_cap_scope (the total limit is per policy version, not lifetime: it is keyed to the policy hash, which includes the nonce, so it resets when a policy is superseded)';
+/**
+ * Flag OFF, the class is the caller's word and the receipt says so. Under enforcement the registry
+ * checked it, so the line is left out — and validateReceipt then requires the enforcement marker. A
+ * receipt that neither disclaims the class nor carries the marker has had its rows stripped (P0-RS-02/03).
+ */
+export const CALLER_ASSERTED_CLASS_NOTE = 'tool_class (caller-asserted; there is no tool registry in the MVP)';
 const STANDING_DOES_NOT_ATTEST = [
   CUMULATIVE_TOTAL_NOTE,
   TOTAL_CAP_SCOPE_NOTE,
-  'tool_class (caller-asserted; there is no tool registry in the MVP)',
+  CALLER_ASSERTED_CLASS_NOTE,
   'explicit_revocation (revocation is supersession by a higher nonce inside this ledger only)',
   'laya (shadow mode; not consulted)',
   'receipt_signature (unsigned in the MVP; integrity is the hash and the chain)',
@@ -508,7 +514,7 @@ export function decide(input: DecideInput): DecisionLeg {
   }
 
   // 8. what this decision does not establish -----------------------------------------------------
-  const doesNotAttest: string[] = [...STANDING_DOES_NOT_ATTEST];
+  const doesNotAttest: string[] = STANDING_DOES_NOT_ATTEST.filter((n) => !(enforcementOn && n === CALLER_ASSERTED_CLASS_NOTE));
   if (cls === 'post') {
     if (hal.state !== 'consulted' || hal.evidence.verdict === 'ABSTAIN') doesNotAttest.push('hal_content_verdict (HAL did not answer)');
     else if (hal.evidence.settled_by === null) doesNotAttest.push('verification_settled (votes alone are PROVISIONAL; no holdout, known answer or person settled it)');

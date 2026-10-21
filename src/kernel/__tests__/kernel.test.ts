@@ -13,7 +13,7 @@
  */
 import { Wallet } from 'ethers';
 import * as decideModule from '../decide';
-import { CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, decide, parseAmountRaw } from '../decide';
+import { CALLER_ASSERTED_CLASS_NOTE, CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, decide, parseAmountRaw } from '../decide';
 import { runUnderKernel } from '../gate';
 import { POLICY_DOMAIN, POLICY_TYPES, parsePolicy, policyHash, policyTypedValue } from '../policy';
 import { hashArgs, validateReceipt, verifyReceiptChain } from '../receipt';
@@ -757,7 +757,7 @@ describe('(d) non-vacuity: a default-allow decide must make the refusal demo FAI
   /** A decide() that approves everything AND forges a clean-looking trail, to get past the ledger. */
   const forgedAllow = (): DecisionLeg => ({
     ...lazyAllow(),
-    does_not_attest: [CUMULATIVE_TOTAL_NOTE, TOTAL_CAP_SCOPE_NOTE],
+    does_not_attest: [CUMULATIVE_TOTAL_NOTE, TOTAL_CAP_SCOPE_NOTE, CALLER_ASSERTED_CLASS_NOTE],
     checks: allCheckNames('spend'),
     policy: { policy_hash: null, signer: null, signature: 'VERIFIED', expires_at: null, revocation: 'VERIFIED' },
     limits: { per_tx_raw: '1000000000', daily_raw: '1000000000', total_raw: '1000000000', effective_per_tx_raw: '1000000000', binding_term: 'per_tx' },
