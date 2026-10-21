@@ -20,7 +20,8 @@ repo holds no key and makes no model call. The loop that drives it with free ope
 
 ```
 presentation (NPA signed by both parties + the request)
-  -> preflight   guard.ts   policy file hash + pinned id + expiry + kill switch; both NPA signatures; wallet / chain / asset /
+  -> preflight   src/services/npa-preflight.ts (pure; guard.ts is its I/O shell)
+                            policy file hash + pinned id + expiry + kill switch; both NPA signatures; wallet / chain / asset /
                             counterparty / cap / quote checks; request == NPA; asset verified on its own chain.  Can only REFUSE.
   -> x402 gate   (USDC)     tier authority.  Can only REFUSE.  ETH has no gate: it is denominated in USDC and no ETH price is invented.
   -> kernel      runUnderKernel(tool = send + read back).  The ONLY thing that authorizes.
@@ -28,8 +29,9 @@ presentation (NPA signed by both parties + the request)
 ```
 
 The preflight exists because the kernel's signed policy deliberately does not constrain the asset or the chain, and has no notion of an
-NPA, a quote, a pinned experiment policy or a kill-switch file. It does **not** consume sha256(NPA) once: writing that here would hide
-that the executor has none (see below).
+NPA, a quote, a pinned experiment policy or a kill-switch file. It lives in `src/` (`src/services/npa-preflight.ts`, unit-tested in
+`tests/npa-preflight.test.ts`) because it is part of the executor: a harness script is not an executor. It does **not** consume
+sha256(NPA) once; that belongs to the kernel's gate (see below).
 
 ## Files
 
@@ -37,8 +39,9 @@ that the executor has none (see below).
 |---|---|
 | `oracle.ts` | the 18 cases, `predict` (frozen before a case runs) and `grade`. Pure. Its sha256 is written into each policy as `evaluator_sha256`. Meant to be frozen by the adversarial lane. |
 | `cases.ts` | one script per case; each changes exactly one thing in a valid NPA and presents it |
-| `core.ts` | RFC 8785 canonical JSON, the policy and its id, the EIP-712 NPA (viem), the settlement classifier |
-| `guard.ts` / `world.ts` | the preflight; one exchange's world and the executor (`present`), the RepID leg |
+| `core.ts` | re-exports the pure pieces from `src/services/npa-preflight.ts` (canonical JSON, the policy and its id, the NPA); signs an NPA with viem; the settlement classifier |
+| `guard.ts` | the I/O shell of the preflight: reads the policy file and the kill-switch file, asks the chain for its id and the token's `symbol()` / `decimals()`, then calls the pure check |
+| `world.ts` | one exchange's world and the executor (`present`), the RepID leg |
 | `chain.ts` | `ViemChain` (devnet) and `MemoryChain` (offline twin) behind one interface |
 | `agents.ts` | the injected agent interface, a deterministic stub, the loopback HTTP client, and the code that validates what a model proposes |
 | `runner.ts` / `cli.ts` | one exchange to one evidence record; the batch driver the loop launches |

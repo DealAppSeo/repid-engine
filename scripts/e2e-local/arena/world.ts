@@ -24,6 +24,7 @@ import {
   type ArenaPolicy, type Hex, type Npa, type SignedNpa, type TxReadback,
 } from './core';
 import type { Engine } from './engine';
+import { npaHashOrNull } from '../../../src/services/npa-preflight';
 import { preflight, type Presentation, type Refusal, type Tally } from './guard';
 
 export type Sym = 'USDC' | 'ETH';
@@ -248,7 +249,7 @@ export const presentationOf = (s: SignedNpa, over: Partial<Presentation['request
 
 // ── the executor ─────────────────────────────────────────────────────────────────────────────────
 
-const symOf = (w: World, asset: Hex): Sym | null => (w.policy.assets.find((a) => sameAddr(assetKey(a.contract), asset))?.symbol as Sym | undefined) ?? null;
+const symOf = (w: World, asset: unknown): Sym | null => (w.policy.assets.find((a) => sameAddr(assetKey(a.contract), asset))?.symbol as Sym | undefined) ?? null;
 
 function kernelRequest(w: World, sym: Sym, pres: Presentation, npaHash: string) {
   return {
@@ -278,10 +279,11 @@ export const serializeReadback = (rb: TxReadback | null): Record<string, unknown
   };
 
 export async function present(w: World, pres: Presentation, label: string): Promise<Attempt> {
-  const npaHash = npaHashOf(pres.npa.npa);
-  const att: Attempt = { label, at: isoOf(w.now()), npa_hash: npaHash, sym: symOf(w, pres.npa.npa.asset), amount_raw: pres.npa.npa.amount_raw, status: 'REFUSED', refusals: [], gate: null, kernel: null, kernel_dry: null, tx_hash: null, settlement_why: null, readback: null };
+  // The presentation is untrusted and may be anything: read it defensively, the preflight refuses what is malformed.
+  const npaHash = npaHashOrNull(pres?.npa?.npa) ?? '0'.repeat(64);
+  const att: Attempt = { label, at: isoOf(w.now()), npa_hash: npaHash, sym: symOf(w, pres?.npa?.npa?.asset), amount_raw: String(pres?.npa?.npa?.amount_raw ?? ''), status: 'REFUSED', refusals: [], gate: null, kernel: null, kernel_dry: null, tx_hash: null, settlement_why: null, readback: null };
   w.attempts.push(att);
-  const sym = symOf(w, pres.npa.npa.asset);
+  const sym = symOf(w, pres?.npa?.npa?.asset);
 
   // 1. arena preflight
   const pf = await preflight({ policyPath: w.policyPath, pinnedPolicyId: w.pinnedPolicyId, nowS: Math.floor(w.now() / 1000), chain: w.chain, pres, tally: w.tally });
