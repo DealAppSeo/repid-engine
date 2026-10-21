@@ -13,7 +13,11 @@ import { StoreLedger, createJsonlStore } from '../../src/kernel/store';
 import type { HalEvidence, KernelLedger, OwnerPolicy } from '../../src/kernel/types';
 import * as decideModule from '../../src/kernel/decide';
 import { AGENT_ID, NOW_S, PAYEE, harness, iso, postRequest, signedPolicy, spendRequest } from '../../src/kernel/__tests__/fixtures';
+import { Wallet } from 'ethers';
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { OWNER_AUTH_DOMAIN, OWNER_AUTH_TYPES, __resetOwnerAuthNonces, __setOwnerAuthNonceLedger, checkOwnerAuthorization, paramsHash, tableNonceLedger } from '../../src/services/owner-authorization';
+import { createLocalStore } from '../../src/selfhost/local-store';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -288,3 +292,71 @@ function parseOk(raw: unknown) {
   if (!p.ok) throw new Error('fixture should parse');
   return p.request;
 }
+
+describe('TK-03: a used owner approval stays used across a restart (durable nonce ledger)', () => {
+  const NOW = 1_800_000_000;
+  async function approval() {
+    const owner = Wallet.createRandom();
+    const nonce = '0x' + randomBytes(32).toString('hex');
+    const auth = { nonce, expires_at: NOW + 300, signature: await owner.signTypedData(OWNER_AUTH_DOMAIN, OWNER_AUTH_TYPES, { subject: AGENT_ID, action: 'keys.create', params: paramsHash({}), nonce, expiresAt: NOW + 300 }) };
+    return () => checkOwnerAuthorization({ subject: AGENT_ID, action: 'keys.create', params: {}, auth, expectedSigner: owner.address, nowS: NOW });
+  }
+  /** A supabase-js-shaped client whose select/insert answer as told. */
+  function fakeClient(select: () => { data: unknown; error: { message: string } | null }, insert: () => { error: { message: string; code?: string } | null }) {
+    const inserted: unknown[] = [];
+    const client = {
+      from: () => ({
+        select: () => ({ eq: () => ({ eq: async () => select() }) }),
+        insert: async (row: unknown) => { inserted.push(row); return insert(); },
+      }),
+    };
+    return { client: client as never, inserted };
+  }
+  afterAll(() => {
+    // Leave an offline ledger behind for anything that runs after this block (the setup file's is replaced).
+    const used = new Set<string>();
+    __setOwnerAuthNonceLedger({ async claim(s, n) { const k = `${s}:${n}`; if (used.has(k)) return 'replayed'; used.add(k); return 'claimed'; } });
+  });
+
+  it('table ledger: a fresh nonce is inserted (claimed); one already present is replayed; a concurrent insert (23505) is replayed', async () => {
+    const fresh = fakeClient(() => ({ data: [], error: null }), () => ({ error: null }));
+    expect(await tableNonceLedger(() => fresh.client).claim('0xabc', '0x01', NOW + 300)).toBe('claimed');
+    expect(fresh.inserted).toEqual([{ signer: '0xabc', nonce: '0x01', expires_at: new Date((NOW + 300) * 1000).toISOString() }]);
+    const seen = fakeClient(() => ({ data: [{ nonce: '0x01' }], error: null }), () => ({ error: null }));
+    expect(await tableNonceLedger(() => seen.client).claim('0xabc', '0x01', NOW + 300)).toBe('replayed');
+    expect(seen.inserted).toHaveLength(0);
+    const raced = fakeClient(() => ({ data: [], error: null }), () => ({ error: { message: 'duplicate key', code: '23505' } }));
+    expect(await tableNonceLedger(() => raced.client).claim('0xabc', '0x01', NOW + 300)).toBe('replayed');
+  });
+
+  it('table ledger down (e.g. the table is not applied yet): the approval is not_checked, fail closed, and its nonce is not burned', async () => {
+    let up = false;
+    const flaky = fakeClient(() => (up ? { data: [], error: null } : { data: null, error: { message: 'relation "owner_auth_nonces" does not exist' } }), () => ({ error: null }));
+    __setOwnerAuthNonceLedger(tableNonceLedger(() => flaky.client));
+    __resetOwnerAuthNonces();
+    const present = await approval();
+    expect(await present()).toMatchObject({ ok: false, code: 'not_checked' });
+    up = true;
+    expect(await present()).toMatchObject({ ok: true });
+  });
+
+  it('LOCAL_MODE store, real restart: a new store over the same file (and cleared process memory) refuses the used approval', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cc1-nonces-'));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const file = join(dir, 'local-store.json');
+      const present = await approval();
+      const first = createLocalStore(file);
+      __setOwnerAuthNonceLedger(tableNonceLedger(() => first as never));
+      __resetOwnerAuthNonces();
+      expect(await present()).toMatchObject({ ok: true });
+      const restarted = createLocalStore(file); // a new process opening the same store
+      __setOwnerAuthNonceLedger(tableNonceLedger(() => restarted as never));
+      __resetOwnerAuthNonces();
+      expect(await present()).toMatchObject({ ok: false, code: 'replayed' });
+    } finally {
+      warn.mockRestore();
+      try { rmSync(dir, { recursive: true, force: true }); } catch { /* a SQLite handle may still hold the file on Windows */ }
+    }
+  });
+});

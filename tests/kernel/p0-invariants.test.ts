@@ -843,7 +843,7 @@ describe('P0-TK one-use tokens: concurrent race and replay', () => {
       expect(await present()).toMatchObject({ ok: false, code: 'replayed' });
     });
 
-    it.failing('[FAIL P0-TK-03] after a process restart a used approval must not verify again (BREACHED: the nonce memory is in-process; the source states a window of up to MAX_LIFETIME_S)', async () => {
+    it('[FAIL P0-TK-03] after a process restart a used approval must not verify again (BREACHED: the nonce memory is in-process; the source states a window of up to MAX_LIFETIME_S)', async () => {
       const { present } = await genuine();
       expect(await present()).toMatchObject({ ok: true });
       __resetOwnerAuthNonces(); // what a restart does to the in-memory nonce set

@@ -17,16 +17,19 @@
  *   nonce      random, single-use
  *   expiresAt  unix seconds, at most MAX_LIFETIME_S ahead
  *
- * REPLAY. Each nonce is accepted once, remembered until it expires. The memory is this process's:
- * the API runs one replica [MEASURED 2026-10-04], and the lifetime cap means a restart re-opens a
- * window of at most ten minutes, for the identical action with identical parameters. Making that
- * window zero needs a table (an `owner_authorizations` ledger, which is also where provenance
- * belongs); that is DDL and lands separately.
+ * REPLAY. Each nonce is accepted once. Two layers: this process reserves the nonce BEFORE the async
+ * signature check (so concurrent presentations cannot both pass), and once the signature verifies,
+ * the (signer, nonce) pair is claimed in a DURABLE ledger (`NonceLedger`), so a restart does not
+ * re-open it (P0-TK-03). The default ledger is the `owner_auth_nonces` table through `db`: Supabase
+ * in production (supabase/migrations/20261021120000_owner_auth_nonces.sql, Sean-applied), the local
+ * store under LOCAL_MODE. A ledger that cannot be read or written is `not_checked` — the approval is
+ * refused and its nonce is not burned — never a pass.
  *
  * Smart wallets work: verification goes through wallet-signature.ts (ERC-1271 / ERC-6492), and a
  * chain it cannot reach yields `not_checked`, never a forged pass and never a false "bad signature".
  */
 import { keccak256, toUtf8Bytes, isHexString } from 'ethers';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { verifyWalletTypedData, type SignatureChain } from './wallet-signature';
 
 export const OWNER_AUTH_DOMAIN = { name: 'HyperDAG Owner Authorization', version: '1', chainId: 84532 } as const;
@@ -105,9 +108,43 @@ function pruneNonces(nowS: number) {
   for (const [n, exp] of usedNonces) if (exp < nowS) usedNonces.delete(n);
 }
 
-/** Tests only. */
+/** Tests only: forget this process's memory, as a restart does. The durable ledger is untouched. */
 export function __resetOwnerAuthNonces(): void {
   usedNonces.clear();
+}
+
+/** The durable record of used approvals. `claim` THROWS when the ledger cannot be read or written. */
+export interface NonceLedger {
+  claim(signer: string, nonce: string, expiresAt: number): Promise<'claimed' | 'replayed'>;
+}
+
+/**
+ * The `owner_auth_nonces` table, through a supabase-js-shaped client. Read first, so a store without
+ * a unique constraint (the LOCAL_MODE store) still sees a replay; in production the primary key on
+ * (signer, nonce) also catches a concurrent replica (23505).
+ */
+export function tableNonceLedger(client: () => SupabaseClient): NonceLedger {
+  return {
+    async claim(signer, nonce, expiresAt) {
+      const seen = await client().from('owner_auth_nonces').select('nonce').eq('signer', signer).eq('nonce', nonce);
+      if (seen.error) throw new Error(`owner_auth_nonces could not be read: ${seen.error.message}`);
+      if (Array.isArray(seen.data) && seen.data.length > 0) return 'replayed';
+      const put = await client().from('owner_auth_nonces').insert({ signer, nonce, expires_at: new Date(expiresAt * 1000).toISOString() });
+      if (!put.error) return 'claimed';
+      if (put.error.code === '23505') return 'replayed';
+      throw new Error(`owner_auth_nonces could not be written: ${put.error.message}`);
+    },
+  };
+}
+
+// Lazy, like anfis-poa-feed's getDb: importing db at module load would pull config into every
+// importer of canonicalJson (the kernel's receipt.ts among them).
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+let nonceLedger: NonceLedger = tableNonceLedger(() => require('../db').db as SupabaseClient);
+
+/** Swap the durable ledger (the unit-test setup installs an offline one). */
+export function __setOwnerAuthNonceLedger(ledger: NonceLedger): void {
+  nonceLedger = ledger;
 }
 
 /** Pull `owner_authorization` out of a request body without trusting its shape. */
@@ -181,6 +218,17 @@ export async function checkOwnerAuthorization(input: {
           code: 'bad_signature',
           message: "That approval was not signed by this agent's owner for exactly this action and these settings.",
         };
+  }
+  // Durable, after the signature: a forged approval never writes, so it cannot burn a real nonce.
+  let claimed: 'claimed' | 'replayed';
+  try {
+    claimed = await nonceLedger.claim(input.expectedSigner.toLowerCase(), nonceKey, auth.expires_at);
+  } catch {
+    usedNonces.delete(nonceKey);
+    return { ok: false, code: 'not_checked', message: 'Whether this approval was already used could not be recorded. Nothing was changed; try again in a moment.' };
+  }
+  if (claimed === 'replayed') {
+    return { ok: false, code: 'replayed', message: 'That approval was already used. Sign a fresh one.' };
   }
   return { ok: true, signer: input.expectedSigner };
 }
