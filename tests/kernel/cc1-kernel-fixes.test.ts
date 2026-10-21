@@ -250,6 +250,41 @@ describe('TK-03..05 / I3-16: one-use authorization, consumed atomically and dura
     expect(codesOf(again)).toContain('authorization_consumed');
   });
 
+  // B1 (XC1 re-grade): the key is the argument digest alone, so no field the payment does not depend on
+  // (tool name, class, asset label, chain id, amount) opens a second use of one digest.
+  it('one argument digest is one payment whatever the caller writes in the other fields, including filing it as a post', async () => {
+    const h = harness({ halCheck: async () => hal('PASS') });
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const pay = jest.fn(async () => 'paid');
+    expect((await run(h.deps, spendRequest(), pay)).verdict).toBe('ALLOW');
+    for (const v of [
+      { tool: { name: 'x402.pay ', class: 'spend' } },
+      { tool: { name: 'X402.PAY', class: 'spend' } },
+      { asset: 'USDC ' }, { asset: null }, { chain_id: null }, { chain_id: 1 }, { amount_raw: 9999 },
+    ]) expect(codesOf(await run(h.deps, spendRequest(v), pay))).toContain('authorization_consumed');
+    const asPost = postRequest({ args_hash: (spendRequest().args_hash as string) });
+    expect(codesOf(await run(h.deps, asPost, pay))).toContain('authorization_consumed');
+    expect(pay).toHaveBeenCalledTimes(1);
+  });
+
+  it('flag ON: a padded implementation id is the same payment authorization', async () => {
+    const payment = jest.fn(async () => 'paid');
+    const reg = createCapabilityRegistry();
+    reg.register({ implId: 'impl.payment', capability: { id: 'payment.x402', toolClass: 'spend' }, run: payment });
+    const h = harness({ capabilityRegistry: reg });
+    const policy: OwnerPolicy = {
+      subject: AGENT_ID, owner: h.owner.address, actions: ['spend', 'tool'], payees: [PAYEE],
+      per_tx_raw: '1000000', daily_raw: '5000000', total_raw: '20000000', expires_at: NOW_S + 3600, nonce: '1', authorized_impl_hashes: ['impl.payment'],
+    };
+    await h.ledger.appendPolicy({ policy, signature: await h.owner.signTypedData(POLICY_DOMAIN_V2, POLICY_TYPES_V2, policyTypedValueV2(policy)) }, iso);
+    const req = (name: string) => spendRequest({ tool: { name, class: 'spend' } });
+    expect((await runUnderKernel(req('impl.payment'), payment as unknown as () => Promise<string>, h.deps)).verdict).toBe('ALLOW');
+    for (const padded of [' impl.payment', 'impl.payment ', '﻿impl.payment']) {
+      expect(codesOf(await runUnderKernel(req(padded), payment as unknown as () => Promise<string>, h.deps))).toContain('authorization_consumed');
+    }
+    expect(payment).toHaveBeenCalledTimes(1);
+  });
+
   it('a post: the identical post is a replay; a post with other arguments is its own authorization (and HAL checks it)', async () => {
     const h = harness({ halCheck: async () => hal('PASS') });
     await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
