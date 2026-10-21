@@ -9,10 +9,17 @@
  * Both modules exist only with #1452. On a tree without them every probe here is reported SKIPPED, never passed.
  *   it(...)            the property held (or a positive control).
  *   it.failing(...)    a SECURE expectation the code does not meet: green while the hole is open, red when it closes.
+ *
+ * PINNED BY CODE VERSION (re-grade 3, 2026-10-21). #1452's CI runs main + #1452 WITHOUT #1453's kernel fix, and the merge
+ * order is #1453 then #1452, so a probe's expected result depends on which fixes are present. Each executor probe states it:
+ *   KERNEL_FIXES  #1453 is present (the one-use key and the spend reservation): StoreLedger has `indeterminate`.
+ *   ARENA_B3      #1452 at 5ac7bcdb or later (the identity is the EIP-712 digest): the arena exports EXTRA_CASE_IDS.
+ *   KILL_RECHECK  #1452 at 385e4bb2 or later (the kill switch is re-read before the broadcast).
+ * The markers are other code than the property each probe tests, so a regression still turns the probe red.
  */
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Wallet } from 'ethers';
+import { Wallet, type BaseWallet } from 'ethers';
 
 const ROOT = join(__dirname, '..');
 const HAVE = existsSync(join(ROOT, 'src/services/npa-preflight.ts')) && existsSync(join(ROOT, 'scripts/e2e-local/arena/world.ts'));
@@ -23,7 +30,13 @@ const engine: any = HAVE ? require('../scripts/e2e-local/arena/engine').bootEngi
 const pf: any = HAVE ? require('../src/services/npa-preflight') : null;
 const W: any = HAVE ? require('../scripts/e2e-local/arena/world') : null;
 const C: any = HAVE ? require('../scripts/e2e-local/arena/chain') : null;
+const KERNEL_FIXES = HAVE && typeof require('../src/kernel/store').StoreLedger.prototype.indeterminate === 'function';
+const ARENA_B3 = HAVE && Array.isArray(require('../scripts/e2e-local/arena/cases').EXTRA_CASE_IDS);
 /* eslint-enable @typescript-eslint/no-var-requires */
+const KILL_RECHECK = HAVE && readFileSync(join(ROOT, 'scripts/e2e-local/arena/world.ts'), 'utf8').includes('KillSwitchError');
+/** `it` where the property is expected to hold on this code, `it.failing` where it is a known open hole. */
+const pin = (holds: boolean) => (holds ? it : it.failing);
+const on = (holds: boolean) => (holds ? 'holds on this code' : 'open on this code');
 jest.setTimeout(120_000);
 
 const realConsoleError = console.error;
@@ -50,7 +63,7 @@ const baseNpa = () => ({
   amount_raw: '500000', quote_source: 'l0:fixed', quote_expires_at: NOW + 300, max_fee_wei: '1000000000000000',
   settlement: 'onchain-readback', nonce: '0x' + 'ab'.repeat(32),
 });
-const sign = (w: Wallet, n: any) => w.signTypedData(pf.npaDomain(n), pf.NPA_TYPES, pf.npaMessage(n));
+const sign = (w: BaseWallet, n: any) => w.signTypedData(pf.npaDomain(n), pf.NPA_TYPES, pf.npaMessage(n));
 async function signed(n = baseNpa()) {
   return { npa: n, buyer_sig: await sign(buyer, n), seller_sig: await sign(seller, n) };
 }
@@ -136,11 +149,11 @@ d('XC1-PF the NPA preflight module, attacked directly', () => {
     }
   });
 
-  it('CHARACTERISE XC1-PF-06: the authorization identity is not canonical. The same agreement with its hex fields re-cased passes the preflight with the ORIGINAL signatures, yet hashes to a different npa hash (= the kernel args_hash)', async () => {
+  pin(ARENA_B3)(`[XC1-PF-06] the authorization identity is canonical: the same agreement with its hex fields re-cased passes with the ORIGINAL signatures and has the SAME identity (= the kernel args_hash) [${on(ARENA_B3)}]`, async () => {
     const s = await signed();
     const re = { ...s, npa: recase(s.npa) };
     expect(evalP(presOf(re))).toEqual([]);
-    expect(pf.npaHashOf(re.npa)).not.toBe(pf.npaHashOf(s.npa));
+    expect(pf.npaHashOf(re.npa)).toBe(pf.npaHashOf(s.npa));
   });
 });
 
@@ -152,7 +165,7 @@ d('XC1-NPA the L1 executor, present(), on the in-memory chain', () => {
   async function world(o: Record<string, unknown> = {}) { return W.makeWorld({ chain: chain(), engine, evaluatorSha256: ORACLE_SHA, ...o }); }
   const settled = (w: any) => w.attempts.filter((a: any) => a.status === 'SETTLED').length;
 
-  it('[XC1-NPA-00] control: the identical signed agreement presented twice settles once; the second is refused by the kernel (authorization_consumed)', async () => {
+  pin(KERNEL_FIXES)(`[XC1-NPA-00] the identical signed agreement presented twice settles once; the second is refused by the kernel (authorization_consumed) [${on(KERNEL_FIXES)}]`, async () => {
     const w = await world({ aggregateUsdc: '50000000' });
     try {
       const s = await W.buildNpa(w, { sym: 'USDC', amount_raw: '500000' });
@@ -163,7 +176,7 @@ d('XC1-NPA the L1 executor, present(), on the in-memory chain', () => {
     } finally { W.disposeWorld(w); }
   });
 
-  it.failing('[XC1-NPA-01] the same signed agreement re-presented with its hex fields re-cased (same signatures) must settle at most once (BREACHED: a re-cased NPA is a new npa hash, so a new one-use key)', async () => {
+  pin(KERNEL_FIXES && ARENA_B3)(`[XC1-NPA-01] the same signed agreement re-presented with its hex fields re-cased (same signatures) settles at most once (B3) [${on(KERNEL_FIXES && ARENA_B3)}]`, async () => {
     const w = await world({ aggregateUsdc: '50000000' });
     try {
       const s = await W.buildNpa(w, { sym: 'USDC', amount_raw: '500000' });
@@ -180,7 +193,7 @@ d('XC1-NPA the L1 executor, present(), on the in-memory chain', () => {
     } finally { W.disposeWorld(w); }
   });
 
-  it('[XC1-NPA-02] 10 concurrent DISTINCT agreements against an aggregate of 1.5 payments: exactly one settles (the preflight tally is not atomic; the kernel reservation is)', async () => {
+  pin(KERNEL_FIXES)(`[XC1-NPA-02] 10 concurrent DISTINCT agreements against an aggregate of 1.5 payments: exactly one settles (the preflight tally is not atomic; the kernel reservation is) [${on(KERNEL_FIXES)}]`, async () => {
     const w = await world({ aggregateUsdc: '750000' });
     try {
       const ss = await Promise.all(Array.from({ length: 10 }, () => W.buildNpa(w, { sym: 'USDC', amount_raw: '500000' })));
@@ -190,7 +203,7 @@ d('XC1-NPA the L1 executor, present(), on the in-memory chain', () => {
     } finally { W.disposeWorld(w); }
   });
 
-  it.failing('[XC1-NPA-03] a kill switch that appears while a payment is in flight (after the preflight, before the broadcast) must stop it (BREACHED, LOW: the file is read once, at the preflight)', async () => {
+  pin(KILL_RECHECK)(`[XC1-NPA-03] a kill switch that appears while a payment is in flight (after the preflight, before the broadcast) stops it [${on(KILL_RECHECK)}]`, async () => {
     const w = await world();
     try {
       const s = await W.buildNpa(w, { sym: 'ETH', amount_raw: '500000000000000' });
