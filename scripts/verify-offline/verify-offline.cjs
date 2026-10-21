@@ -1,19 +1,21 @@
 #!/usr/bin/env node
 'use strict';
 //
-// verify-offline.cjs — audit a kernel receipt ledger with the blockchain and our servers switched off.
+// verify-offline.cjs — verify TrustShell evidence records with the blockchain and our servers switched off.
 //
-//   node scripts/verify-offline/verify-offline.cjs <ledger.jsonl> [--owner 0x..] [--engine-signer 0x..] [--json]
+//   node scripts/verify-offline/verify-offline.cjs <records.jsonl|record.json> [--owner 0x..] [--engine-signer 0x..] [--json]
 //
 // DELIBERATELY STANDALONE: node built-ins plus `ethers` (keccak256, EIP-712, ecrecover), nothing from
 // this repo and nothing from the trustshell npm package. A verifier that shares code with the thing it
 // verifies only proves the code agrees with itself; tests/verify-offline.test.ts checks this one against
 // the kernel's own validateReceipt / verifyReceiptChain on ledgers the real kernel wrote.
 //
-// INPUT is the JSONL the kernel ledger writes (src/kernel/store.ts), one record per line:
-//   {"kind":"policy","recorded_at":"…","policy":{"policy":{…},"signature":"0x…"}}
-//   {"kind":"receipt","receipt":{…kernel-receipt/1…}}
-// A receipt line MAY carry "engine_signature" (the detached EIP-191 block the DB index stores beside it).
+// INPUT is one record per line (JSONL), or a file holding one JSON object. The record format:
+//   {"format":"trustshell-evidence/1","kind":"<kind>","record":{…},"digest"?:{…},"engine_signature"?:{…}}
+// kinds verified: owner-policy ({policy, signature}), kernel-receipt (kernel-receipt/1), action-evidence
+// (dev.trustshell.action-evidence/0.1-draft); reserved, reported NOT_CHECKED: guard-decision, bundle-manifest.
+// Also accepted unwrapped, as their producers write them today: the kernel ledger's own lines
+// ({"kind":"policy",…} / {"kind":"receipt",…}, src/kernel/store.ts) and `trustshell check --json` ({record, digest}).
 //
 // TRUST ANCHORS come from the auditor, never from the file: --owner is the wallet you expect to have
 // signed the policy, --engine-signer the engine's published receipt-signing address. Without them those
@@ -23,15 +25,20 @@
 // Exit 0 = nothing FAILED and something VERIFIED; 1 = something FAILED; 2 = nothing could be verified.
 
 const { readFileSync } = require('node:fs');
+const { createHash } = require('node:crypto');
 const { keccak256, toUtf8Bytes, TypedDataEncoder, recoverAddress, verifyMessage, getAddress, isAddress } = require('ethers');
 
+const FORMAT = 'trustshell-evidence/1';
+const RESERVED_KINDS = ['guard-decision', 'bundle-manifest'];
+const CARD_SCHEMA = 'dev.trustshell.action-evidence/0.1-draft';
 const DAY_S = 86_400;
 const SETTLERS = ['holdout', 'known_answer', 'person'];
 const ENGINE_SIG_TYPE = 'hyperdag.repid.receipt.signature.v1';
 const SECP256K1_HALF_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n >> 1n;
 
 // Sorted keys at every depth, no whitespace, arrays in order (src/services/owner-authorization.ts
-// canonicalJson and receipt-signer.ts canonicalize agree on every value JSON.parse can produce).
+// canonicalJson and receipt-signer.ts canonicalize agree on every value JSON.parse can produce, and so
+// does RFC 8785, which trustshell's card digest uses: same key order, same number and string forms).
 function canonical(v) {
   if (v === null || typeof v !== 'object') return JSON.stringify(v ?? null);
   if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
@@ -77,6 +84,30 @@ function actionPermitted(actions, tool) {
   return actions.includes('tool') || actions.includes(`tool:${tool.name}`);
 }
 
+/** One shape for every input: the envelope, or a producer's own unwrapped output. */
+function normalize(o) {
+  if (!o || typeof o !== 'object') return { kind: 'unknown' };
+  if (o.format !== undefined) {
+    return o.format === FORMAT ? { kind: o.kind, record: o.record, digest: o.digest, engine_signature: o.engine_signature } : { kind: 'unknown-format', format: o.format };
+  }
+  if (o.kind === 'receipt') return { kind: 'kernel-receipt', record: o.receipt, engine_signature: o.engine_signature };
+  if (o.kind === 'policy') return { kind: 'owner-policy', record: o.policy };
+  if (o.record && typeof o.record.schema === 'string' && o.record.schema.startsWith('dev.trustshell.action-evidence/')) return { kind: 'action-evidence', record: o.record, digest: o.digest };
+  return { kind: 'unknown' };
+}
+
+/** null when `d` is a sha-256 over the RFC 8785 form of `record`; 'mismatch' or 'unsupported' otherwise. */
+function digestProblem(d, record) {
+  if (!d || d.algorithm !== 'sha-256' || d.canonicalization !== 'RFC 8785' || typeof d.value !== 'string') return 'unsupported';
+  return createHash('sha256').update(canonical(record), 'utf8').digest('hex') === d.value.toLowerCase() ? null : 'mismatch';
+}
+
+/** RFC 6901 JSON Pointer lookup; undefined when any step is missing. */
+function pointer(obj, p) {
+  return p.split('/').slice(1).map((s) => s.replace(/~1/g, '/').replace(/~0/g, '~'))
+    .reduce((o, k) => (o !== null && typeof o === 'object' && Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined), obj);
+}
+
 function verifyLedger(text, opts = {}) {
   const legs = {};
   const leg = (name) => (legs[name] ??= { verified: 0, failed: [], not_checked: [] });
@@ -86,21 +117,35 @@ function verifyLedger(text, opts = {}) {
   const pinnedOwner = opts.owner && isAddress(opts.owner) ? getAddress(opts.owner) : null;
   const pinnedEngine = opts.engineSigner && isAddress(opts.engineSigner) ? getAddress(opts.engineSigner) : null;
 
-  // ── parse ──
-  const records = [];
-  text.split(/\r?\n/).forEach((line, i) => {
-    if (line.trim() === '') return;
-    try { records.push({ line: i + 1, ...JSON.parse(line) }); } catch { fail('structure', `line ${i + 1}: not JSON`); }
-  });
+  // ── parse: a file holding one JSON object, or one record per line ──
+  let objs;
+  try { objs = [{ line: 1, o: JSON.parse(text) }]; } catch {
+    objs = [];
+    text.split(/\r?\n/).forEach((l, i) => {
+      if (l.trim() === '') return;
+      try { objs.push({ line: i + 1, o: JSON.parse(l) }); } catch { fail('structure', `line ${i + 1}: not JSON`); }
+    });
+  }
   const receipts = [];
   const policies = new Map(); // digest -> { policy, signature, status, seq }
-  records.forEach((rec, seq) => {
-    if (rec.kind === 'receipt' && rec.receipt && rec.receipt.header) receipts.push({ ...rec, seq });
-    else if (rec.kind === 'policy' && rec.policy && rec.policy.policy) {
-      const p = rec.policy.policy;
-      try { policies.set(policyDigest(p), { policy: p, signature: rec.policy.signature, seq, status: 'NOT_CHECKED' }); }
-      catch (e) { fail('owner_policy_signature', `line ${rec.line}: policy cannot be encoded (${e.shortMessage ?? e.message})`); }
-    } else fail('structure', `line ${rec.line}: unknown record`);
+  const cards = [];
+  objs.forEach(({ line, o }, seq) => {
+    const n = normalize(o);
+    if (n.digest !== undefined) {
+      const problem = digestProblem(n.digest, n.record);
+      if (problem === null) ok('record_digest');
+      else if (problem === 'mismatch') fail('record_digest', `line ${line}: the record does not match its stated SHA-256 (edited after the digest was taken)`);
+      else skip('record_digest', `line ${line}: digest is not sha-256 over RFC 8785`);
+    }
+    if (n.kind === 'kernel-receipt' && n.record && n.record.header) receipts.push({ receipt: n.record, line, seq, engine_signature: n.engine_signature });
+    else if (n.kind === 'owner-policy' && n.record && n.record.policy) {
+      const p = n.record.policy;
+      try { policies.set(policyDigest(p), { policy: p, signature: n.record.signature, seq, status: 'NOT_CHECKED' }); }
+      catch (e) { fail('owner_policy_signature', `line ${line}: policy cannot be encoded (${e.shortMessage ?? e.message})`); }
+    } else if (n.kind === 'action-evidence' && n.record) cards.push({ record: n.record, line });
+    else if (RESERVED_KINDS.includes(n.kind)) skip('reserved_kinds', `line ${line}: ${n.kind} records are not verified by this version`);
+    else if (n.kind === 'unknown-format') skip('structure', `line ${line}: format "${String(n.format).slice(0, 40)}" is not ${FORMAT}`);
+    else fail('structure', `line ${line}: not a record this verifier knows`);
   });
 
   // ── 1. each receipt's hash matches its body ──
@@ -152,6 +197,7 @@ function verifyLedger(text, opts = {}) {
     if (d.executed && !allow) bad(`a ${d.verdict} cannot have executed`);
     if (allow && (d.checks.length === 0 || d.checks.some((c) => c.outcome !== 'PASS'))) bad('an ALLOW must rest on checks that all PASSED');
     if (!allow && d.reasons.length === 0) bad('a refusal must say why');
+    if (!Array.isArray(d.does_not_attest) || d.does_not_attest.length === 0) bad('the receipt dropped its does_not_attest scope statement');
     if (allow && r.request.tool.class === 'spend' && (r.request.amount_raw === null || BigInt(r.request.amount_raw) > BigInt(d.limits.effective_per_tx_raw))) bad('allowed spend exceeds effective_per_tx_raw');
     if (v.verdict_label === 'SETTLED' && !SETTLERS.includes(v.settled_by)) bad('SETTLED without a settler (a vote never settles)');
     if (v.counts_toward_band_restore !== (v.grounded && v.same_domain && !v.is_simulated && v.verdict_label === 'SETTLED')) bad('counts_toward_band_restore is not derived');
@@ -230,29 +276,72 @@ function verifyLedger(text, opts = {}) {
     ok('engine_signature');
   }
 
-  // ── 7. what this cannot see with the chain and our servers off ──
+  // ── 7. evidence cards (`trustshell check --claims`): stated scope, and verdicts re-derived ──
+  for (const { record: c, line } of cards) {
+    const bad = (name, msg) => fail(name, `line ${line}: ${msg}`);
+    if (c.schema !== CARD_SCHEMA) { skip('card_scope', `line ${line}: card schema "${String(c.schema).slice(0, 60)}" is not one this version knows`); continue; }
+    // The assurance scope lives INSIDE the record; a card that drops or inflates it fails.
+    const before = leg('card_scope').failed.length;
+    if (c.assurance?.cryptographic_integrity !== 'NOT_CHECKED' || c.assurance?.observation !== 'PLATFORM_REPORTED') bad('card_scope', 'the card claims stronger assurance than its schema allows');
+    if (!Array.isArray(c.does_not_prove) || c.does_not_prove.length === 0) bad('card_scope', 'the card dropped its does_not_prove statement');
+    const claims = Array.isArray(c.claims) ? c.claims : [];
+    for (const [i, cl] of claims.entries()) {
+      if (!['SUPPORTED', 'CONTRADICTED', 'NOT_CHECKED'].includes(cl.status)) bad('card_scope', `claim ${i}: unknown status`);
+      else if (cl.status !== 'NOT_CHECKED' && (!Array.isArray(cl.evidence_fields) || cl.evidence_fields.length === 0 || cl.evidence_fields.some((p) => typeof p !== 'string' || pointer(c, p) === undefined))) bad('card_scope', `claim ${i}: a ${cl.status} verdict must point at fields the card holds`);
+      else if (cl.status === 'NOT_CHECKED' && !(typeof cl.reason === 'string' && cl.reason.trim() !== '')) bad('card_scope', `claim ${i}: NOT_CHECKED without a reason`);
+    }
+    if (leg('card_scope').failed.length === before) ok('card_scope');
+    // Three templates re-derived from the card's OWN observation, so a flipped verdict fails even when
+    // whoever flipped it also recomputed the (unsigned) digest. Other templates are listed, not judged.
+    const obs = c.observation ?? {};
+    let other = 0;
+    for (const [i, cl] of claims.entries()) {
+      if (cl.status === 'NOT_CHECKED') continue;
+      const said = String(cl.claim ?? '');
+      let wrong = null;
+      if (cl.template === 'git.head_sha') {
+        const shas = said.match(/\b[0-9a-fA-F]{7,40}\b/g) ?? [];
+        const head = String(obs.head_sha ?? '').toLowerCase();
+        const match = shas.length > 0 && shas.every((s) => head.startsWith(s.toLowerCase()));
+        if ((cl.status === 'SUPPORTED') !== match) wrong = `${cl.status} for commit ${shas.join(',') || '(none)'}, but the card observed head ${head.slice(0, 12)}`;
+      } else if (cl.template === 'gha.run_id' && cl.status === 'SUPPORTED') {
+        const ids = said.match(/\d{5,}/g) ?? [];
+        if (ids.length === 0 || ids.some((x) => x !== String(obs.run_id))) wrong = `SUPPORTED for run ${ids.join(',') || '(none)'}, but the card observed run ${obs.run_id}`;
+      } else if (cl.template === 'gha.run_succeeded' && cl.status === 'SUPPORTED') {
+        if (!(obs.status === 'completed' && obs.conclusion === 'success')) wrong = `SUPPORTED, but the card observed ${obs.status}/${obs.conclusion}`;
+      } else { other++; continue; }
+      if (wrong) bad('card_verdicts', `claim ${i} (${cl.template}): ${wrong}`);
+      else ok('card_verdicts');
+    }
+    if (other > 0) skip('card_verdicts', `line ${line}: ${other} decided claim(s) use templates this verifier does not re-derive`);
+    skip('offline_limits', `line ${line}: the card's observation is GitHub reporting on its own run; re-read api.github.com to check it (network off). The card is unsigned: a digest shows change, not authorship`);
+  }
+
+  // ── 8. what this cannot see with the chain and our servers off ──
   for (const { receipt: r, line } of receipts) {
     if (r.payment.tx_hash) skip('payment_onchain', `line ${line}: tx ${r.payment.tx_hash.slice(0, 10)}… not looked up (chain off)`);
   }
-  skip('offline_limits', 'whether the policy owner is the agent\'s registered owner (registry / ERC-8004: chain off)');
-  skip('offline_limits', 'HAL verdict correctness, RepID, zkRepID proofs and EAS anchors (hosted services and chain off)');
-  skip('offline_limits', 'completeness: a missing receipt never proves no action; dropped tail entries, or a full re-seal by whoever writes the ledger that stays inside the owner\'s caps, leave no trace without an external anchor or an engine signature');
+  if (receipts.length > 0 || policies.size > 0) {
+    skip('offline_limits', 'whether the policy owner is the agent\'s registered owner (registry / ERC-8004: chain off)');
+    skip('offline_limits', 'HAL verdict correctness, RepID, zkRepID proofs and EAS anchors (hosted services and chain off)');
+    skip('offline_limits', 'completeness: a missing receipt never proves no action; dropped tail entries, or a full re-seal by whoever writes the ledger that stays inside the owner\'s caps, leave no trace without an external anchor or an engine signature');
+  }
 
   const summary = { verified: 0, failed: 0, not_checked: 0 };
   for (const l of Object.values(legs)) { summary.verified += l.verified; summary.failed += l.failed.length; summary.not_checked += l.not_checked.length; }
   const exitCode = summary.failed > 0 ? 1 : summary.verified > 0 ? 0 : 2;
-  return { receipts: receipts.length, policies: policies.size, legs, summary, exitCode };
+  return { format: FORMAT, receipts: receipts.length, policies: policies.size, cards: cards.length, legs, summary, exitCode };
 }
 
 function main() {
   const argv = process.argv.slice(2);
   const flag = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : undefined; };
   const file = argv.find((a, i) => !a.startsWith('--') && !['--owner', '--engine-signer'].includes(argv[i - 1]));
-  if (!file) { console.error('usage: verify-offline.cjs <ledger.jsonl> [--owner 0x..] [--engine-signer 0x..] [--json]'); process.exit(2); }
+  if (!file) { console.error('usage: verify-offline.cjs <records.jsonl|record.json> [--owner 0x..] [--engine-signer 0x..] [--json]'); process.exit(2); }
   const out = verifyLedger(readFileSync(file, 'utf8'), { owner: flag('--owner'), engineSigner: flag('--engine-signer') });
   if (argv.includes('--json')) console.log(JSON.stringify(out, null, 2));
   else {
-    console.log(`${file}: ${out.receipts} receipts, ${out.policies} policies (chain: OFF, hosted services: OFF)`);
+    console.log(`${file} (${FORMAT}): ${out.receipts} receipts, ${out.policies} policies, ${out.cards} evidence cards (chain: OFF, hosted services: OFF)`);
     for (const [name, l] of Object.entries(out.legs)) {
       const verdict = l.failed.length ? 'FAILED' : l.verified ? 'VERIFIED' : 'NOT_CHECKED';
       console.log(`\n${verdict.padEnd(11)} ${name}  (${l.verified} verified, ${l.failed.length} failed, ${l.not_checked.length} not checked)`);
@@ -264,5 +353,5 @@ function main() {
   process.exit(out.exitCode);
 }
 
-module.exports = { verifyLedger, receiptHash, policyDigest, canonical };
+module.exports = { verifyLedger, verifyRecords: verifyLedger, receiptHash, policyDigest, canonical, FORMAT };
 if (require.main === module) main();

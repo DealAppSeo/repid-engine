@@ -8,15 +8,21 @@
  * string), so anyone can regenerate them: they hold nothing, are never funded and sign no transaction.
  * No chain is dialled: the owner is a plain key pair, and the chain stub throws if anything asks.
  *
- * ledger.jsonl           a policy, then 5 calls: spend ALLOW (decision + outcome), spend over the
- *                        per-tx cap (DENY), the same spend replayed (DENY), a post HAL passed (ALLOW,
- *                        decision + outcome), a spend to a payee the owner never listed (DENY).
+ * ledger.jsonl           trustshell-evidence/1 records: a policy, then 5 calls: spend ALLOW (decision +
+ *                        outcome), spend over the per-tx cap (DENY), the same spend replayed (DENY), a
+ *                        post HAL passed (ALLOW, decision + outcome), a spend to an unlisted payee (DENY).
  * ledger.tampered.jsonl  the first allowed spend re-pointed at another payee, then every hash and link
  *                        re-sealed so the chain is self-consistent: the rewrite only someone holding the
  *                        ledger can do. It must FAIL (owner policy + engine signature).
+ * evidence-card.json     CAPTURED, not generated: `trustshell check <public run> --claims-file … --json`
+ *                        on repid-engine CI run 39610093655 (2026-10-21). Kept exactly as trustshell wrote it.
+ * evidence-card.tampered.json  that card with its CONTRADICTED commit claim flipped to SUPPORTED and the
+ *                        unsigned digest recomputed, as anyone holding the file could. It must FAIL.
  */
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { canonicalJson } from '../../src/services/owner-authorization';
 import { Wallet, keccak256, toUtf8Bytes } from 'ethers';
 import { runUnderKernel } from '../../src/kernel/gate';
 import { hashArgs, receiptHash } from '../../src/kernel/receipt';
@@ -26,10 +32,33 @@ import { NOW_MS, harness, iso, postRequest, signedPolicy, spendRequest } from '.
 
 const throwaway = (label: string) => new Wallet(keccak256(toUtf8Bytes(`hyperdag/verify-offline/${label}/v1`)));
 export const ATTACKER_PAYEE = '0x00000000000000000000000000000000000BEEF0';
+export const FORMAT = 'trustshell-evidence/1';
+export const FIXTURE_DIR = join(__dirname, 'fixtures');
+
+type KernelLine = LedgerRecord & { engine_signature?: unknown };
+
+/** Wrap a kernel ledger line in the one evidence-record envelope. The record itself is unchanged. */
+export function envelope(rec: KernelLine): Record<string, unknown> {
+  return rec.kind === 'policy'
+    ? { format: FORMAT, kind: 'owner-policy', record: rec.policy }
+    : { format: FORMAT, kind: 'kernel-receipt', record: rec.receipt, ...(rec.engine_signature ? { engine_signature: rec.engine_signature } : {}) };
+}
+
+/** The captured card with one verdict flipped and its (unsigned) RFC 8785 digest recomputed. */
+export function tamperCard(cardJson: string): string {
+  const card = JSON.parse(cardJson);
+  const c = card.record.claims.find((x: { template: string; status: string }) => x.template === 'git.head_sha' && x.status === 'CONTRADICTED');
+  if (!c) throw new Error('the captured card has no CONTRADICTED commit claim to flip');
+  c.status = 'SUPPORTED';
+  card.digest.value = createHash('sha256').update(canonicalJson(card.record), 'utf8').digest('hex');
+  return JSON.stringify(card, null, 2) + '\n';
+}
 
 export interface Fixtures {
   ledger: string;
   tampered: string;
+  /** The same ledger exactly as the kernel's JSONL store writes it, unwrapped. */
+  raw: string;
   owner: string;
   engineSigner: string;
 }
@@ -75,7 +104,7 @@ export async function buildFixtures(): Promise<Fixtures> {
   // The engine signs each receipt the way the DB index does (receipt-db-index.ts), with a throwaway key.
   const saved = process.env.RECEIPT_SIGNING_KEY;
   process.env.RECEIPT_SIGNING_KEY = engine.privateKey;
-  const lines: Array<LedgerRecord & { engine_signature?: unknown }> = [];
+  const lines: KernelLine[] = [];
   try {
     for (const rec of h.sink.records) {
       if (rec.kind !== 'receipt') { lines.push(rec); continue; }
@@ -105,15 +134,16 @@ export async function buildFixtures(): Promise<Fixtures> {
     prev = r;
   }
 
-  return { ledger: toJsonl(lines), tampered: toJsonl(forged), owner: owner.address, engineSigner: engine.address };
+  return { ledger: toJsonl(lines.map(envelope)), tampered: toJsonl(forged.map(envelope)), raw: toJsonl(lines), owner: owner.address, engineSigner: engine.address };
 }
 
 if (require.main === module) {
   buildFixtures().then((f) => {
-    const dir = join(__dirname, 'fixtures');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'ledger.jsonl'), f.ledger);
-    writeFileSync(join(dir, 'ledger.tampered.jsonl'), f.tampered);
-    console.log(`wrote ${dir}\n  --owner ${f.owner}\n  --engine-signer ${f.engineSigner}`);
+    mkdirSync(FIXTURE_DIR, { recursive: true });
+    writeFileSync(join(FIXTURE_DIR, 'ledger.jsonl'), f.ledger);
+    writeFileSync(join(FIXTURE_DIR, 'ledger.tampered.jsonl'), f.tampered);
+    const card = join(FIXTURE_DIR, 'evidence-card.json');
+    if (existsSync(card)) writeFileSync(join(FIXTURE_DIR, 'evidence-card.tampered.json'), tamperCard(readFileSync(card, 'utf8')));
+    console.log(`wrote ${FIXTURE_DIR}\n  --owner ${f.owner}\n  --engine-signer ${f.engineSigner}`);
   });
 }
