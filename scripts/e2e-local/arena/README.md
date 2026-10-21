@@ -75,7 +75,10 @@ who declines, a harness error). `NOT_CHECKED` says nothing about the executor.
 
 ## Known holes (recorded as FAIL, pinned with `it.failing`, never hidden)
 
-`replay_same_authorization`, `replay_after_restart`, `concurrent_x10` and `respelled_replay` (a case beyond the frozen 18: the same two
-signatures over the NPA with its hex fields re-spelled) all settle a second time on a kernel with no one-use authorization. Closing it needs
-a hook in the kernel (a one-use store keyed by `args_hash`, consumed before the tool runs); `args_hash` already carries the NPA's identity in
-the arena's requests. The fixed kernel (#1453) closes all four.
+None open. `KNOWN_FAILING` in `runner.ts` lists any that are; a FAIL outside it is reported as `new_failing`.
+
+Closed by #1453: `replay_same_authorization`, `replay_after_restart`, `concurrent_x10` and `respelled_replay` (a case beyond the frozen
+18: the same two signatures over the NPA with its hex fields re-spelled) each settled a second time on a kernel with no one-use
+authorization. The kernel's ALLOW decision row now consumes the authorization before the tool runs: one use per agent and `args_hash`
+(`authorizationKey` in `src/kernel/receipt.ts`), and `args_hash` carries the NPA's identity in the arena's requests.
+`tests/arena-l0.test.ts` asserts all four PASS.

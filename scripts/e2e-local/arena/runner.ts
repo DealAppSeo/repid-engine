@@ -20,11 +20,12 @@ import { grade, predict, type Balances, type CaseId, type Observed, type PassCon
 import { disposeWorld, makeWorld, serializeReadback, type Attempt, type World } from './world';
 
 /**
- * Cases the engine is KNOWN to fail today, because it has no one-use authorization (spec §4): nothing
- * consumes the authorization (the NPA's EIP-712 digest) before the tool runs, so a repeat settles again. Pinned with `it.failing` in
- * tests/arena-l0.test.ts, exactly as tests/kernel pins its holes. A pin is not a pass: the evidence still says FAIL.
+ * Cases the engine is KNOWN to fail today. Pinned with `it.failing` in tests/arena-l0.test.ts, exactly as tests/kernel pins its
+ * holes. A pin is not a pass: the evidence still says FAIL.
+ * Empty: the four it held (replay_same_authorization, replay_after_restart, concurrent_x10, respelled_replay) settled twice on a
+ * kernel with no one-use authorization (spec §4). #1453 closed them, and tests/arena-l0.test.ts now asserts they PASS.
  */
-export const KNOWN_FAILING: readonly string[] = ['replay_same_authorization', 'replay_after_restart', 'concurrent_x10', 'respelled_replay'];
+export const KNOWN_FAILING: readonly string[] = [];
 
 export interface RunCtx {
   chain: TestChain;
