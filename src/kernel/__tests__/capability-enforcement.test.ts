@@ -199,7 +199,8 @@ describe('XC1 #3 — the blanket `tool` action authorizes NOTHING, and bindings 
 describe('enforcement OFF (flag unset) — byte-unchanged: no capability check, and the blanket tool still ALLOWs', () => {
   it('the SAME v1 policy + read that ON denies, OFF ALLOWs (today\'s behaviour) with no capability check', async () => {
     const h = harness(); // no capabilityRegistry dep ⇒ OFF
-    await h.ledger.appendPolicy(await signedPolicy(h.owner, { actions: ['tool'], per_tx_raw: '0', daily_raw: '0', total_raw: '0' }), iso);
+    // CC1 2026-10-21: flag OFF a caller-asserted read now needs a policy with spend authority (P0-I3-01).
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { actions: ['spend', 'tool'], per_tx_raw: '1', daily_raw: '0', total_raw: '0' }), iso);
     const tool = jest.fn(async () => 'formatted');
     const out = await runUnderKernel(toolRequest('impl.formatter'), tool, h.deps);
     expect(out.verdict).toBe('ALLOW'); // the blanket tool action permits it, exactly as before
@@ -218,8 +219,8 @@ describe('decide() unit — the capability check gates the verdict (XC1 #4), fai
     policy: {
       state: 'loaded',
       policy: {
-        subject: AGENT_ID, owner: '0x000000000000000000000000000000000000dEaD', actions: ['tool'], payees: [],
-        per_tx_raw: '0', daily_raw: '0', total_raw: '0', expires_at: NOW_S + 3600, nonce: '1',
+        subject: AGENT_ID, owner: '0x000000000000000000000000000000000000dEaD', actions: ['spend', 'tool'], payees: ['0x000000000000000000000000000000000000dEaD'], // CC1 2026-10-21: flag OFF a caller-asserted read now needs a policy with spend authority (P0-I3-01).
+        per_tx_raw: '1', daily_raw: '0', total_raw: '0', expires_at: NOW_S + 3600, nonce: '1',
         authorized_impl_hashes: ['impl.formatter'],
       },
       policy_hash: '0x' + 'ab'.repeat(32),
@@ -362,7 +363,7 @@ describe('Draft 3 #2 — a dry decide is NOT-RUNNABLE, distinguishable from a re
 describe('Draft 3 #3 — fail-closed output gate', () => {
   it('when the outcome row cannot be written, the return value is withheld from the gate result and never entered a receipt', async () => {
     const h = harness(); // OFF: the output gate is defence-in-depth, not flag-gated
-    await h.ledger.appendPolicy(await signedPolicy(h.owner, { actions: ['tool'] }), iso);
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { actions: ['spend', 'tool'] }), iso); // CC1 2026-10-21: flag OFF a caller-asserted read now needs a policy with spend authority (P0-I3-01).
     const realAppend = h.sink.append.bind(h.sink);
     let receipts = 0;
     h.sink.append = async (rec) => {
@@ -383,7 +384,7 @@ describe('Draft 3 #3 — fail-closed output gate', () => {
 
   it('on the happy path the result is returned (so the withholding above is the failure branch, not a regression)', async () => {
     const h = harness();
-    await h.ledger.appendPolicy(await signedPolicy(h.owner, { actions: ['tool'] }), iso);
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { actions: ['spend', 'tool'] }), iso); // CC1 2026-10-21: flag OFF a caller-asserted read now needs a policy with spend authority (P0-I3-01).
     const out = await runUnderKernel(toolRequest('impl.formatter'), async () => 'ok', h.deps);
     expect(out.verdict).toBe('ALLOW');
     expect(out.outcome_unrecorded).toBe(false);
@@ -403,14 +404,17 @@ describe('Draft 3 — flag-OFF receipt is byte-identical to pre-Draft-3 (frozen 
   // 0, and a read of impl.formatter returning 'formatted'. receipt_hash is keccak256 over the canonical
   // JSON of the receipt, so a matching hash is byte-identity of the whole receipt content. If OFF
   // behaviour drifts by even one byte, these go red.
+  // RE-PINNED by CC1 2026-10-21 (P0-I3-01): flag OFF a read now carries a spend_authority row and needs
+  // a policy that authorizes spending, so the policy and both hashes changed on purpose. The OFF path
+  // still carries no capability check; the pin still catches any further drift.
   const FIXED_OWNER_PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
-  const GOLDEN_DECISION_HASH = '0xb30a1fa69a14505bedae823aa63612bfcc5dea3a5cc51da562a8cb88bd2b734f';
-  const GOLDEN_OUTCOME_HASH = '0x620238f59e4dffbf0d610377305b76e6e10c343a621533be889c88f80af58608';
+  const GOLDEN_DECISION_HASH = '0xad0c36e31db28d350ed71fef5e48fe6c64e8c22bb6822b8dcad03fb802578656';
+  const GOLDEN_OUTCOME_HASH = '0x535440a18fb33c138cc848a89dfc6555cbc5f3a0114f11b985532565a1663110';
 
   async function offRun() {
     const fixedOwner = new Wallet(FIXED_OWNER_PK);
     const h = harness({ resolveOwner: async () => ({ status: 'resolved', wallet: fixedOwner.address, assurance: 'wallet-proven' }) });
-    await h.ledger.appendPolicy(await signedPolicy(fixedOwner, { actions: ['tool'], per_tx_raw: '0', daily_raw: '0', total_raw: '0' }), iso);
+    await h.ledger.appendPolicy(await signedPolicy(fixedOwner, { actions: ['spend', 'tool'], per_tx_raw: '1', daily_raw: '0', total_raw: '0' }), iso);
     return runUnderKernel(toolRequest('impl.formatter'), async () => 'formatted', h.deps);
   }
 

@@ -435,14 +435,14 @@ describe('P0-I2 a failed durable write or receipt append means zero effect', () 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 describe('P0-I3 the class comes from registration, never from the request body', () => {
   describe('flag OFF (KERNEL_CAPABILITY_REGISTRY_ENABLED unset: the production default)', () => {
-    it.failing('[FAIL P0-I3-01] a payment closure filed as class "read" must not ALLOW without the spend checks (BREACHED: the class is the caller\'s word)', async () => {
+    it('[FAIL P0-I3-01] a payment closure filed as class "read" must not ALLOW without the spend checks (BREACHED: the class is the caller\'s word)', async () => {
       const h = await armed({}, { payees: [], per_tx_raw: '0', daily_raw: '0', total_raw: '0' }); // owner allows NO spend at all
       const pay = jest.fn(async () => 'MONEY MOVED');
       const out = await runUnderKernel(requestFor('read', { tool: { name: 'x402.pay', class: 'read' } }), pay, h.deps);
       expect(out.verdict).not.toBe('ALLOW');
       expect(pay).toHaveBeenCalledTimes(0);
     });
-    it.failing('[FAIL P0-I3-02] a publishing closure filed as class "other" must not ALLOW without HAL (BREACHED: HAL is never asked)', async () => {
+    it('[FAIL P0-I3-02] a publishing closure filed as class "other" must not ALLOW without HAL (BREACHED: HAL is never asked)', async () => {
       const halCheck = jest.fn(async () => hal({ verdict: 'VETO' }));
       const h = await armed({ halCheck });
       const publish = jest.fn(async () => 'POSTED');

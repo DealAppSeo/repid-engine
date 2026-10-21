@@ -394,7 +394,11 @@ describe('(e) the payee allow-list: default deny, like the limits', () => {
     const h = harness({ halCheck: async () => ({ verdict: 'PASS', method: 'fact-check', votes: [], settled_by: null, grounded: true, same_domain: true }) });
     await h.ledger.appendPolicy(await signedPolicy(h.owner, { payees: [] }), iso);
     expect((await runUnderKernel(postRequest(), jest.fn(async () => 'ok'), h.deps)).verdict).toBe('ALLOW');
-    expect((await runUnderKernel({ ...postRequest(), tool: { name: 'fs.read', class: 'read' } }, jest.fn(async () => 1), h.deps)).verdict).toBe('ALLOW');
+    // CC1 2026-10-21 (P0-I3-01): flag OFF a read is caller-asserted, so it IS held to the owner's spend
+    // authority, and an empty payee list means the owner authorized no spending: the read is refused.
+    const read = await runUnderKernel({ ...postRequest(), tool: { name: 'fs.read', class: 'read' } }, jest.fn(async () => 1), h.deps);
+    expect(read.verdict).toBe('DENY');
+    expect(codes(read)).toEqual(['class_unverified']);
   });
 
   it('the payee gate is one of the checks an ALLOW spend needs: dropping it from a receipt invalidates the receipt', () => {

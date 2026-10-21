@@ -446,7 +446,10 @@ describe('request parsing: hostile and degenerate input', () => {
     expect(out.verdict).toBe('DENY');
   });
   it('CHARACTERISE RT-6: the same payment tool declared class "read", with no amount field, is ALLOWED by a generic `tool` permission', async () => {
-    const h = await armed({}, { actions: ['tool'] });
+    // CC1 2026-10-21: since P0-I3-01's fix this needs a policy that also authorizes spending ('spend');
+    // under a tool-only policy it is now DENY(class_unverified). The residual pinned here: flag OFF the
+    // class is still the caller's word for an owner who did authorize spending.
+    const h = await armed({}, { actions: ['spend', 'tool'] });
     const tool = jest.fn(async () => 'x402 call made');
     const out = await runUnderKernel(spendRequest({ tool: { name: 'x402.pay', class: 'read' }, amount_raw: undefined, payee: undefined, asset: undefined }), tool, h.deps);
     expect(out.verdict).toBe('ALLOW');

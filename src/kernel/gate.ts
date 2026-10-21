@@ -106,7 +106,12 @@ function validHal(ev: unknown): ev is HalEvidence {
 }
 
 async function gatherHal(deps: GateDeps, req: KernelRequest, worthAsking: boolean): Promise<HalState> {
-  if (req.tool.class !== 'post') return { state: 'not_needed' };
+  // Flag OFF (no registry) a `read` or `other` is caller-asserted: an `other` needs HAL like a post, a
+  // `read` is screened when HAL is wired (decide.ts UNVERIFIED_CLASS_CHECKS, P0-I3-02).
+  const cls = req.tool.class;
+  const unverified = !deps.capabilityRegistry && (cls === 'read' || cls === 'other');
+  if (cls !== 'post' && !unverified) return { state: 'not_needed' };
+  if (cls === 'read' && !deps.halCheck) return { state: 'not_needed' };
   if (!worthAsking) return { state: 'not_needed' }; // already blocked upstream; do not spend a HAL call on it
   if (!deps.halCheck) return { state: 'not_checked', detail: 'HAL is not wired to the kernel' };
   try {

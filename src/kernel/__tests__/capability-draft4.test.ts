@@ -192,19 +192,20 @@ describe('Draft 4 F2 — an enforced ALLOW without a PASS capability row does no
 
   it('flag-OFF receipt hashes stay the frozen golden and carry no enforcement marker', async () => {
     // Same pin as the Draft 3 golden (origin/main @ 1b71d9f4). A matching hash is byte-identity.
+    // RE-PINNED by CC1 2026-10-21 (P0-I3-01), with the Draft 3 golden: see capability-enforcement.test.ts.
     const FIXED_OWNER_PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
     const fixedOwner = new Wallet(FIXED_OWNER_PK);
     const h = harness({
       resolveOwner: async () => ({ status: 'resolved', wallet: fixedOwner.address, assurance: 'wallet-proven' }),
     });
     await h.ledger.appendPolicy(
-      await signedPolicy(fixedOwner, { actions: ['tool'], per_tx_raw: '0', daily_raw: '0', total_raw: '0' }),
+      await signedPolicy(fixedOwner, { actions: ['spend', 'tool'], per_tx_raw: '1', daily_raw: '0', total_raw: '0' }), // CC1 2026-10-21: flag OFF a caller-asserted read now needs a policy with spend authority (P0-I3-01).
       iso,
     );
     const out = await runUnderKernel(toolRequest('impl.formatter'), async () => 'formatted', h.deps);
     expect(out.verdict).toBe('ALLOW');
-    expect(out.decision_receipt!.header.receipt_hash).toBe('0xb30a1fa69a14505bedae823aa63612bfcc5dea3a5cc51da562a8cb88bd2b734f');
-    expect(out.final_receipt!.header.receipt_hash).toBe('0x620238f59e4dffbf0d610377305b76e6e10c343a621533be889c88f80af58608');
+    expect(out.decision_receipt!.header.receipt_hash).toBe('0xad0c36e31db28d350ed71fef5e48fe6c64e8c22bb6822b8dcad03fb802578656');
+    expect(out.final_receipt!.header.receipt_hash).toBe('0x535440a18fb33c138cc848a89dfc6555cbc5f3a0114f11b985532565a1663110');
     expect(out.decision_receipt!.decision.checks.some((c) => c.name === 'capability' || c.name === 'capability_enforced')).toBe(false);
   });
 });
@@ -269,7 +270,7 @@ describe('Draft 4 residuals — non-string return and the dry preview', () => {
 
   it('a numeric return is still handed back (kernel positive control)', async () => {
     const h = harness();
-    await h.ledger.appendPolicy(await signedPolicy(h.owner, { actions: ['tool'], per_tx_raw: '0', daily_raw: '0', total_raw: '0' }), iso);
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { actions: ['spend', 'tool'], per_tx_raw: '1', daily_raw: '0', total_raw: '0' }), iso); // CC1 2026-10-21: flag OFF a caller-asserted read now needs a policy with spend authority (P0-I3-01).
     const out = await runUnderKernel(toolRequest('fs.read'), async () => 42, h.deps);
     expect(out.verdict).toBe('ALLOW');
     expect(out.result).toBe(42);

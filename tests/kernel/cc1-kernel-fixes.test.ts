@@ -9,7 +9,8 @@ import { CALLER_ASSERTED_CLASS_NOTE, CAPABILITY_ENFORCED_CHECK, CUMULATIVE_TOTAL
 import { runUnderKernel } from '../../src/kernel/gate';
 import { POLICY_DOMAIN_V2, POLICY_TYPES_V2, policyTypedValueV2 } from '../../src/kernel/policy';
 import { DEFAULT_ENV, buildReceipt, hashArgs, validateReceipt } from '../../src/kernel/receipt';
-import type { OwnerPolicy } from '../../src/kernel/types';
+import type { HalEvidence, OwnerPolicy } from '../../src/kernel/types';
+import * as decideModule from '../../src/kernel/decide';
 import { AGENT_ID, NOW_S, PAYEE, harness, iso, signedPolicy, spendRequest } from '../../src/kernel/__tests__/fixtures';
 
 const readRequest = (name: string) => ({
@@ -79,5 +80,97 @@ describe('RS: every receipt disclaims its class or carries the enforcement marke
       hal: { state: 'not_needed' },
     });
     expect(validateReceipt(forged)).toEqual({ ok: true });
+  });
+});
+
+const hal = (verdict: HalEvidence['verdict']): HalEvidence => ({
+  verdict, method: 'fact-check', votes: [{ family: 'a', verdict: 'PASS' }, { family: 'b', verdict: 'PASS' }], settled_by: null, grounded: false, same_domain: false,
+});
+const otherRequest = (name: string) => ({ ...readRequest(name), tool: { name, class: 'other' } });
+const codesOf = (r: { reasons: Array<{ code: string }> }) => r.reasons.map((x) => x.code);
+
+describe('I3-01/02: flag OFF a caller-asserted read/other is held to the gates of what it could be', () => {
+  it('a tool-only policy (no spend authority) refuses a read: DENY(class_unverified), nothing runs', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { actions: ['tool'] }), iso);
+    const tool = jest.fn(async () => 'x');
+    const out = await runUnderKernel(readRequest('doc.read'), tool, h.deps);
+    expect(out.verdict).toBe('DENY');
+    expect(codesOf(out)).toEqual(['class_unverified']);
+    expect(tool).toHaveBeenCalledTimes(0);
+  });
+
+  it.each([
+    ['no spend action', { actions: ['post', 'tool'] }],
+    ['no payee', { payees: [] }],
+    ['a zero per-transaction limit', { per_tx_raw: '0' }],
+  ])('a policy with %s is no spend authority', async (_n, over) => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, over), iso);
+    const out = await runUnderKernel(readRequest('doc.read'), jest.fn(async () => 'x'), h.deps);
+    expect(codesOf(out)).toContain('class_unverified');
+  });
+
+  it('control: a policy with spend authority runs the read, and its receipt carries a PASS spend_authority row', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const out = await runUnderKernel(readRequest('doc.read'), jest.fn(async () => 'x'), h.deps);
+    expect(out.verdict).toBe('ALLOW');
+    expect(out.decision_receipt!.decision.checks.find((c) => c.name === 'spend_authority')?.outcome).toBe('PASS');
+  });
+
+  it('an `other` with HAL not wired is NOT_CHECKED(hal_not_checked); with HAL PASS it runs', async () => {
+    const off = harness();
+    await off.ledger.appendPolicy(await signedPolicy(off.owner), iso);
+    const tool = jest.fn(async () => 'x');
+    const nc = await runUnderKernel(otherRequest('misc.run'), tool, off.deps);
+    expect(nc.verdict).toBe('NOT_CHECKED');
+    expect(codesOf(nc)).toContain('hal_not_checked');
+    expect(tool).toHaveBeenCalledTimes(0);
+    const on = harness({ halCheck: async () => hal('PASS') });
+    await on.ledger.appendPolicy(await signedPolicy(on.owner), iso);
+    expect((await runUnderKernel(otherRequest('misc.run'), tool, on.deps)).verdict).toBe('ALLOW');
+  });
+
+  it('a `read` is screened by HAL when HAL is wired: a VETO refuses it', async () => {
+    const h = harness({ halCheck: async () => hal('VETO') });
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const out = await runUnderKernel(readRequest('doc.read'), jest.fn(async () => 'x'), h.deps);
+    expect(out.verdict).toBe('DENY');
+    expect(codesOf(out)).toContain('hal_vetoed');
+  });
+
+  it('flag ON is unaffected: a tool-only owner with a bound, registered read runs it with no spend_authority row', async () => {
+    const formatter = jest.fn(async () => 'formatted');
+    const reg = createCapabilityRegistry();
+    reg.register({ implId: 'impl.formatter', capability: { id: 'format.markdown', toolClass: 'read' }, run: formatter });
+    const h = harness({ capabilityRegistry: reg });
+    const policy: OwnerPolicy = {
+      subject: AGENT_ID, owner: h.owner.address, actions: ['tool'], payees: [],
+      per_tx_raw: '0', daily_raw: '0', total_raw: '0', expires_at: NOW_S + 3600, nonce: '1', authorized_impl_hashes: ['impl.formatter'],
+    };
+    await h.ledger.appendPolicy({ policy, signature: await h.owner.signTypedData(POLICY_DOMAIN_V2, POLICY_TYPES_V2, policyTypedValueV2(policy)) }, iso);
+    const out = await runUnderKernel(readRequest('impl.formatter'), formatter as unknown as () => Promise<string>, h.deps);
+    expect(out.verdict).toBe('ALLOW');
+    expect(out.decision_receipt!.decision.checks.some((c) => c.name === 'spend_authority')).toBe(false);
+  });
+
+  it('the ledger refuses a flag-OFF read ALLOW that lacks the spend_authority row (a decide() that drops it cannot run the tool)', async () => {
+    const real = decideModule.decide;
+    const spy = jest.spyOn(decideModule, 'decide').mockImplementation((input) => {
+      const d = real(input);
+      return { ...d, checks: d.checks.filter((c) => c.name !== 'spend_authority') };
+    });
+    try {
+      const h = harness();
+      await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+      const tool = jest.fn(async () => 'x');
+      const out = await runUnderKernel(readRequest('doc.read'), tool, h.deps);
+      expect(out.verdict).toBe('NOT_CHECKED');
+      expect(codesOf(out)).toContain('receipt_write_failed');
+      expect(tool).toHaveBeenCalledTimes(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

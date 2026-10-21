@@ -68,6 +68,8 @@ export type ReasonCode =
   | 'policy_expired'
   | 'policy_revocation_not_checked'
   | 'action_not_permitted'
+  // a caller-asserted read/other under a policy with no spend authority (flag OFF)
+  | 'class_unverified'
   // spend
   | 'payee_not_allowed'
   | 'spend_limit_zero'

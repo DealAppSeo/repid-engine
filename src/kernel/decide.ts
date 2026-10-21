@@ -197,6 +197,19 @@ export const REQUIRED_CHECKS: Readonly<Record<ToolClass, readonly string[]>> = {
 };
 
 /**
+ * FLAG OFF THE CLASS IS THE CALLER'S WORD (P0-I3-01/02). A call filed as `read` or `other` could be a
+ * payment or a post in disguise, so it is held to the gates of what it could be: `spend_authority`
+ * (the owner authorized spending at all: a spend action, a payee and a nonzero per-transaction limit)
+ * and, for `other` — an effect the kernel has no class for — HAL as well. A `read` is screened by HAL
+ * when HAL is wired. Under the registry (flag ON) the class is bound at registration and this table
+ * does not apply. receipt.ts reads it too, so a flag-OFF ALLOW without these rows is refused.
+ */
+export const UNVERIFIED_CLASS_CHECKS: Readonly<Record<'read' | 'other', readonly string[]>> = {
+  read: ['spend_authority'],
+  other: ['spend_authority', 'hal_verdict'],
+};
+
+/**
  * Present on a decision only when the capability registry is wired (flag ON). Receipt validation
  * treats an ALLOW that carries this check and lacks a PASS `capability` row as invalid. Flag-OFF
  * decisions omit it, so their bytes stay identical to the frozen golden. It is not in
@@ -378,6 +391,21 @@ export function decide(input: DecideInput): DecisionLeg {
     }
   }
 
+  const cap = input.capability;
+  const enforcementOn = !!cap && (cap.state === 'enforced' || cap.state === 'not_checked');
+  const classUnverified = !enforcementOn && (cls === 'read' || cls === 'other');
+
+  // 4.5 a caller-asserted read/other: did the owner authorize spending at all? (UNVERIFIED_CLASS_CHECKS)
+  // Recorded only from a verified policy; without one the verdict cannot be ALLOW anyway.
+  if (classUnverified && verified && policy.state === 'loaded') {
+    const p = policy.policy;
+    const canSpend = p.actions.includes('spend') && (p.payees ?? []).length > 0 && perTx > 0n;
+    record('spend_authority', canSpend ? 'PASS' : 'FAIL', 'kernel/decide', canSpend ? undefined : {
+      code: 'class_unverified',
+      detail: "the class is the caller's word (no tool registry): an unclassified call runs only under a policy that authorizes spending (a spend action, a payee and a nonzero per-transaction limit)",
+    });
+  }
+
   // 5. spend ------------------------------------------------------------------------------------
   if (cls === 'spend') {
     const amt = parseAmountRaw(request.amount_raw);
@@ -440,8 +468,9 @@ export function decide(input: DecideInput): DecisionLeg {
     }
   }
 
-  // 6. post -------------------------------------------------------------------------------------
-  if (cls === 'post') {
+  // 6. post (and a caller-asserted `other`, or a `read` HAL was asked about) ----------------------
+  const halRow = cls === 'post' || (classUnverified && (cls === 'other' || hal.state !== 'not_needed'));
+  if (halRow) {
     if (hal.state === 'consulted') {
       const v = hal.evidence.verdict;
       if (v === 'PASS') record('hal_verdict', 'PASS', 'hal');
@@ -467,8 +496,6 @@ export function decide(input: DecideInput): DecisionLeg {
   // runUnderKernel runs the REGISTERED implementation rather than the caller's closure. This decision
   // (resolve + authorize + prohibit by the owner-signed binding) and that call-site reference-equality
   // together close the closure swap.
-  const cap = input.capability;
-  const enforcementOn = !!cap && (cap.state === 'enforced' || cap.state === 'not_checked');
   // Marker first, then the outcome row. Stripping the outcome row leaves the marker, and
   // validateReceipt then refuses the ALLOW. OFF (not_enforced / absent) records neither.
   if (enforcementOn) record(CAPABILITY_ENFORCED_CHECK, 'PASS', 'kernel/capability-registry');
@@ -498,9 +525,12 @@ export function decide(input: DecideInput): DecisionLeg {
   // receipt.ts tell an enforced ALLOW from a shadow one without a schema change.
   const capabilityRequired = input.capability?.state === 'enforced';
   const required: readonly string[] = classKnown
-    ? capabilityRequired
-      ? [...REQUIRED_CHECKS[cls], 'capability']
-      : REQUIRED_CHECKS[cls]
+    ? [
+        ...REQUIRED_CHECKS[cls],
+        ...(capabilityRequired ? ['capability'] : []),
+        ...(classUnverified ? UNVERIFIED_CLASS_CHECKS[cls as 'read' | 'other'] : []),
+        ...(classUnverified && halRow ? ['hal_verdict'] : []),
+      ]
     : [];
   const everyRequiredPassed =
     classKnown && wellformed && required.every((name) => checks.find((c) => c.name === name)?.outcome === 'PASS');

@@ -41,6 +41,8 @@ const stripEnforcement = (r: KernelReceipt): KernelReceipt => {
 const asFlagOff = (r: KernelReceipt): KernelReceipt => {
   const c = stripEnforcement(r);
   if (!c.decision.does_not_attest.includes(CALLER_ASSERTED_CLASS_NOTE)) c.decision.does_not_attest.splice(2, 0, CALLER_ASSERTED_CLASS_NOTE);
+  // ...and, since P0-I3-01's fix, the flag-OFF read row a self-consistent flag-OFF ALLOW carries.
+  c.decision.checks.push({ name: 'spend_authority', outcome: 'PASS', source: 'forged' });
   return c;
 };
 

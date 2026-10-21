@@ -19,7 +19,7 @@
  */
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { canonicalJson } from '../services/owner-authorization';
-import { CALLER_ASSERTED_CLASS_NOTE, CAPABILITY_ENFORCED_CHECK, CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, parseAmountRaw } from './decide';
+import { CALLER_ASSERTED_CLASS_NOTE, CAPABILITY_ENFORCED_CHECK, CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, UNVERIFIED_CLASS_CHECKS, parseAmountRaw } from './decide';
 import type {
   ChainTip,
   DecisionLeg,
@@ -431,7 +431,9 @@ export function validateReceipt(receipt: unknown, ctx: ValidateContext = {}): Re
     for (const c of d.checks) {
       if (c.outcome !== 'PASS') add('allow_with_unresolved_check', `decision.checks.${c.name}`, `ALLOW with a ${c.outcome} check`);
     }
-    for (const name of REQUIRED_CHECKS[r.request.tool.class]) {
+    const cls = r.request.tool.class;
+    const unverified = d.does_not_attest.includes(CALLER_ASSERTED_CLASS_NOTE) && (cls === 'read' || cls === 'other') ? UNVERIFIED_CLASS_CHECKS[cls] : [];
+    for (const name of [...REQUIRED_CHECKS[cls], ...unverified]) {
       if (d.checks.find((c) => c.name === name)?.outcome !== 'PASS') add('allow_missing_required_check', `decision.checks.${name}`, 'ALLOW without a passing required check');
     }
     // Draft 4. The marker is recorded only when enforcement is on. An ALLOW that still carries it
