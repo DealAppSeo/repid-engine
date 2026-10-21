@@ -351,7 +351,7 @@ export function renderReviewSheet(payload: string, experimentJson: string): stri
   if (experiment.level !== 1) problems.push('the experiment policy is not level 1');
   if (problems.length) throw new Error(`review sheet refused: ${problems.join('; ')}`);
   const asset = experiment.assets[0]!;
-  const hours = (policy.expires_at - experiment.not_before) / 3600;
+  const hours = Math.round(((policy.expires_at - experiment.not_before) / 3600) * 10) / 10;
   const L: string[] = [];
   L.push('# L1 owner authorization: review BEFORE signing');
   L.push('');
@@ -393,7 +393,7 @@ export function renderReviewSheet(payload: string, experimentJson: string): stri
   L.push('');
   L.push('## What this signature does NOT do');
   L.push('');
-  L.push('- It does not limit gas beyond the per-payment cap, and it does not limit anything outside the L1 executor: the kernel governs only what runs through it.');
+  L.push('- It limits nothing outside the L1 executor: the kernel governs only what runs through it.');
   L.push('- The kernel checks the amount and payee the executor declares; the executor then reads the chain back, and an unconfirmed payment is recorded UNKNOWN, never SETTLED.');
   L.push('- The total resets if you sign a higher-nonce replacement (the total is per policy version).');
   L.push('- It moves no RepID and reaches no production database.');
