@@ -98,7 +98,7 @@ const CLASS_DISCLAIMER = 'tool_class (caller-asserted; there is no tool registry
 // TK — one-use authorization: shapes the #1444 probes (identical read re-presented) did not try.
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 describe('XC1-TK one-use authorization beyond the identical-read shape', () => {
-  probe('[XC1-TK-07] one argument digest must authorize at most one payment, whatever the caller writes in fields that do not change the payment (tool name, asset label, chain_id)', { main: 'FAIL', fixes: 'FAIL' }, async () => {
+  probe('[XC1-TK-07] one argument digest must authorize at most one payment, whatever the caller writes in fields that do not change the payment (tool name, asset label, chain_id)', { main: 'FAIL', fixes: 'PASS' }, async () => {
     const h = await armed();
     const pay = jest.fn(async () => 'paid 10000 to PAYEE');
     const first = await runUnderKernel(spendRequest(), pay, h.deps);
@@ -126,7 +126,7 @@ describe('XC1-TK one-use authorization beyond the identical-read shape', () => {
     expect(pay).toHaveBeenCalledTimes(1);
   });
 
-  probe('[XC1-TK-08] flag ON: a spend replayed under a padded implementation id (it resolves, by trim, to the same registered payment impl) must not pay twice', { main: 'FAIL', fixes: 'FAIL' }, async () => {
+  probe('[XC1-TK-08] flag ON: a spend replayed under a padded implementation id (it resolves, by trim, to the same registered payment impl) must not pay twice', { main: 'FAIL', fixes: 'PASS' }, async () => {
     const e = await enforced();
     const req = (name: string) => spendRequest({ tool: { name, class: 'spend' } });
     expect((await runUnderKernel(req('impl.payment'), e.impls.payment as unknown as () => Promise<string>, e.deps)).verdict).toBe('ALLOW');

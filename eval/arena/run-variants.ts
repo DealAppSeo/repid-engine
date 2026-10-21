@@ -113,6 +113,15 @@ async function runOne(v: Variant, w: any, core: any, world: any, toAccount: (k: 
   const operation = v.request.operation ?? 'pay';
   const pres = { operation, npa: signed, request };
   const npaHash = core.npaHashOf(npa);
+  // recase: presentations after the first carry the same agreement and signatures, hex fields in other letter case.
+  const up = (h: string) => `0x${h.slice(2).toUpperCase()}`;
+  const RECASE = [
+    (x: any) => ({ ...x, seller: x.seller.toLowerCase() }),
+    (x: any) => ({ ...x, nonce: up(x.nonce) }),
+    (x: any) => ({ ...x, service_hash: up(x.service_hash) }),
+    (x: any) => ({ ...x, buyer: x.buyer.toLowerCase(), seller: x.seller.toLowerCase(), nonce: up(x.nonce), service_hash: up(x.service_hash) }),
+  ];
+  const npaFor = (i: number) => (i === 0 || !v.presentations.recase ? npa : RECASE[(i - 1) % RECASE.length]!(npa));
 
   const snap = async () => {
     const one = async (a: string) => ({ ETH: (await chain.balance(zero, a)).toString(), USDC: (await chain.balance(w.addr.usdc, a)).toString(), DECOY: (await chain.balance(w.addr.decoy, a)).toString() });
@@ -124,8 +133,14 @@ async function runOne(v: Variant, w: any, core: any, world: any, toAccount: (k: 
   const [provider0, buyer0] = [await repidOf(w.agents.seller.id), await repidOf(w.agents.buyer.id)];
 
   // present it: once, N times in sequence (optionally restarting the engine between), or N at once
-  const presented: Array<{ at_s: number; att: any }> = [];
-  const once = async (i: number) => { const at_s = nowS(); const att = await world.present(w, pres, `${v.class} #${i + 1}`); presented.push({ at_s, att }); return att; };
+  const presented: Array<{ at_s: number; att: any; npa: any }> = [];
+  const once = async (i: number) => {
+    const at_s = nowS();
+    const n = npaFor(i);
+    const att = await world.present(w, { ...pres, npa: { ...signed, npa: n } }, `${v.class} #${i + 1}`);
+    presented.push({ at_s, att, npa: n });
+    return att;
+  };
   const n = v.presentations.count;
   if (v.presentations.concurrent) {
     if (v.presentations.restart_between && n > 1) { await once(0); world.restart(w); await Promise.all(Array.from({ length: n - 1 }, (_, i) => once(i + 1))); }
@@ -157,7 +172,7 @@ async function runOne(v: Variant, w: any, core: any, world: any, toAccount: (k: 
   const after = await snap();
   const rb = async (h: string) => world.serializeReadback(await chain.readback(h));
   const sends = await Promise.all(w.sends.map(async (s: any) => ({ hash: s.hash, ...(await rb(s.hash)) })));
-  const presentations: VPresentation[] = presented.map(({ at_s, att }) => ({ at_s, operation, npa, npa_hash: npaHash, sig_valid, request, status: att.status, tx_hash: att.tx_hash, readback: att.readback }));
+  const presentations: VPresentation[] = presented.map(({ at_s, att, npa: n }) => ({ at_s, operation, npa: n, npa_hash: core.npaHashOf(n), sig_valid, request, status: att.status, tx_hash: att.tx_hash, readback: att.readback }));
   const observed: VObserved = {
     policy: {
       chain_id: w.policy.chain_id, connected_chain_id: await chain.chainId(), operations: w.policy.operations, buyer: w.policy.wallets.buyer, counterparties: w.policy.counterparties,
