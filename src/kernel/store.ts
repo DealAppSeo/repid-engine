@@ -300,4 +300,16 @@ export class StoreLedger implements KernelLedger {
     await this.ensureLoaded();
     return [...(this.byId.get(callId) ?? [])];
   }
+
+  /**
+   * Calls whose effect is INDETERMINATE (P0-I2-08): an ALLOW decision row with no outcome row. The
+   * gate hands the tool control right after that row is written, so the effect may or may not have
+   * happened (its outcome write failed, the process died, or it is still running). Reconcile these
+   * from outside, never retry them: the decision row consumed their one-use authorization, so a
+   * retry is DENY(authorization_consumed) anyway.
+   */
+  async indeterminate(): Promise<string[]> {
+    await this.ensureLoaded();
+    return [...this.decisionIds].filter((id) => !(this.byId.get(id) ?? []).some((r) => r.decision.executed));
+  }
 }

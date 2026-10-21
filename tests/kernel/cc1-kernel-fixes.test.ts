@@ -360,3 +360,45 @@ describe('TK-03: a used owner approval stays used across a restart (durable nonc
     }
   });
 });
+
+describe('I2-08: an effect whose outcome could not be recorded is INDETERMINATE, and is never retried', () => {
+  // P0-I2-08 itself stays it.failing: it asks that a failed OUTCOME append leave zero effect, but the
+  // outcome row is written after the tool ran, and P0-I2-03 / P0-I2-07 (PASS) require exactly one
+  // receipt row (the decision) before the tool runs. What can be done is the blueprint's answer:
+  // name the state, keep it across a restart, and refuse a retry.
+  function failSecondReceipt() {
+    const records: Array<import('../../src/kernel/types').LedgerRecord> = [];
+    let receipts = 0;
+    return {
+      records,
+      async append(record: import('../../src/kernel/types').LedgerRecord) {
+        if (record.kind === 'receipt' && ++receipts === 2) throw new Error('disk full');
+        records.push(JSON.parse(JSON.stringify(record)));
+      },
+      async readAll() { return records.map((r) => JSON.parse(JSON.stringify(r))); },
+    };
+  }
+
+  it('the ledger lists the call as INDETERMINATE, still after a restart, and a retry is DENY with no second effect', async () => {
+    const sink = failSecondReceipt();
+    const ledger = new StoreLedger(sink);
+    const h = harness({ ledger });
+    await ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const tool = jest.fn(async () => 'MONEY MOVED');
+    const out = await runUnderKernel(spendRequest(), tool, h.deps);
+    expect(out.outcome_unrecorded).toBe(true);
+    expect(await ledger.indeterminate()).toEqual([out.decision_receipt!.header.receipt_id]);
+    const restarted = new StoreLedger(sink);
+    expect(await restarted.indeterminate()).toEqual([out.decision_receipt!.header.receipt_id]);
+    const retry = await runUnderKernel(spendRequest(), tool, { ...h.deps, ledger: restarted });
+    expect(codesOf(retry)).toContain('authorization_consumed');
+    expect(tool).toHaveBeenCalledTimes(1);
+  });
+
+  it('control: a call whose outcome row was written is not INDETERMINATE', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    expect((await runUnderKernel(spendRequest(), jest.fn(async () => 'paid'), h.deps)).final_receipt).not.toBeNull();
+    expect(await h.ledger.indeterminate()).toEqual([]);
+  });
+});
