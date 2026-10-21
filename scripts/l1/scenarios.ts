@@ -37,7 +37,7 @@ const ORACLE = join(__dirname, '..', 'e2e-local', 'arena', 'oracle.ts');
 const usdc = (n: number): string => String(Math.round(n * 1e6));
 
 /** Sign exactly what a wallet would sign for eth_signTypedData_v4: the payload's own domain, types and message. */
-export async function signPayload(owner: Wallet, payload: string): Promise<string> {
+export async function signPayload(owner: Pick<Wallet, 'signTypedData'>, payload: string): Promise<string> {
   const t = JSON.parse(payload) as { domain: Record<string, unknown>; types: Record<string, unknown>; message: Record<string, unknown> };
   const { EIP712Domain: _d, ...types } = t.types;
   return owner.signTypedData(t.domain, types as never, t.message);
@@ -143,7 +143,7 @@ export async function runScenarios(chain: TestChain, dir: string): Promise<{ res
     const a = await presentL1(await rawLedger('self-owned-raw', s), await npaFor(usdc(1)), 'self-owned-raw');
     return { pass: !r.ok && a.status === 'REFUSED' && codes(a).includes('owner_not_pinned_owner'), got: `init: ${r.ok ? 'accepted' : r.error}; present: ${show(a)}` };
   });
-  await record('the ledger must not live in the OS temp directory', 'path rule refuses tmpdir, accepts this run\'s folder', async () => {
+  await record('the ledger must not live in the OS temp directory', 'path rule refuses a ledger in the OS temp directory', async () => {
     const inTmp = l1LedgerPathProblem(join(tmpdir(), 'hyperdag-kernel', 'ledger.jsonl'), tmpdir());
     return { pass: inTmp !== null, got: `tmpdir path: ${inTmp ?? 'accepted'}` };
   });

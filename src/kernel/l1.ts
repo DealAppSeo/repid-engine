@@ -355,8 +355,8 @@ export function renderReviewSheet(payload: string, experimentJson: string): stri
   const L: string[] = [];
   L.push('# L1 owner authorization: review BEFORE signing');
   L.push('');
-  L.push('**Signing moves no funds and needs no gas. But the signature IS an authorization: until it expires or is');
-  L.push('revoked, it lets the L1 executor spend from the buyer wallet up to the caps below, without asking again.**');
+  L.push('**Signing moves no funds and needs no gas. But the signature IS an authorization: until it expires (or the');
+  L.push('kill-switch file exists), it lets the L1 executor spend from the buyer wallet up to the caps below, without asking again.**');
   L.push('');
   L.push('Every value on this sheet was read from the two files below. If either file changes, this sheet changes or refuses to render.');
   L.push('');
@@ -387,8 +387,9 @@ export function renderReviewSheet(payload: string, experimentJson: string): stri
   L.push('');
   L.push(`1. **Kill switch (seconds):** create \`${experiment.kill_switch_path}\` (any content). Payments stop at the next check. A payment already broadcast cannot be recalled.`);
   L.push(`2. **Expiry (automatic):** at ${utc(policy.expires_at)} the kernel refuses every payment.`);
-  L.push('3. **Revoke early:** sign a new policy for the same agent with a higher nonce and zero caps, and append it to the L1 ledger. There is no revocation list: the old signature stays valid until it expires, and only a kernel that holds the newer policy honours the revocation. Do not post this policy to any other kernel.');
-  L.push('4. **Empty the wallet:** move the test USDC out of the buyer wallet. The policy cannot spend what is not there.');
+  L.push('3. **Empty the wallet:** move the test USDC out of the buyer wallet. The policy cannot spend what is not there.');
+  L.push('');
+  L.push('There is no revocation list. The signature itself stays valid until it expires; what stops spending early is the kill switch or an empty wallet. Only the L1 executor reads this policy: never post it to any other kernel.');
   L.push('');
   L.push('## What this signature does NOT do');
   L.push('');
