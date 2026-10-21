@@ -446,7 +446,10 @@ describe('request parsing: hostile and degenerate input', () => {
     expect(out.verdict).toBe('DENY');
   });
   it('CHARACTERISE RT-6: the same payment tool declared class "read", with no amount field, is ALLOWED by a generic `tool` permission', async () => {
-    const h = await armed({}, { actions: ['tool'] });
+    // CC1 2026-10-21: since P0-I3-01's fix this needs a policy that also authorizes spending ('spend');
+    // under a tool-only policy it is now DENY(class_unverified). The residual pinned here: flag OFF the
+    // class is still the caller's word for an owner who did authorize spending.
+    const h = await armed({}, { actions: ['spend', 'tool'] });
     const tool = jest.fn(async () => 'x402 call made');
     const out = await runUnderKernel(spendRequest({ tool: { name: 'x402.pay', class: 'read' }, amount_raw: undefined, payee: undefined, asset: undefined }), tool, h.deps);
     expect(out.verdict).toBe('ALLOW');
@@ -523,7 +526,7 @@ describe('limits: durability and accumulation', () => {
 
   // ── RT-5 ── NOT atomic: concurrent calls overshoot the cap. ──────────────────────────────────
   // The kernel documents this ("cumulative_total (no atomic reservation)"). This measures it.
-  it.failing('RT-5 concurrent in-process spends must not exceed the DAILY cap (BREACHED today: no reservation)', async () => {
+  it('RT-5 concurrent in-process spends must not exceed the DAILY cap (BREACHED today: no reservation)', async () => {
     const h = await armed({}, { per_tx_raw: '1000000', daily_raw: '2000000', total_raw: '99000000' });
     const tool = jest.fn(async () => 'paid');
     const results = await Promise.all(Array.from({ length: 12 }, () => runUnderKernel(spendRequest({ amount_raw: '1000000' }), tool, h.deps)));
@@ -597,7 +600,7 @@ describe('receipts: forged, tampered, replayed', () => {
   // validateReceipt() and verifyReceiptChain() both accept. The only authentication of a receipt is
   // "the engine's own ledger holds this id" (GET /receipt/:id), and that ledger is the ephemeral
   // temp-dir file. The receipt itself says "receipt_signature (unsigned in the MVP)" in does_not_attest.
-  it.failing('RT-7 a receipt fabricated from NOTHING, with no engine and no genuine receipt, must not validate as an authentic ALLOW (BREACHED today: unsigned)', () => {
+  it('RT-7 a receipt fabricated from NOTHING, with no engine and no genuine receipt, must not validate as an authentic ALLOW (BREACHED today: unsigned)', () => {
     // Everything below is public: the checks table is exported, the amounts are the forger's choice.
     const checks = REQUIRED_CHECKS.spend.map((name) => ({ name, outcome: 'PASS' as const, source: 'forged' }));
     const wallet = '0x00000000000000000000000000000000000000aa';

@@ -30,7 +30,7 @@ function codesOf(r: KernelReceipt, ctx?: { persisted_decision_ids?: ReadonlySet<
 
 const HAL_PASS: HalEvidence = {
   verdict: 'PASS',
-  method: 'cross-llm-quorum',
+  method: 'hal-fact-check/cross-llm-quorum',
   votes: [{ family: 'a', verdict: 'PASS' }, { family: 'b', verdict: 'PASS' }, { family: 'c', verdict: 'FAIL' }],
   settled_by: null,
   grounded: true,
@@ -323,7 +323,8 @@ describe('the chain', () => {
     const h = harness();
     await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
     await runUnderKernel(spendRequest({ amount_raw: 1 }), async () => 'a', h.deps);
-    await runUnderKernel(spendRequest({ amount_raw: 2 }), async () => 'b', h.deps);
+    // CC1 2026-10-21 (XC1 B1): one args digest is one authorization, so a second spend needs its own digest.
+    await runUnderKernel(spendRequest({ amount_raw: 2, args_hash: hashArgs({ call: 2 }) }), async () => 'b', h.deps);
     return h.sink.records.flatMap((r) => (r.kind === 'receipt' ? [clone(r.receipt)] : []));
   }
 
@@ -376,7 +377,8 @@ describe('the JSONL ledger refuses to read a damaged file as an empty one', () =
     expect((await ledger2.latestPolicy(AGENT_ID))?.policy.nonce).toBe('1');
     const totals = await ledger2.spentTotals({ agent_id: AGENT_ID, policy_hash: policyHash((await ledger2.latestPolicy(AGENT_ID))!.policy), since_s: 0 });
     expect(totals).toEqual({ daily_raw: '7', total_raw: '7' });
-    const out = await runUnderKernel(spendRequest({ amount_raw: 1 }), async () => 'b', { ...first.deps, ledger: ledger2 });
+    // CC1 2026-10-21 (XC1 B1): one args digest is one authorization, so a second spend needs its own digest.
+    const out = await runUnderKernel(spendRequest({ amount_raw: 1, args_hash: hashArgs({ call: 2 }) }), async () => 'b', { ...first.deps, ledger: ledger2 });
     expect(out.verdict).toBe('ALLOW');
     expect(out.decision_receipt!.header.prev_hash).not.toBeNull(); // chained onto the earlier process's entries
   });

@@ -10,6 +10,13 @@
  *   - One lock around every receipt append, so two concurrent calls cannot both read the same chain
  *     tip and fork the chain. The lock is IN THIS PROCESS: the API runs one replica. Two replicas
  *     sharing one file would race, and that is a stated limit, not a hidden one.
+ *   - Under that lock, the ONE-USE AUTHORIZATION and the SPEND RESERVATION (P0-TK-04/05, P0-I3-16,
+ *     RT-5). An ALLOW decision row consumes its authorization (receipt.ts `authorizationKey`) and
+ *     reserves its amount. A second ALLOW decision row for a consumed key, or one whose amount no
+ *     longer fits the limits it states, is refused. The builder sees the same state (`LedgerView`),
+ *     so the gate writes a DENY instead of tripping this. Consumption is the row itself: it is as
+ *     durable as the ledger, survives a restart (the index is rebuilt from the sink), and shares
+ *     fate with the policy it consumes (both live in this ledger).
  *   - Validation BEFORE the write. A receipt that breaks an invariant is never persisted, so the
  *     gate cannot run a tool on a decision the ledger would not accept.
  *   - An index, built once from the sink: chain tip, latest policy per agent, spend rows, and the
@@ -20,15 +27,26 @@
  */
 import { mkdir, open, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { validateReceipt, verifyReceiptChain } from './receipt';
+import { CAPABILITY_ENFORCED_CHECK } from './decide';
+import { authorizationKey, validateReceipt, verifyReceiptChain } from './receipt';
 import type {
   ChainTip,
   KernelLedger,
   KernelReceipt,
   KernelSink,
   LedgerRecord,
+  LedgerView,
   SignedOwnerPolicy,
 } from './types';
+
+const DAY_S = 86_400;
+
+/** The authorization an ALLOW decision row consumes, or null for any other row. */
+function consumes(r: KernelReceipt): string | null {
+  if (r.decision.verdict !== 'ALLOW' || r.decision.executed || r.decision.policy.policy_hash === null) return null;
+  const enforced = r.decision.checks.some((c) => c.name === CAPABILITY_ENFORCED_CHECK);
+  return authorizationKey(r.subject.agent.agent_id, r.request, r.decision.policy.policy_hash, enforced);
+}
 
 // ── sinks ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -124,6 +142,7 @@ export class StoreLedger implements KernelLedger {
   private tip: ChainTip | null = null;
   private readonly byId = new Map<string, KernelReceipt[]>();
   private readonly decisionIds = new Set<string>();
+  private readonly consumed = new Set<string>();
   private readonly policies = new Map<string, SignedOwnerPolicy>();
   private readonly spendRows: SpendRow[] = [];
   private queue: Promise<unknown> = Promise.resolve();
@@ -167,6 +186,7 @@ export class StoreLedger implements KernelLedger {
     this.tip = null;
     this.byId.clear();
     this.decisionIds.clear();
+    this.consumed.clear();
     this.policies.clear();
     this.spendRows.length = 0;
     for (const rec of records) {
@@ -184,6 +204,8 @@ export class StoreLedger implements KernelLedger {
     // The DECISION row is the ALLOW with executed:false; the outcome row shares its call id.
     if (r.decision.verdict === 'ALLOW' && !r.decision.executed) {
       this.decisionIds.add(r.header.receipt_id);
+      const key = consumes(r);
+      if (key) this.consumed.add(key);
       if (r.request.tool.class === 'spend' && r.request.amount_raw !== null) {
         this.spendRows.push({
           agent_id: r.subject.agent.agent_id,
@@ -200,14 +222,31 @@ export class StoreLedger implements KernelLedger {
     if (!cur || BigInt(p.policy.nonce) > BigInt(cur.policy.nonce)) this.policies.set(p.policy.subject, p);
   }
 
-  async appendReceipt(build: (tip: ChainTip | null) => KernelReceipt): Promise<KernelReceipt> {
+  async appendReceipt(build: (tip: ChainTip | null, view: LedgerView) => KernelReceipt): Promise<KernelReceipt> {
     return this.locked(async () => {
       await this.ensureLoaded();
-      const receipt = build(this.tip);
+      const view: LedgerView = { consumed: (key) => this.consumed.has(key), spentTotals: (q) => this.totals(q) };
+      const receipt = build(this.tip, view);
       const v = validateReceipt(receipt, { persisted_decision_ids: this.decisionIds });
       if (!v.ok) throw new ReceiptInvalidError([...new Set(v.errors.map((x) => x.code))]);
       const expectedPrev = this.tip?.receipt_hash ?? null;
       if (receipt.header.prev_hash !== expectedPrev) throw new ReceiptInvalidError(['broken_link']);
+      // Compare-and-set, under the lock: an ALLOW decision row must not reuse an authorization...
+      const key = consumes(receipt);
+      if (key && this.consumed.has(key)) throw new ReceiptInvalidError(['authorization_consumed']);
+      // ...and a spend must still fit the limits it states, counting every spend already reserved.
+      if (key && receipt.request.tool.class === 'spend' && receipt.request.amount_raw !== null) {
+        const amount = BigInt(receipt.request.amount_raw);
+        const t = this.totals({
+          agent_id: receipt.subject.agent.agent_id,
+          policy_hash: receipt.decision.policy.policy_hash!,
+          since_s: Math.floor(Date.parse(receipt.header.created_at) / 1000) - DAY_S,
+        });
+        const lim = receipt.decision.limits;
+        if (amount > BigInt(lim.per_tx_raw) || BigInt(t.daily_raw) + amount > BigInt(lim.daily_raw) || BigInt(t.total_raw) + amount > BigInt(lim.total_raw)) {
+          throw new ReceiptInvalidError(['spend_reservation_exceeded']);
+        }
+      }
       await this.sink.append({ kind: 'receipt', receipt });
       this.indexReceipt(receipt);
       // BEST-EFFORT secondary index. The JSONL record above is authoritative and already durable;
@@ -243,6 +282,10 @@ export class StoreLedger implements KernelLedger {
 
   async spentTotals(q: { agent_id: string; policy_hash: string; since_s: number }): Promise<{ daily_raw: string; total_raw: string }> {
     await this.ensureLoaded();
+    return this.totals(q);
+  }
+
+  private totals(q: { agent_id: string; policy_hash: string; since_s: number }): { daily_raw: string; total_raw: string } {
     let daily = 0n;
     let total = 0n;
     for (const row of this.spendRows) {
@@ -256,5 +299,17 @@ export class StoreLedger implements KernelLedger {
   async findReceipts(callId: string): Promise<KernelReceipt[]> {
     await this.ensureLoaded();
     return [...(this.byId.get(callId) ?? [])];
+  }
+
+  /**
+   * Calls whose effect is INDETERMINATE (P0-I2-08): an ALLOW decision row with no outcome row. The
+   * gate hands the tool control right after that row is written, so the effect may or may not have
+   * happened (its outcome write failed, the process died, or it is still running). Reconcile these
+   * from outside, never retry them: the decision row consumed their one-use authorization, so a
+   * retry is DENY(authorization_consumed) anyway.
+   */
+  async indeterminate(): Promise<string[]> {
+    await this.ensureLoaded();
+    return [...this.decisionIds].filter((id) => !(this.byId.get(id) ?? []).some((r) => r.decision.executed));
   }
 }

@@ -435,14 +435,14 @@ describe('P0-I2 a failed durable write or receipt append means zero effect', () 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 describe('P0-I3 the class comes from registration, never from the request body', () => {
   describe('flag OFF (KERNEL_CAPABILITY_REGISTRY_ENABLED unset: the production default)', () => {
-    it.failing('[FAIL P0-I3-01] a payment closure filed as class "read" must not ALLOW without the spend checks (BREACHED: the class is the caller\'s word)', async () => {
+    it('[FAIL P0-I3-01] a payment closure filed as class "read" must not ALLOW without the spend checks (BREACHED: the class is the caller\'s word)', async () => {
       const h = await armed({}, { payees: [], per_tx_raw: '0', daily_raw: '0', total_raw: '0' }); // owner allows NO spend at all
       const pay = jest.fn(async () => 'MONEY MOVED');
       const out = await runUnderKernel(requestFor('read', { tool: { name: 'x402.pay', class: 'read' } }), pay, h.deps);
       expect(out.verdict).not.toBe('ALLOW');
       expect(pay).toHaveBeenCalledTimes(0);
     });
-    it.failing('[FAIL P0-I3-02] a publishing closure filed as class "other" must not ALLOW without HAL (BREACHED: HAL is never asked)', async () => {
+    it('[FAIL P0-I3-02] a publishing closure filed as class "other" must not ALLOW without HAL (BREACHED: HAL is never asked)', async () => {
       const halCheck = jest.fn(async () => hal({ verdict: 'VETO' }));
       const h = await armed({ halCheck });
       const publish = jest.fn(async () => 'POSTED');
@@ -595,7 +595,7 @@ describe('P0-I3 the class comes from registration, never from the request body',
   // identity (subject), policy (hash), action, expiry and nonce (supersession) are bound and are tested
   // in red-team.test.ts. Argument digest, attempt id and maximum uses are not part of the grant.
   describe('what a grant binds (blueprint I3)', () => {
-    it.failing('[FAIL P0-I3-16] a grant must bind the argument digest: one authorization must not cover two different argument digests (BREACHED: args_hash is recorded, not bound)', async () => {
+    it('[FAIL P0-I3-16] a grant must bind the argument digest: one authorization must not cover two different argument digests (BREACHED: args_hash is recorded, not bound)', async () => {
       const h = await armed();
       const tool = jest.fn(async () => 'ran');
       const a = await runUnderKernel(requestFor('read', { args_hash: hashArgs({ file: 'README.md' }) }), tool, h.deps);
@@ -806,7 +806,7 @@ describe('P0-VF an unknown or unavailable verifier is NOT_CHECKED, never a pass'
     }
   });
 
-  it.failing('[FAIL P0-VF-05] a HAL PASS whose method names no known verifier must not ALLOW a post (BREACHED: the kernel never checks `method`)', async () => {
+  it('[FAIL P0-VF-05] a HAL PASS whose method names no known verifier must not ALLOW a post (BREACHED: the kernel never checks `method`)', async () => {
     const h = await armed({ halCheck: async () => hal({ method: 'definitely-not-a-verifier' }) });
     const post = jest.fn(async () => 'POSTED');
     const out = await runUnderKernel(postRequest(), post, h.deps);
@@ -843,7 +843,7 @@ describe('P0-TK one-use tokens: concurrent race and replay', () => {
       expect(await present()).toMatchObject({ ok: false, code: 'replayed' });
     });
 
-    it.failing('[FAIL P0-TK-03] after a process restart a used approval must not verify again (BREACHED: the nonce memory is in-process; the source states a window of up to MAX_LIFETIME_S)', async () => {
+    it('[FAIL P0-TK-03] after a process restart a used approval must not verify again (BREACHED: the nonce memory is in-process; the source states a window of up to MAX_LIFETIME_S)', async () => {
       const { present } = await genuine();
       expect(await present()).toMatchObject({ ok: true });
       __resetOwnerAuthNonces(); // what a restart does to the in-memory nonce set
@@ -852,14 +852,14 @@ describe('P0-TK one-use tokens: concurrent race and replay', () => {
   });
 
   describe('kernel capability consumption (blueprint: one-use tokens consumed by compare-and-set)', () => {
-    it.failing('[FAIL P0-TK-04] 10 concurrent presentations of ONE authorized attempt must produce at most one effect (BREACHED: there is no consumption, 10 run)', async () => {
+    it('[FAIL P0-TK-04] 10 concurrent presentations of ONE authorized attempt must produce at most one effect (BREACHED: there is no consumption, 10 run)', async () => {
       const h = await armed();
       const tool = jest.fn(async () => 'ran');
       const attempt = requestFor('read', { args_hash: hashArgs({ attempt: 'a-1' }) });
       await Promise.all(Array.from({ length: 10 }, () => runUnderKernel(attempt, tool, h.deps)));
       expect(tool.mock.calls.length).toBeLessThanOrEqual(1);
     });
-    it.failing('[FAIL P0-TK-05] replaying an attempt after its effect must be refused (BREACHED: the grant has no attempt id and no use count)', async () => {
+    it('[FAIL P0-TK-05] replaying an attempt after its effect must be refused (BREACHED: the grant has no attempt id and no use count)', async () => {
       const h = await armed();
       const tool = jest.fn(async () => 'ran');
       const attempt = requestFor('read', { args_hash: hashArgs({ attempt: 'a-1' }) });

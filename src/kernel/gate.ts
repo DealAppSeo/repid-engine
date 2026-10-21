@@ -15,16 +15,21 @@
  *   - The tool is a closure the caller built around its own arguments. The kernel never receives
  *     them — only their hash — so neither the gate nor the ledger can leak what they were.
  *
- * NOT ATOMIC, AND SAYING SO. Cumulative spend is summed from receipts already written. Two calls in
- * flight at once can both read the same total. The receipt names this (`cumulative_total (no atomic
- * reservation)`); closing it needs a reservation row, which is a database change.
+ * DECIDED UNDER THE LEDGER LOCK. The evidence that comes from the ledger itself (spend already
+ * recorded, and whether this call's one-use authorization was already used) is re-read INSIDE the
+ * lock that writes the decision row, and decide() runs again on it there. So two calls in flight at
+ * once cannot both spend the last of a budget, and N presentations of one authorization (at once, in
+ * sequence, or after a restart) yield one ALLOW (P0-TK-04/05, P0-I3-16, RT-5). The lock is this
+ * process's: the API runs one replica. The receipt still carries `cumulative_total (no atomic
+ * reservation)`, which stays true across replicas.
  */
 import { randomUUID } from 'node:crypto';
 import { decide, parseKernelRequest } from './decide';
 import { loadPolicyEvidence } from './policy';
 import { logCapabilityRegistryEmpty, screenCapability, type ToolImplementation } from './capability-registry';
-import { DEFAULT_ENV, buildReceipt, validateReceipt } from './receipt';
+import { DEFAULT_ENV, authorizationKey, buildReceipt, receiptRequest, validateReceipt } from './receipt';
 import type {
+  AuthorizationState,
   CapabilityState,
   DecisionLeg,
   GateDeps,
@@ -34,6 +39,7 @@ import type {
   KernelReceipt,
   KernelRequest,
   KernelTool,
+  LedgerView,
   OwnerEvidence,
   PolicyEvidence,
   Reason,
@@ -43,12 +49,23 @@ import type {
 
 const DAY_S = 86_400;
 const HAL_VERDICTS = ['PASS', 'FLAG', 'VETO', 'ABSTAIN'];
+/**
+ * The verifiers whose answer the kernel will weigh: the HAL adapter's methods (hal-adapter.ts) and
+ * HAL's own fact-check mode (hal/service.ts). Any other `method` is a verifier the kernel does not
+ * know, so its PASS is NOT_CHECKED, never a pass (P0-VF-05).
+ */
+export const KNOWN_HAL_METHODS: ReadonlySet<string> = new Set([
+  'hal-fact-check/cross-llm-quorum',
+  'hal-fact-check/no-deliverable',
+  'fact-check',
+]);
 const WALLET = /^0x[0-9a-fA-F]{40}$/;
 
 export interface Assessment {
   request: KernelRequest;
   owner: OwnerEvidence;
   policy: PolicyEvidence;
+  spent: SpentEvidence;
   hal: HalState;
   capability: CapabilityState;
   /**
@@ -96,12 +113,19 @@ function validHal(ev: unknown): ev is HalEvidence {
 }
 
 async function gatherHal(deps: GateDeps, req: KernelRequest, worthAsking: boolean): Promise<HalState> {
-  if (req.tool.class !== 'post') return { state: 'not_needed' };
+  // Flag OFF (no registry) a `read` or `other` is caller-asserted: an `other` needs HAL like a post, a
+  // `read` is screened when HAL is wired (decide.ts UNVERIFIED_CLASS_CHECKS, P0-I3-02).
+  const cls = req.tool.class;
+  const unverified = !deps.capabilityRegistry && (cls === 'read' || cls === 'other');
+  if (cls !== 'post' && !unverified) return { state: 'not_needed' };
+  if (cls === 'read' && !deps.halCheck) return { state: 'not_needed' };
   if (!worthAsking) return { state: 'not_needed' }; // already blocked upstream; do not spend a HAL call on it
   if (!deps.halCheck) return { state: 'not_checked', detail: 'HAL is not wired to the kernel' };
   try {
     const ev = await deps.halCheck(req);
-    return validHal(ev) ? { state: 'consulted', evidence: ev } : { state: 'not_checked', detail: 'HAL returned an unreadable answer' };
+    if (!validHal(ev)) return { state: 'not_checked', detail: 'HAL returned an unreadable answer' };
+    if (!KNOWN_HAL_METHODS.has(String(ev.method))) return { state: 'not_checked', detail: 'HAL answered through a verifier the kernel does not know' };
+    return { state: 'consulted', evidence: ev };
   } catch {
     return { state: 'not_checked', detail: 'HAL could not be reached' };
   }
@@ -188,7 +212,30 @@ export async function assess(request: KernelRequest, deps: GateDeps, candidate?:
   const { capability, run: capabilityRun } = gatherCapability(deps, request, policy, candidate);
 
   const decision = decide({ request, now_s: Math.floor(now / 1000), owner, policy, spent, hal, capability });
-  return { request, owner, policy, hal, capability, capabilityRun, decision, now };
+  return { request, owner, policy, spent, hal, capability, capabilityRun, decision, now };
+}
+
+/**
+ * decide() again, INSIDE the ledger lock, on the ledger's state as of this append: the spend already
+ * reserved and whether the authorization was already used. A ledger that shows no view cannot rule
+ * out a replay, so the authorization is NOT_CHECKED and the call is refused.
+ */
+function decideUnderLock(a: Assessment, view: LedgerView | undefined): DecisionLeg {
+  const { request, policy } = a;
+  let spent = a.spent;
+  let authorization: AuthorizationState | undefined;
+  if (policy.state === 'loaded') {
+    if (!view) {
+      authorization = { state: 'not_checked', detail: 'this ledger cannot say whether the authorization was already used' };
+    } else {
+      const key = authorizationKey(request.agent.agent_id, receiptRequest(request), policy.policy_hash, a.capability.state !== 'not_enforced');
+      authorization = view.consumed(key) ? { state: 'consumed' } : { state: 'unused' };
+      if (spent.state === 'ok') {
+        spent = { state: 'ok', ...view.spentTotals({ agent_id: request.agent.agent_id, policy_hash: policy.policy_hash, since_s: Math.floor(a.now / 1000) - DAY_S }) };
+      }
+    }
+  }
+  return decide({ request, now_s: Math.floor(a.now / 1000), owner: a.owner, policy, spent, hal: a.hal, capability: a.capability, authorization });
 }
 
 /** Objects, arrays, and functions. Null and scalars are not opaque. */
@@ -237,35 +284,37 @@ export async function runUnderKernel<T>(
   const receiptId = newId();
   const createdAt = new Date(a.now).toISOString();
 
-  // 1. Write the decision down FIRST. No row, no run.
+  // 1. Decide again under the ledger lock, and write the decision down FIRST. No row, no run.
+  let decision = a.decision;
   let decisionRow: KernelReceipt;
   try {
-    decisionRow = await deps.ledger.appendReceipt((tip) =>
-      buildReceipt({
+    decisionRow = await deps.ledger.appendReceipt((tip, view) => {
+      decision = decideUnderLock(a, view);
+      return buildReceipt({
         receipt_id: receiptId,
         prev: tip,
         created_at: createdAt,
         env,
         request: a.request,
         owner: a.owner,
-        decision: a.decision,
+        decision,
         executed: false,
         phase: 'decision',
         hal: a.hal,
-      }),
-    );
+      });
+    });
   } catch {
-    const reasons: Reason[] = [...a.decision.reasons, { code: 'receipt_write_failed', detail: 'the decision could not be written to the ledger, so nothing was run' }];
-    return refused(a.decision.verdict === 'DENY' ? 'DENY' : 'NOT_CHECKED', reasons);
+    const reasons: Reason[] = [...decision.reasons, { code: 'receipt_write_failed', detail: 'the decision could not be written to the ledger, so nothing was run' }];
+    return refused(decision.verdict === 'DENY' ? 'DENY' : 'NOT_CHECKED', reasons);
   }
 
   // 2. DENY and NOT_CHECKED stop here. The tool is not called.
-  if (a.decision.verdict !== 'ALLOW') {
+  if (decision.verdict !== 'ALLOW') {
     return {
-      verdict: a.decision.verdict,
+      verdict: decision.verdict,
       blocking: true,
       executed: false,
-      reasons: a.decision.reasons,
+      reasons: decision.reasons,
       persisted: true,
       decision_receipt: decisionRow,
       final_receipt: decisionRow,
@@ -311,11 +360,11 @@ export async function runUnderKernel<T>(
 
   const outcomeDecision: DecisionLeg =
     toolError === undefined
-      ? a.decision
+      ? decision
       : {
-          ...a.decision,
+          ...decision,
           reasons: [
-            ...a.decision.reasons,
+            ...decision.reasons,
             toolError === 'OpaqueReturn'
               ? { code: 'tool_error', detail: 'the tool returned an opaque value; the value was withheld' }
               : { code: 'tool_error', detail: `the tool ran and threw (${toolError})` },

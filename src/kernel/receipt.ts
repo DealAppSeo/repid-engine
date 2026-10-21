@@ -19,7 +19,7 @@
  */
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { canonicalJson } from '../services/owner-authorization';
-import { CAPABILITY_ENFORCED_CHECK, CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, parseAmountRaw } from './decide';
+import { CALLER_ASSERTED_CLASS_NOTE, CAPABILITY_ENFORCED_CHECK, CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, UNVERIFIED_CLASS_CHECKS, parseAmountRaw } from './decide';
 import type {
   ChainTip,
   DecisionLeg,
@@ -162,6 +162,36 @@ export function buildPaymentLeg(args: {
   };
 }
 
+// ── the one-use authorization ───────────────────────────────────────────────────────────────────
+
+/**
+ * The ONE-USE AUTHORIZATION a call consumes (P0-TK-04/05, P0-I3-16). An ALLOW decision row consumes
+ * its key, and the ledger refuses a second ALLOW decision row with the same key (store.ts), so a
+ * replay — sequential, concurrent, or after a restart — is refused. What one authorization covers:
+ *   spend, post   ONE use per argument digest per agent, for good (spec §4: the agreement's digest).
+ *                 The key is the agent and the digest alone: never the tool name, class, asset label,
+ *                 chain id, amount or payee, which a caller can vary without changing the payment
+ *                 (XC1-TK-07, -08), and never the policy hash, which the owner's next policy version
+ *                 changes: a digest already used stays used under every later policy (XC1-R3-06).
+ *                 Spend and post share it, because flag OFF the class is the caller's word. Each use
+ *                 is also bound by the spend budget and payee list, or by HAL's verdict on that post.
+ *   read, other   nothing binds their arguments, so the owner's grant covers ONE run per policy
+ *                 version: one per bound implementation under the registry (by the id it resolves to:
+ *                 the registry trims), one in all without it (a caller-chosen tool name is not an
+ *                 authorization). The next run needs the owner's next policy (a higher nonce).
+ * `enforced` is whether the capability registry decided the call (the receipt carries the marker).
+ */
+export function authorizationKey(agentId: string, req: ReceiptRequest, policyHash: string, enforced: boolean): string {
+  const policy_hash = policyHash.toLowerCase();
+  const scope =
+    req.tool.class === 'spend' || req.tool.class === 'post'
+      ? { effect: req.args_hash.toLowerCase() }
+      : enforced
+        ? { policy_hash, impl: req.tool.name.trim() }
+        : { policy_hash, unclassified: true };
+  return keccak256(toUtf8Bytes(canonicalJson({ v: 1, agent_id: agentId, ...scope })));
+}
+
 // ── building ────────────────────────────────────────────────────────────────────────────────────
 
 export interface BuildReceiptInput {
@@ -182,7 +212,7 @@ export interface BuildReceiptInput {
   observation?: PaymentObservation | undefined;
 }
 
-function receiptRequest(req: KernelRequest): ReceiptRequest {
+export function receiptRequest(req: KernelRequest): ReceiptRequest {
   const cls: ToolClass = (TOOL_CLASSES as readonly string[]).includes(req.tool.class) ? req.tool.class : 'other';
   const amt = parseAmountRaw(req.amount_raw);
   return {
@@ -257,7 +287,8 @@ export type InvariantCode =
   | 'does_not_attest_missing_cumulative_total'
   | 'does_not_attest_missing_total_scope'
   | 'simulation_mismatch'
-  | 'settlement_unmeasured';
+  | 'settlement_unmeasured'
+  | 'tool_class_unattested';
 
 export interface ReceiptViolation {
   code: InvariantCode;
@@ -430,7 +461,9 @@ export function validateReceipt(receipt: unknown, ctx: ValidateContext = {}): Re
     for (const c of d.checks) {
       if (c.outcome !== 'PASS') add('allow_with_unresolved_check', `decision.checks.${c.name}`, `ALLOW with a ${c.outcome} check`);
     }
-    for (const name of REQUIRED_CHECKS[r.request.tool.class]) {
+    const cls = r.request.tool.class;
+    const unverified = d.does_not_attest.includes(CALLER_ASSERTED_CLASS_NOTE) && (cls === 'read' || cls === 'other') ? UNVERIFIED_CLASS_CHECKS[cls] : [];
+    for (const name of [...REQUIRED_CHECKS[cls], ...unverified]) {
       if (d.checks.find((c) => c.name === name)?.outcome !== 'PASS') add('allow_missing_required_check', `decision.checks.${name}`, 'ALLOW without a passing required check');
     }
     // Draft 4. The marker is recorded only when enforcement is on. An ALLOW that still carries it
@@ -443,6 +476,12 @@ export function validateReceipt(receipt: unknown, ctx: ValidateContext = {}): Re
     }
   } else if (d.reasons.length === 0) {
     add('refusal_without_reason', 'decision.reasons', 'a DENY or NOT_CHECKED must say why');
+  }
+
+  // Every receipt either says its class is caller-asserted (flag OFF) or carries the enforcement
+  // marker (flag ON). Neither means the enforcement rows were stripped (P0-RS-02/03).
+  if (!d.does_not_attest.includes(CALLER_ASSERTED_CLASS_NOTE) && !d.checks.some((c) => c.name === CAPABILITY_ENFORCED_CHECK)) {
+    add('tool_class_unattested', 'decision.checks.capability_enforced', 'a receipt must disclaim its class as caller-asserted or carry the enforcement marker');
   }
 
   // (5) a vote alone is PROVISIONAL; SETTLED needs a settler

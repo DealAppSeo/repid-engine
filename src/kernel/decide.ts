@@ -197,6 +197,19 @@ export const REQUIRED_CHECKS: Readonly<Record<ToolClass, readonly string[]>> = {
 };
 
 /**
+ * FLAG OFF THE CLASS IS THE CALLER'S WORD (P0-I3-01/02). A call filed as `read` or `other` could be a
+ * payment or a post in disguise, so it is held to the gates of what it could be: `spend_authority`
+ * (the owner authorized spending at all: a spend action, a payee and a nonzero per-transaction limit)
+ * and, for `other` — an effect the kernel has no class for — HAL as well. A `read` is screened by HAL
+ * when HAL is wired. Under the registry (flag ON) the class is bound at registration and this table
+ * does not apply. receipt.ts reads it too, so a flag-OFF ALLOW without these rows is refused.
+ */
+export const UNVERIFIED_CLASS_CHECKS: Readonly<Record<'read' | 'other', readonly string[]>> = {
+  read: ['spend_authority'],
+  other: ['spend_authority', 'hal_verdict'],
+};
+
+/**
  * Present on a decision only when the capability registry is wired (flag ON). Receipt validation
  * treats an ALLOW that carries this check and lacks a PASS `capability` row as invalid. Flag-OFF
  * decisions omit it, so their bytes stay identical to the frozen golden. It is not in
@@ -214,10 +227,16 @@ export const CUMULATIVE_TOTAL_NOTE = 'cumulative_total (no atomic reservation)';
  */
 export const TOTAL_CAP_SCOPE_NOTE =
   'total_cap_scope (the total limit is per policy version, not lifetime: it is keyed to the policy hash, which includes the nonce, so it resets when a policy is superseded)';
+/**
+ * Flag OFF, the class is the caller's word and the receipt says so. Under enforcement the registry
+ * checked it, so the line is left out — and validateReceipt then requires the enforcement marker. A
+ * receipt that neither disclaims the class nor carries the marker has had its rows stripped (P0-RS-02/03).
+ */
+export const CALLER_ASSERTED_CLASS_NOTE = 'tool_class (caller-asserted; there is no tool registry in the MVP)';
 const STANDING_DOES_NOT_ATTEST = [
   CUMULATIVE_TOTAL_NOTE,
   TOTAL_CAP_SCOPE_NOTE,
-  'tool_class (caller-asserted; there is no tool registry in the MVP)',
+  CALLER_ASSERTED_CLASS_NOTE,
   'explicit_revocation (revocation is supersession by a higher nonce inside this ledger only)',
   'laya (shadow mode; not consulted)',
   'receipt_signature (unsigned in the MVP; integrity is the hash and the chain)',
@@ -372,6 +391,21 @@ export function decide(input: DecideInput): DecisionLeg {
     }
   }
 
+  const cap = input.capability;
+  const enforcementOn = !!cap && (cap.state === 'enforced' || cap.state === 'not_checked');
+  const classUnverified = !enforcementOn && (cls === 'read' || cls === 'other');
+
+  // 4.5 a caller-asserted read/other: did the owner authorize spending at all? (UNVERIFIED_CLASS_CHECKS)
+  // Recorded only from a verified policy; without one the verdict cannot be ALLOW anyway.
+  if (classUnverified && verified && policy.state === 'loaded') {
+    const p = policy.policy;
+    const canSpend = p.actions.includes('spend') && (p.payees ?? []).length > 0 && perTx > 0n;
+    record('spend_authority', canSpend ? 'PASS' : 'FAIL', 'kernel/decide', canSpend ? undefined : {
+      code: 'class_unverified',
+      detail: "the class is the caller's word (no tool registry): an unclassified call runs only under a policy that authorizes spending (a spend action, a payee and a nonzero per-transaction limit)",
+    });
+  }
+
   // 5. spend ------------------------------------------------------------------------------------
   if (cls === 'spend') {
     const amt = parseAmountRaw(request.amount_raw);
@@ -434,8 +468,9 @@ export function decide(input: DecideInput): DecisionLeg {
     }
   }
 
-  // 6. post -------------------------------------------------------------------------------------
-  if (cls === 'post') {
+  // 6. post (and a caller-asserted `other`, or a `read` HAL was asked about) ----------------------
+  const halRow = cls === 'post' || (classUnverified && (cls === 'other' || hal.state !== 'not_needed'));
+  if (halRow) {
     if (hal.state === 'consulted') {
       const v = hal.evidence.verdict;
       if (v === 'PASS') record('hal_verdict', 'PASS', 'hal');
@@ -461,8 +496,6 @@ export function decide(input: DecideInput): DecisionLeg {
   // runUnderKernel runs the REGISTERED implementation rather than the caller's closure. This decision
   // (resolve + authorize + prohibit by the owner-signed binding) and that call-site reference-equality
   // together close the closure swap.
-  const cap = input.capability;
-  const enforcementOn = !!cap && (cap.state === 'enforced' || cap.state === 'not_checked');
   // Marker first, then the outcome row. Stripping the outcome row leaves the marker, and
   // validateReceipt then refuses the ALLOW. OFF (not_enforced / absent) records neither.
   if (enforcementOn) record(CAPABILITY_ENFORCED_CHECK, 'PASS', 'kernel/capability-registry');
@@ -482,6 +515,15 @@ export function decide(input: DecideInput): DecisionLeg {
     });
   }
 
+  // 6.6 the one-use authorization (P0-TK-04/05, P0-I3-16). Recorded only when it is NOT usable, so a
+  // first use is byte-unchanged; the ALLOW decision row itself is the consumption (store.ts).
+  const auth = input.authorization;
+  if (auth?.state === 'consumed') {
+    record('authorization_unused', 'FAIL', 'ledger', { code: 'authorization_consumed', detail: 'this authorization was already used; a replay is refused (see receipt.ts authorizationKey for what one authorization covers)' });
+  } else if (auth?.state === 'not_checked') {
+    record('authorization_unused', 'NOT_CHECKED', 'ledger', { code: 'authorization_not_checked', detail: auth.detail });
+  }
+
   // 7. the verdict: starts at DENY, ALLOW has to be earned ---------------------------------------
   const anyFail = checks.some((c) => c.outcome === 'FAIL');
   const anyNotChecked = checks.some((c) => c.outcome === 'NOT_CHECKED');
@@ -492,9 +534,12 @@ export function decide(input: DecideInput): DecisionLeg {
   // receipt.ts tell an enforced ALLOW from a shadow one without a schema change.
   const capabilityRequired = input.capability?.state === 'enforced';
   const required: readonly string[] = classKnown
-    ? capabilityRequired
-      ? [...REQUIRED_CHECKS[cls], 'capability']
-      : REQUIRED_CHECKS[cls]
+    ? [
+        ...REQUIRED_CHECKS[cls],
+        ...(capabilityRequired ? ['capability'] : []),
+        ...(classUnverified ? UNVERIFIED_CLASS_CHECKS[cls as 'read' | 'other'] : []),
+        ...(classUnverified && halRow ? ['hal_verdict'] : []),
+      ]
     : [];
   const everyRequiredPassed =
     classKnown && wellformed && required.every((name) => checks.find((c) => c.name === name)?.outcome === 'PASS');
@@ -508,7 +553,7 @@ export function decide(input: DecideInput): DecisionLeg {
   }
 
   // 8. what this decision does not establish -----------------------------------------------------
-  const doesNotAttest: string[] = [...STANDING_DOES_NOT_ATTEST];
+  const doesNotAttest: string[] = STANDING_DOES_NOT_ATTEST.filter((n) => !(enforcementOn && n === CALLER_ASSERTED_CLASS_NOTE));
   if (cls === 'post') {
     if (hal.state !== 'consulted' || hal.evidence.verdict === 'ABSTAIN') doesNotAttest.push('hal_content_verdict (HAL did not answer)');
     else if (hal.evidence.settled_by === null) doesNotAttest.push('verification_settled (votes alone are PROVISIONAL; no holdout, known answer or person settled it)');

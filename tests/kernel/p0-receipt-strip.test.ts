@@ -14,7 +14,7 @@
  */
 import { Wallet } from 'ethers';
 import { createCapabilityRegistry } from '../../src/kernel/capability-registry';
-import { CAPABILITY_ENFORCED_CHECK } from '../../src/kernel/decide';
+import { CALLER_ASSERTED_CLASS_NOTE, CAPABILITY_ENFORCED_CHECK } from '../../src/kernel/decide';
 import { runUnderKernel } from '../../src/kernel/gate';
 import { POLICY_DOMAIN_V2, POLICY_TYPES_V2, policyTypedValueV2 } from '../../src/kernel/policy';
 import { hashArgs, receiptHash, validateReceipt, verifyReceiptChain } from '../../src/kernel/receipt';
@@ -32,6 +32,17 @@ const ENFORCEMENT_ROWS = new Set(['capability', CAPABILITY_ENFORCED_CHECK]);
 const stripEnforcement = (r: KernelReceipt): KernelReceipt => {
   const c = clone(r);
   c.decision.checks = c.decision.checks.filter((x) => !ENFORCEMENT_ROWS.has(x.name));
+  return c;
+};
+// CC1 2026-10-21: since the kernel fix, an enforced receipt no longer carries the flag-OFF class
+// disclaimer, so the strip alone fails validateReceipt. The residual a forger still has is to ADD the
+// disclaimer back, which makes the forgery a self-consistent flag-OFF receipt. The CHARACTERISE pins
+// below now pin that residual.
+const asFlagOff = (r: KernelReceipt): KernelReceipt => {
+  const c = stripEnforcement(r);
+  if (!c.decision.does_not_attest.includes(CALLER_ASSERTED_CLASS_NOTE)) c.decision.does_not_attest.splice(2, 0, CALLER_ASSERTED_CLASS_NOTE);
+  // ...and, since P0-I3-01's fix, the flag-OFF read row a self-consistent flag-OFF ALLOW carries.
+  c.decision.checks.push({ name: 'spend_authority', outcome: 'PASS', source: 'forged' });
   return c;
 };
 
@@ -85,14 +96,14 @@ describe('P0-RS a receipt with BOTH the capability row and the capability_enforc
     if (!v.ok) expect(v.errors.map((e) => e.path)).toContain('decision.checks.capability');
   });
 
-  it.failing('[FAIL P0-RS-02] stripping BOTH rows from an enforced ALLOW and resealing must not validate (BREACHED: #1358\'s concession, proven)', async () => {
+  it('[FAIL P0-RS-02] stripping BOTH rows from an enforced ALLOW and resealing must not validate (BREACHED: #1358\'s concession, proven)', async () => {
     const { allow } = await enforcedLedger();
     expect(validateReceipt(reseal(stripEnforcement(allow.decision_receipt!))).ok).toBe(false);
   });
   it('CHARACTERISE P0-RS-02: the stripped, resealed ALLOW validates and reads as a flag-OFF receipt; only its hash differs from the original', async () => {
     const { allow } = await enforcedLedger();
     const original = allow.decision_receipt!;
-    const forged = reseal(stripEnforcement(original));
+    const forged = reseal(asFlagOff(original));
     expect(validateReceipt(forged)).toEqual({ ok: true });
     expect(forged.decision.checks.some((c) => ENFORCEMENT_ROWS.has(c.name))).toBe(false);
     expect(forged.header.receipt_hash).not.toBe(original.header.receipt_hash);
@@ -101,7 +112,7 @@ describe('P0-RS a receipt with BOTH the capability row and the capability_enforc
 
   // Further than the concession: the stripped rows were the ONLY failing checks on a capability DENY,
   // because every REQUIRED_CHECKS row for a read already passed. Flip the verdict and it is a valid ALLOW.
-  it.failing('[FAIL P0-RS-03] an enforced capability DENY rewritten into an ALLOW (rows and reasons stripped, verdict flipped) and resealed must not validate (BREACHED)', async () => {
+  it('[FAIL P0-RS-03] an enforced capability DENY rewritten into an ALLOW (rows and reasons stripped, verdict flipped) and resealed must not validate (BREACHED)', async () => {
     const { deny } = await enforcedLedger();
     const c = stripEnforcement(deny.decision_receipt!);
     c.decision.verdict = 'ALLOW';
@@ -112,7 +123,7 @@ describe('P0-RS a receipt with BOTH the capability row and the capability_enforc
   it('CHARACTERISE P0-RS-03: the rewritten DENY validates as an ALLOW for a tool the registry refused', async () => {
     const { deny } = await enforcedLedger();
     expect(deny.decision_receipt!.decision.reasons.map((r) => r.code)).toContain('unregistered_tool');
-    const c = stripEnforcement(deny.decision_receipt!);
+    const c = asFlagOff(deny.decision_receipt!);
     c.decision.verdict = 'ALLOW';
     c.decision.blocking = false;
     c.decision.reasons = [];

@@ -13,7 +13,7 @@
  */
 import { Wallet } from 'ethers';
 import * as decideModule from '../decide';
-import { CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, decide, parseAmountRaw } from '../decide';
+import { CALLER_ASSERTED_CLASS_NOTE, CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, decide, parseAmountRaw } from '../decide';
 import { runUnderKernel } from '../gate';
 import { POLICY_DOMAIN, POLICY_TYPES, parsePolicy, policyHash, policyTypedValue } from '../policy';
 import { hashArgs, validateReceipt, verifyReceiptChain } from '../receipt';
@@ -391,10 +391,14 @@ describe('(e) the payee allow-list: default deny, like the limits', () => {
   });
 
   it('is a spend gate only: a post or a read is not asked for a payee', async () => {
-    const h = harness({ halCheck: async () => ({ verdict: 'PASS', method: 'm', votes: [], settled_by: null, grounded: true, same_domain: true }) });
+    const h = harness({ halCheck: async () => ({ verdict: 'PASS', method: 'fact-check', votes: [], settled_by: null, grounded: true, same_domain: true }) });
     await h.ledger.appendPolicy(await signedPolicy(h.owner, { payees: [] }), iso);
     expect((await runUnderKernel(postRequest(), jest.fn(async () => 'ok'), h.deps)).verdict).toBe('ALLOW');
-    expect((await runUnderKernel({ ...postRequest(), tool: { name: 'fs.read', class: 'read' } }, jest.fn(async () => 1), h.deps)).verdict).toBe('ALLOW');
+    // CC1 2026-10-21 (P0-I3-01): flag OFF a read is caller-asserted, so it IS held to the owner's spend
+    // authority, and an empty payee list means the owner authorized no spending: the read is refused.
+    const read = await runUnderKernel({ ...postRequest(), tool: { name: 'fs.read', class: 'read' } }, jest.fn(async () => 1), h.deps);
+    expect(read.verdict).toBe('DENY');
+    expect(codes(read)).toEqual(['class_unverified']);
   });
 
   it('the payee gate is one of the checks an ALLOW spend needs: dropping it from a receipt invalidates the receipt', () => {
@@ -404,7 +408,7 @@ describe('(e) the payee allow-list: default deny, like the limits', () => {
 
 describe('(f) the receipt does not let a resetting cap read as a lifetime one', () => {
   it('every kind of call says the total cap is per policy version and resets on supersession', async () => {
-    const h = harness({ halCheck: async () => ({ verdict: 'PASS', method: 'm', votes: [], settled_by: null, grounded: true, same_domain: true }) });
+    const h = harness({ halCheck: async () => ({ verdict: 'PASS', method: 'fact-check', votes: [], settled_by: null, grounded: true, same_domain: true }) });
     await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
     const receipts: KernelReceipt[] = [];
     for (const [req, tool] of [
@@ -432,7 +436,8 @@ describe('(f) the receipt does not let a resetting cap read as a lifetime one', 
     expect((await runUnderKernel(spendRequest({ amount_raw: 600 }), async () => 'ok', h.deps)).verdict).toBe('ALLOW');
     expect((await runUnderKernel(spendRequest({ amount_raw: 600 }), async () => 'ok', h.deps)).decision_receipt!.decision.limits.binding_term).toBe('total');
     await h.ledger.appendPolicy(await signedPolicy(h.owner, { nonce: '2', per_tx_raw: '600', daily_raw: '100000', total_raw: '1000' }), iso);
-    const afterSupersession = await runUnderKernel(spendRequest({ amount_raw: 600 }), async () => 'ok', h.deps);
+    // CC1 2026-10-21 (XC1-R3-06): a used digest stays used across policy versions, so the reset is shown with a new one.
+    const afterSupersession = await runUnderKernel(spendRequest({ amount_raw: 600, args_hash: hashArgs({ call: 'after-supersession' }) }), async () => 'ok', h.deps);
     expect(afterSupersession.verdict).toBe('ALLOW'); // the same 1000 total, spent again: it reset
   });
 });
@@ -442,7 +447,7 @@ describe('(f) the receipt does not let a resetting cap read as a lifetime one', 
 describe('(c) a post needs HAL, and HAL abstaining is NOT_CHECKED', () => {
   const hal = (over: Partial<HalEvidence> = {}): HalEvidence => ({
     verdict: 'PASS',
-    method: 'cross-llm-quorum',
+    method: 'hal-fact-check/cross-llm-quorum',
     votes: [
       { family: 'anthropic', verdict: 'PASS' },
       { family: 'openai', verdict: 'PASS' },
@@ -681,7 +686,8 @@ describe('a receipt-write failure means the tool does NOT run', () => {
   it('concurrent calls cannot fork the chain', async () => {
     const h = harness();
     await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
-    await Promise.all(Array.from({ length: 8 }, () => runUnderKernel(spendRequest({ amount_raw: 1 }), async () => 'ok', h.deps)));
+    // Eight DISTINCT calls (CC1 2026-10-21: eight identical ones are now one use and seven replays).
+    await Promise.all(Array.from({ length: 8 }, (_, i) => runUnderKernel(spendRequest({ amount_raw: 1, args_hash: hashArgs({ call: i }) }), async () => 'ok', h.deps)));
     const receipts = h.sink.records.flatMap((r) => (r.kind === 'receipt' ? [r.receipt] : []));
     expect(receipts).toHaveLength(16);
     expect(verifyReceiptChain(receipts)).toEqual({ ok: true });
@@ -757,7 +763,7 @@ describe('(d) non-vacuity: a default-allow decide must make the refusal demo FAI
   /** A decide() that approves everything AND forges a clean-looking trail, to get past the ledger. */
   const forgedAllow = (): DecisionLeg => ({
     ...lazyAllow(),
-    does_not_attest: [CUMULATIVE_TOTAL_NOTE, TOTAL_CAP_SCOPE_NOTE],
+    does_not_attest: [CUMULATIVE_TOTAL_NOTE, TOTAL_CAP_SCOPE_NOTE, CALLER_ASSERTED_CLASS_NOTE],
     checks: allCheckNames('spend'),
     policy: { policy_hash: null, signer: null, signature: 'VERIFIED', expires_at: null, revocation: 'VERIFIED' },
     limits: { per_tx_raw: '1000000000', daily_raw: '1000000000', total_raw: '1000000000', effective_per_tx_raw: '1000000000', binding_term: 'per_tx' },
