@@ -97,6 +97,77 @@ describe('assertLocalDataStore — the shared connection-egress gate', () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// DATABASE_URL is classified by the host `pg` will DIAL, not by new URL().hostname.
+// pg runs pg-connection-string's parse() on the connection string, and parse() lets a
+// `?host=` query parameter override the URL authority (last one wins). Before this fix
+// the guard saw 127.0.0.1 while pg connected to evil.example.
+// ══════════════════════════════════════════════════════════════════════════════
+describe('assertLocalDataStore(DATABASE_URL) classifies the host pg dials', () => {
+  const HOST_OVERRIDE = 'postgresql://u:p@127.0.0.1:5432/db?host=evil.example';
+
+  test('pg itself dials the ?host= value (why the guard must parse like pg)', () => {
+    const { Client } = require('pg');
+    expect(new Client({ connectionString: HOST_OVERRIDE }).host).toBe('evil.example');
+  });
+
+  test('the guard parses with the same pg-connection-string module pg loads', () => {
+    const pgDir = require('path').dirname(require.resolve('pg'));
+    expect(require.resolve('pg-connection-string')).toBe(require.resolve('pg-connection-string', { paths: [pgDir] }));
+  });
+
+  test.each([
+    HOST_OVERRIDE,
+    'postgresql://u:p@localhost/db?host=10.0.0.1.nip.io',
+    'postgresql://u:p@127.0.0.1:5432/db?host=127.0.0.1&host=evil.example', // last ?host= wins
+    'postgresql://u:p@/db?host=evil.example',
+    // No host at all: pg falls back to PGHOST / 'localhost' at connect time, which is not provable here.
+    'postgresql:///db',
+    // pg dials a '/'-prefixed host as a socket path; '//x/…' and '/\x\…' are Windows UNC paths,
+    // i.e. a named pipe on machine x (loopback-checked: '//localhost/pipe/p' reaches \\.\pipe\p).
+    'postgresql://u:p@127.0.0.1:5432/db?host=//evil.example/pipe',
+    'postgresql://u:p@127.0.0.1:5432/db?host=/%5Cevil.example%5Cpipe',
+  ])('REFUSES %s', (cs) => {
+    expect(() => assertLocalDataStore(cs, 'DATABASE_URL', true)).toThrow(EgressBoundaryError);
+  });
+
+  test.each([
+    'postgresql://u:p@127.0.0.1:5432/db',
+    'postgresql://u:p@[::1]:5432/db',
+    'postgresql://u:p@127.0.0.1:5432/db?host=127.0.0.1',
+    'postgresql://u:p@db.remote.example:5432/db?host=127.0.0.1', // pg dials 127.0.0.1, so local
+    'postgresql://u:p@127.0.0.1:5432/db?host=/var/run/postgresql', // Unix socket: a file on this box
+  ])('stays local: %s', (cs) => {
+    expect(() => assertLocalDataStore(cs, 'DATABASE_URL', true)).not.toThrow();
+  });
+
+  test('the refusal names the host pg would have dialled', () => {
+    try {
+      assertLocalDataStore(HOST_OVERRIDE, 'DATABASE_URL', true);
+      throw new Error('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(EgressBoundaryError);
+      expect((e as EgressBoundaryError).decision.host).toBe('evil.example');
+    }
+  });
+
+  test('boundary OFF: the override is not inspected (hosted behavior unchanged)', () => {
+    expect(() => assertLocalDataStore(HOST_OVERRIDE, 'DATABASE_URL', false)).not.toThrow();
+  });
+
+  test('REDIS_URL re-check: ioredis keeps the URL host over ?host=, and so does the guard', () => {
+    const Redis = require('ioredis');
+    const url = 'redis://127.0.0.1:6379?host=evil.example';
+    const client = new Redis(url, { lazyConnect: true });
+    try {
+      expect(client.options.host).toBe('127.0.0.1');
+    } finally {
+      client.disconnect();
+    }
+    expect(() => assertLocalDataStore(url, 'REDIS_URL', true)).not.toThrow();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 // (1) DIRECT-PG — getPgPool refuses a remote DATABASE_URL under the boundary.
 // ══════════════════════════════════════════════════════════════════════════════
 describe('direct-pg getPgPool: DATABASE_URL egress boundary', () => {
@@ -115,6 +186,16 @@ describe('direct-pg getPgPool: DATABASE_URL egress boundary', () => {
     clearEnv();
     process.env.ONLY_ATTESTATIONS_LEAVE = 'true';
     process.env.DATABASE_URL = REMOTE_PG;
+    const { getPgPool } = require('../src/db/direct-pg');
+    const { EgressBoundaryError: EBE } = require('../src/selfhost/egress-guard');
+    expect(() => getPgPool()).toThrow(EBE);
+  });
+
+  test('REFUSES a local-looking DATABASE_URL whose ?host= points pg elsewhere', () => {
+    jest.resetModules();
+    clearEnv();
+    process.env.ONLY_ATTESTATIONS_LEAVE = 'true';
+    process.env.DATABASE_URL = 'postgresql://u:p@127.0.0.1:5432/db?host=evil.example';
     const { getPgPool } = require('../src/db/direct-pg');
     const { EgressBoundaryError: EBE } = require('../src/selfhost/egress-guard');
     expect(() => getPgPool()).toThrow(EBE);
