@@ -1,0 +1,3 @@
+# Sealed evaluation packages are hashed byte for byte (FORMAT.md). Never convert line endings:
+# with core.autocrlf=true a Windows checkout would rewrite LF to CRLF and every hash would break.
+* -text
