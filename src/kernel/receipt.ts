@@ -162,6 +162,31 @@ export function buildPaymentLeg(args: {
   };
 }
 
+// ── the one-use authorization ───────────────────────────────────────────────────────────────────
+
+/**
+ * The ONE-USE AUTHORIZATION a call consumes (P0-TK-04/05, P0-I3-16). An ALLOW decision row consumes
+ * its key, and the ledger refuses a second ALLOW decision row with the same key (store.ts), so a
+ * replay — sequential, concurrent, or after a restart — is refused. What one authorization covers:
+ *   spend, post   the exact request under the policy: one use per argument digest. Each use is also
+ *                 bound by the spend budget and payee list, or by HAL's verdict on that post.
+ *   read, other   nothing binds their arguments, so the owner's grant covers ONE run per policy
+ *                 version: one per bound implementation under the registry, one in all without it (a
+ *                 caller-chosen tool name is not an authorization). The next run needs the owner's
+ *                 next policy (a higher nonce, so a new policy hash).
+ * `enforced` is whether the capability registry decided the call (the receipt carries the marker).
+ */
+export function authorizationKey(agentId: string, req: ReceiptRequest, policyHash: string, enforced: boolean): string {
+  const lower = (v: string | null): string | null => (v === null ? null : v.toLowerCase());
+  const scope =
+    req.tool.class === 'spend' || req.tool.class === 'post'
+      ? { tool: req.tool, args_hash: req.args_hash, amount_raw: req.amount_raw, payee: lower(req.payee), asset: lower(req.asset), chain_id: req.chain_id }
+      : enforced
+        ? { impl: req.tool.name.trim() }
+        : { unclassified: true };
+  return keccak256(toUtf8Bytes(canonicalJson({ v: 1, agent_id: agentId, policy_hash: policyHash.toLowerCase(), ...scope })));
+}
+
 // ── building ────────────────────────────────────────────────────────────────────────────────────
 
 export interface BuildReceiptInput {
@@ -182,7 +207,7 @@ export interface BuildReceiptInput {
   observation?: PaymentObservation | undefined;
 }
 
-function receiptRequest(req: KernelRequest): ReceiptRequest {
+export function receiptRequest(req: KernelRequest): ReceiptRequest {
   const cls: ToolClass = (TOOL_CLASSES as readonly string[]).includes(req.tool.class) ? req.tool.class : 'other';
   const amt = parseAmountRaw(req.amount_raw);
   return {

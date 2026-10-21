@@ -595,7 +595,7 @@ describe('P0-I3 the class comes from registration, never from the request body',
   // identity (subject), policy (hash), action, expiry and nonce (supersession) are bound and are tested
   // in red-team.test.ts. Argument digest, attempt id and maximum uses are not part of the grant.
   describe('what a grant binds (blueprint I3)', () => {
-    it.failing('[FAIL P0-I3-16] a grant must bind the argument digest: one authorization must not cover two different argument digests (BREACHED: args_hash is recorded, not bound)', async () => {
+    it('[FAIL P0-I3-16] a grant must bind the argument digest: one authorization must not cover two different argument digests (BREACHED: args_hash is recorded, not bound)', async () => {
       const h = await armed();
       const tool = jest.fn(async () => 'ran');
       const a = await runUnderKernel(requestFor('read', { args_hash: hashArgs({ file: 'README.md' }) }), tool, h.deps);
@@ -852,14 +852,14 @@ describe('P0-TK one-use tokens: concurrent race and replay', () => {
   });
 
   describe('kernel capability consumption (blueprint: one-use tokens consumed by compare-and-set)', () => {
-    it.failing('[FAIL P0-TK-04] 10 concurrent presentations of ONE authorized attempt must produce at most one effect (BREACHED: there is no consumption, 10 run)', async () => {
+    it('[FAIL P0-TK-04] 10 concurrent presentations of ONE authorized attempt must produce at most one effect (BREACHED: there is no consumption, 10 run)', async () => {
       const h = await armed();
       const tool = jest.fn(async () => 'ran');
       const attempt = requestFor('read', { args_hash: hashArgs({ attempt: 'a-1' }) });
       await Promise.all(Array.from({ length: 10 }, () => runUnderKernel(attempt, tool, h.deps)));
       expect(tool.mock.calls.length).toBeLessThanOrEqual(1);
     });
-    it.failing('[FAIL P0-TK-05] replaying an attempt after its effect must be refused (BREACHED: the grant has no attempt id and no use count)', async () => {
+    it('[FAIL P0-TK-05] replaying an attempt after its effect must be refused (BREACHED: the grant has no attempt id and no use count)', async () => {
       const h = await armed();
       const tool = jest.fn(async () => 'ran');
       const attempt = requestFor('read', { args_hash: hashArgs({ attempt: 'a-1' }) });

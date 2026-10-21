@@ -526,7 +526,7 @@ describe('limits: durability and accumulation', () => {
 
   // ── RT-5 ── NOT atomic: concurrent calls overshoot the cap. ──────────────────────────────────
   // The kernel documents this ("cumulative_total (no atomic reservation)"). This measures it.
-  it.failing('RT-5 concurrent in-process spends must not exceed the DAILY cap (BREACHED today: no reservation)', async () => {
+  it('RT-5 concurrent in-process spends must not exceed the DAILY cap (BREACHED today: no reservation)', async () => {
     const h = await armed({}, { per_tx_raw: '1000000', daily_raw: '2000000', total_raw: '99000000' });
     const tool = jest.fn(async () => 'paid');
     const results = await Promise.all(Array.from({ length: 12 }, () => runUnderKernel(spendRequest({ amount_raw: '1000000' }), tool, h.deps)));

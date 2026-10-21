@@ -685,7 +685,8 @@ describe('a receipt-write failure means the tool does NOT run', () => {
   it('concurrent calls cannot fork the chain', async () => {
     const h = harness();
     await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
-    await Promise.all(Array.from({ length: 8 }, () => runUnderKernel(spendRequest({ amount_raw: 1 }), async () => 'ok', h.deps)));
+    // Eight DISTINCT calls (CC1 2026-10-21: eight identical ones are now one use and seven replays).
+    await Promise.all(Array.from({ length: 8 }, (_, i) => runUnderKernel(spendRequest({ amount_raw: 1, args_hash: hashArgs({ call: i }) }), async () => 'ok', h.deps)));
     const receipts = h.sink.records.flatMap((r) => (r.kind === 'receipt' ? [r.receipt] : []));
     expect(receipts).toHaveLength(16);
     expect(verifyReceiptChain(receipts)).toEqual({ ok: true });

@@ -84,6 +84,9 @@ export type ReasonCode =
   | 'default_deny'
   | 'receipt_write_failed'
   | 'tool_error'
+  // one-use authorization (the ALLOW decision row is the consumption, store.ts)
+  | 'authorization_consumed'
+  | 'authorization_not_checked'
   // capability registry (poisoned-repo control; enforcement only, flag-gated — see capability-registry.ts)
   | 'unregistered_tool'
   | 'impl_unauthorized'
@@ -260,6 +263,15 @@ export type CapabilityState =
   | { state: 'not_checked'; detail: string }
   | { state: 'not_enforced' };
 
+/**
+ * Has this call's ONE-USE AUTHORIZATION (receipt.ts `authorizationKey`) been consumed already? Read
+ * by the gate INSIDE the ledger lock, so two concurrent presentations cannot both see `unused`.
+ */
+export type AuthorizationState =
+  | { state: 'unused' }
+  | { state: 'consumed' }
+  | { state: 'not_checked'; detail: string };
+
 export interface DecideInput {
   request: KernelRequest;
   /** Unix seconds. Injected so the decision is reproducible. */
@@ -273,6 +285,8 @@ export interface DecideInput {
    * so every existing caller and the flag-OFF path are byte-unchanged.
    */
   capability?: CapabilityState;
+  /** Optional: absent and `unused` record nothing, so a first use is byte-unchanged. */
+  authorization?: AuthorizationState;
 }
 
 // ── the receipt: kernel-receipt/1 ───────────────────────────────────────────────────────────────
@@ -427,10 +441,22 @@ export interface ValidateContext {
   persisted_decision_ids?: ReadonlySet<string>;
 }
 
+/**
+ * What `appendReceipt` shows its builder, INSIDE the lock: the ledger's state as of this append, so a
+ * decision built from it cannot race another append (one-use consumption, spend reservation).
+ */
+export interface LedgerView {
+  consumed(authorizationKey: string): boolean;
+  spentTotals(q: { agent_id: string; policy_hash: string; since_s: number }): { daily_raw: string; total_raw: string };
+}
+
 /** The ledger the gate talks to. Receipts, policies and spend totals, over one sink. */
 export interface KernelLedger {
-  /** Build, validate and persist under a lock so the chain cannot fork. Throws if any step fails. */
-  appendReceipt(build: (tip: ChainTip | null) => KernelReceipt): Promise<KernelReceipt>;
+  /**
+   * Build, validate and persist under a lock so the chain cannot fork. Throws if any step fails. A
+   * ledger that can answer passes `view`; without it the gate cannot rule out a replay and refuses.
+   */
+  appendReceipt(build: (tip: ChainTip | null, view?: LedgerView) => KernelReceipt): Promise<KernelReceipt>;
   appendPolicy(signed: SignedOwnerPolicy, recordedAt: string): Promise<void>;
   /** The policy with the highest nonce for this agent, or null. THROWS if the store cannot be read. */
   latestPolicy(subject: string): Promise<SignedOwnerPolicy | null>;

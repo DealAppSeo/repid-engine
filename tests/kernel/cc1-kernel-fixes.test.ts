@@ -9,9 +9,13 @@ import { CALLER_ASSERTED_CLASS_NOTE, CAPABILITY_ENFORCED_CHECK, CUMULATIVE_TOTAL
 import { runUnderKernel } from '../../src/kernel/gate';
 import { POLICY_DOMAIN_V2, POLICY_TYPES_V2, policyTypedValueV2 } from '../../src/kernel/policy';
 import { DEFAULT_ENV, buildReceipt, hashArgs, validateReceipt } from '../../src/kernel/receipt';
-import type { HalEvidence, OwnerPolicy } from '../../src/kernel/types';
+import { StoreLedger, createJsonlStore } from '../../src/kernel/store';
+import type { HalEvidence, KernelLedger, OwnerPolicy } from '../../src/kernel/types';
 import * as decideModule from '../../src/kernel/decide';
-import { AGENT_ID, NOW_S, PAYEE, harness, iso, signedPolicy, spendRequest } from '../../src/kernel/__tests__/fixtures';
+import { AGENT_ID, NOW_S, PAYEE, harness, iso, postRequest, signedPolicy, spendRequest } from '../../src/kernel/__tests__/fixtures';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const readRequest = (name: string) => ({
   agent: { agent_id: AGENT_ID, agent_name: 'kernel-demo-agent' },
@@ -174,3 +178,113 @@ describe('I3-01/02: flag OFF a caller-asserted read/other is held to the gates o
     }
   });
 });
+
+describe('TK-03..05 / I3-16: one-use authorization, consumed atomically and durably', () => {
+  const run = (deps: Parameters<typeof runUnderKernel>[2], req: Record<string, unknown>, tool = jest.fn(async () => 'x')) => runUnderKernel(req, tool, deps);
+
+  it('survives a restart of the on-disk ledger: a replay after a new StoreLedger over the same file is DENY(authorization_consumed)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cc1-kernel-'));
+    try {
+      const path = join(dir, 'ledger.jsonl');
+      const first = harness({ ledger: new StoreLedger(createJsonlStore(path)) });
+      await first.deps.ledger.appendPolicy(await signedPolicy(first.owner), iso);
+      expect((await run(first.deps, spendRequest())).verdict).toBe('ALLOW');
+      const restarted: KernelLedger = new StoreLedger(createJsonlStore(path)); // a new process reading the same file
+      const tool = jest.fn(async () => 'x');
+      const again = await run({ ...first.deps, ledger: restarted }, spendRequest(), tool);
+      expect(again.verdict).toBe('DENY');
+      expect(codesOf(again)).toEqual(['authorization_consumed']);
+      expect(tool).toHaveBeenCalledTimes(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('RT-5 for real: 12 concurrent DISTINCT spends against a 2-spend daily cap give exactly 2 effects (the reservation, not the replay rule)', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { per_tx_raw: '1000000', daily_raw: '2000000', total_raw: '99000000' }), iso);
+    const tool = jest.fn(async () => 'paid');
+    const outs = await Promise.all(Array.from({ length: 12 }, (_, i) => run(h.deps, spendRequest({ amount_raw: '1000000', args_hash: hashArgs({ attempt: i }) }), tool)));
+    expect(outs.filter((o) => o.verdict === 'ALLOW')).toHaveLength(2);
+    expect(tool).toHaveBeenCalledTimes(2);
+    expect(outs.filter((o) => o.verdict === 'DENY').every((o) => codesOf(o).some((c) => c === 'spend_limit_zero' || c === 'spend_limit_exceeded'))).toBe(true);
+  });
+
+  it('the ledger itself refuses a second ALLOW decision row for a consumed authorization (a builder that ignores the view cannot replay)', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const first = await run(h.deps, spendRequest());
+    const copy = JSON.parse(JSON.stringify(first.decision_receipt)) as NonNullable<typeof first.decision_receipt>;
+    await expect(h.ledger.appendReceipt((tip) => {
+      const r = { ...copy, header: { ...copy.header, receipt_id: 'replayed-call-id', prev_receipt_id: tip!.receipt_id, prev_hash: tip!.receipt_hash } };
+      return buildReceipt({ receipt_id: r.header.receipt_id, prev: tip, created_at: r.header.created_at, env: r.header.env, request: parseOk(spendRequest()), owner: { status: 'resolved', wallet: h.owner.address, assurance: 'wallet-proven' }, decision: copy.decision, executed: false, phase: 'decision', hal: { state: 'not_needed' } });
+    })).rejects.toThrow(/authorization_consumed/);
+  });
+
+  it('a ledger that shows the builder no view cannot rule out a replay: NOT_CHECKED(authorization_not_checked), nothing runs', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const blind: KernelLedger = {
+      appendReceipt: (b) => h.ledger.appendReceipt((tip) => b(tip)),
+      appendPolicy: (p, t) => h.ledger.appendPolicy(p, t),
+      latestPolicy: (s) => h.ledger.latestPolicy(s),
+      findReceipts: (i) => h.ledger.findReceipts(i),
+      spentTotals: (q) => h.ledger.spentTotals(q),
+    };
+    const tool = jest.fn(async () => 'x');
+    const out = await run({ ...h.deps, ledger: blind }, spendRequest(), tool);
+    expect(out.verdict).toBe('NOT_CHECKED');
+    expect(codesOf(out)).toContain('authorization_not_checked');
+    expect(tool).toHaveBeenCalledTimes(0);
+  });
+
+  it('a spend replay with the payee in other letter case is still the same authorization', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    expect((await run(h.deps, spendRequest())).verdict).toBe('ALLOW');
+    const again = await run(h.deps, spendRequest({ payee: PAYEE.toLowerCase() }));
+    expect(codesOf(again)).toContain('authorization_consumed');
+  });
+
+  it('a post: the identical post is a replay; a post with other arguments is its own authorization (and HAL checks it)', async () => {
+    const h = harness({ halCheck: async () => hal('PASS') });
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    expect((await run(h.deps, postRequest())).verdict).toBe('ALLOW');
+    expect(codesOf(await run(h.deps, postRequest()))).toContain('authorization_consumed');
+    expect((await run(h.deps, postRequest({ args_hash: hashArgs({ channel: 'other' }) }))).verdict).toBe('ALLOW');
+  });
+
+  it('flag OFF a read/other grant is one run per policy version, whatever the tool name; the owner\'s next policy (higher nonce) grants the next', async () => {
+    const h = harness({ halCheck: async () => hal('PASS') });
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    expect((await run(h.deps, readRequest('doc.read'))).verdict).toBe('ALLOW');
+    expect(codesOf(await run(h.deps, readRequest('doc.read.v2')))).toContain('authorization_consumed');
+    expect(codesOf(await run(h.deps, otherRequest('misc.run')))).toContain('authorization_consumed');
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { nonce: '2' }), iso);
+    expect((await run(h.deps, readRequest('doc.read'))).verdict).toBe('ALLOW');
+  });
+
+  it('flag ON a read/other grant is one run per bound implementation per policy version; a padded name is the same implementation', async () => {
+    const impls = { a: jest.fn(async () => 'a'), b: jest.fn(async () => 'b') };
+    const reg = createCapabilityRegistry();
+    reg.register({ implId: 'impl.a', capability: { id: 'format.a', toolClass: 'read' }, run: impls.a });
+    reg.register({ implId: 'impl.b', capability: { id: 'format.b', toolClass: 'read' }, run: impls.b });
+    const h = harness({ capabilityRegistry: reg });
+    const policy: OwnerPolicy = {
+      subject: AGENT_ID, owner: h.owner.address, actions: ['tool'], payees: [],
+      per_tx_raw: '0', daily_raw: '0', total_raw: '0', expires_at: NOW_S + 3600, nonce: '1', authorized_impl_hashes: ['impl.a', 'impl.b'],
+    };
+    await h.ledger.appendPolicy({ policy, signature: await h.owner.signTypedData(POLICY_DOMAIN_V2, POLICY_TYPES_V2, policyTypedValueV2(policy)) }, iso);
+    const runImpl = (name: string, fn: jest.Mock) => runUnderKernel(readRequest(name), fn as unknown as () => Promise<string>, h.deps);
+    expect((await runImpl('impl.a', impls.a)).verdict).toBe('ALLOW');
+    expect((await runImpl('impl.b', impls.b)).verdict).toBe('ALLOW');
+    expect(codesOf(await runImpl(' impl.a ', impls.a))).toContain('authorization_consumed');
+    expect(impls.a).toHaveBeenCalledTimes(1);
+  });
+});
+
+function parseOk(raw: unknown) {
+  const p = parseKernelRequest(raw);
+  if (!p.ok) throw new Error('fixture should parse');
+  return p.request;
+}

@@ -515,6 +515,15 @@ export function decide(input: DecideInput): DecisionLeg {
     });
   }
 
+  // 6.6 the one-use authorization (P0-TK-04/05, P0-I3-16). Recorded only when it is NOT usable, so a
+  // first use is byte-unchanged; the ALLOW decision row itself is the consumption (store.ts).
+  const auth = input.authorization;
+  if (auth?.state === 'consumed') {
+    record('authorization_unused', 'FAIL', 'ledger', { code: 'authorization_consumed', detail: 'this authorization was already used; a replay is refused (see receipt.ts authorizationKey for what one authorization covers)' });
+  } else if (auth?.state === 'not_checked') {
+    record('authorization_unused', 'NOT_CHECKED', 'ledger', { code: 'authorization_not_checked', detail: auth.detail });
+  }
+
   // 7. the verdict: starts at DENY, ALLOW has to be earned ---------------------------------------
   const anyFail = checks.some((c) => c.outcome === 'FAIL');
   const anyNotChecked = checks.some((c) => c.outcome === 'NOT_CHECKED');
