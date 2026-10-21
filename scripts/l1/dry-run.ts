@@ -6,7 +6,7 @@
  *   npx ts-node --transpile-only scripts/l1/dry-run.ts [--devnet E:\dev\ops\loop\l1\devnet] [--out E:\dev\ops\loop\l1\dryrun-<stamp>]
  *
  * --devnet is any folder with its OWN local Hardhat 3 install (hardhat@3.12.0) and a config with no networks
- * (`export default {}`); the chain id comes from --chain-id. Writes results.json, review-sheet.md and summary.txt to --out.
+ * (`export default {}`); the chain id comes from --chain-id. Writes results.json, review-sheet.md, l1-typed-data.json and summary.txt to --out.
  * Exit 0 only when every scenario held and nothing left the machine.
  */
 import { spawn } from 'node:child_process';
@@ -81,6 +81,7 @@ async function main(): Promise<number> {
     ];
     writeFileSync(join(out, 'results.json'), JSON.stringify({ started, chain_id: id, rpc, digest: artifacts.digest, experiment_id: artifacts.experiment.policy_id, results, blocked }, null, 2));
     writeFileSync(join(out, 'review-sheet.md'), sheet);
+    writeFileSync(join(out, 'l1-typed-data.json'), artifacts.payload); // what was signed, for review-sheet.ts --check
     writeFileSync(join(out, 'summary.txt'), lines.join('\n') + '\n');
     console.log(lines.join('\n'));
     return held === results.length && blocked.length === 0 ? 0 : 1;
