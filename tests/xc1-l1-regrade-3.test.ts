@@ -6,7 +6,7 @@
  * node when ARENA_RPC is set); nothing leaves the machine. Runs only where the preflight and the arena exist (#1452);
  * elsewhere every probe is reported SKIPPED, never passed. Pinned by code version exactly as xc1-l1-regrade-2.test.ts is.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Wallet, Signature, type BaseWallet } from 'ethers';
 
@@ -21,6 +21,9 @@ const C: any = HAVE ? require('../scripts/e2e-local/arena/chain') : null;
 const KERNEL_FIXES = HAVE && typeof require('../src/kernel/store').StoreLedger.prototype.indeterminate === 'function';
 const ARENA_B3 = HAVE && Array.isArray(require('../scripts/e2e-local/arena/cases').EXTRA_CASE_IDS);
 /* eslint-enable @typescript-eslint/no-var-requires */
+// #1453 at ac21fcc5 or later: the spend/post key no longer carries the policy hash (re-grade 4). Marker: the key's own doc names
+// XC1-R3-06. A marker of the code version, not the property: the probes below still fail loudly if the behaviour regresses.
+const B4_FIX = HAVE && readFileSync(join(ROOT, 'src/kernel/receipt.ts'), 'utf8').includes('XC1-R3-06');
 const pin = (holds: boolean) => (holds ? it : it.failing);
 const on = (holds: boolean) => (holds ? 'holds on this code' : 'open on this code');
 jest.setTimeout(120_000);
@@ -132,23 +135,68 @@ d('XC1-R3 the L1 executor, present()', () => {
     } finally { W.disposeWorld(w); }
   });
 
-  // OPEN on every code version graded (re-grade 3, B4): the one-use key includes the policy hash (receipt.ts authorizationKey), so
-  // the owner's next policy version gives every consumed agreement a fresh key. Turns red when fixed: then make it `it`.
-  it.failing('[XC1-R3-06] the same signed agreement presented again after the owner signs the next kernel policy version (nonce 2, same limits) must not pay again (BREACHED: 2 payments)', async () => {
+  /** The owner signs the next kernel policy version for the USDC subject (same limits): an ordinary owner act. */
+  async function rotate(w: any, nonce: string) {
+    const nowS = Math.floor(w.now() / 1000);
+    const p = {
+      subject: w.kernelSubjects.USDC, owner: w.owner.address, actions: ['spend'], payees: [w.addr.seller],
+      per_tx_raw: w.policy.per_tx_max_raw.USDC, daily_raw: w.policy.aggregate_max_raw.USDC, total_raw: w.policy.aggregate_max_raw.USDC,
+      expires_at: nowS + 3600, nonce,
+    };
+    const signature = await w.owner.signTypedData(engine.kernel.POLICY_DOMAIN, engine.kernel.POLICY_TYPES, engine.kernel.policyTypedValue(p));
+    await w.deps.ledger.appendPolicy({ policy: p, signature }, new Date(w.now()).toISOString());
+  }
+
+  // B4 (re-grade 3): the one-use key carried the policy hash, so the owner's next policy version gave every consumed agreement a
+  // fresh key. Fixed in #1453 ac21fcc5 (re-grade 4).
+  pin(KERNEL_FIXES && B4_FIX)(`[XC1-R3-06] the same signed agreement presented again after the owner signs the next kernel policy version (nonce 2, same limits) does not pay again [${on(KERNEL_FIXES && B4_FIX)}]`, async () => {
     const w = await world();
     try {
       const s = await W.buildNpa(w, { sym: 'USDC', amount_raw: '500000' });
       await W.present(w, W.presentationOf(s), 'under policy nonce 1');
-      const nowS = Math.floor(w.now() / 1000);
-      const p2 = {
-        subject: w.kernelSubjects.USDC, owner: w.owner.address, actions: ['spend'], payees: [w.addr.seller],
-        per_tx_raw: w.policy.per_tx_max_raw.USDC, daily_raw: w.policy.aggregate_max_raw.USDC, total_raw: w.policy.aggregate_max_raw.USDC,
-        expires_at: nowS + 3600, nonce: '2',
-      };
-      const signature = await w.owner.signTypedData(engine.kernel.POLICY_DOMAIN, engine.kernel.POLICY_TYPES, engine.kernel.policyTypedValue(p2));
-      await w.deps.ledger.appendPolicy({ policy: p2, signature }, new Date(w.now()).toISOString()); // the owner rotates the policy: an ordinary act
+      await rotate(w, '2');
       await W.present(w, W.presentationOf(s), 'the same agreement under policy nonce 2');
       expect(w.sends).toHaveLength(1);
+    } finally { W.disposeWorld(w); }
+  });
+
+  pin(KERNEL_FIXES && B4_FIX)(`[XC1-R4-01] rotation, then an engine restart, then the same agreement: still one payment (the consumption is rebuilt from the ledger under the new policy) [${on(KERNEL_FIXES && B4_FIX)}]`, async () => {
+    const w = await world();
+    try {
+      const s = await W.buildNpa(w, { sym: 'USDC', amount_raw: '500000' });
+      await W.present(w, W.presentationOf(s), 'under policy nonce 1');
+      await rotate(w, '2');
+      W.restart(w);
+      await W.present(w, W.presentationOf(s), 'after rotation and restart');
+      expect(w.sends).toHaveLength(1);
+    } finally { W.disposeWorld(w); }
+  });
+
+  pin(KERNEL_FIXES && B4_FIX)(`[XC1-R4-02] rotation, then 10 concurrent presentations of the consumed agreement: none pays [${on(KERNEL_FIXES && B4_FIX)}]`, async () => {
+    const w = await world();
+    try {
+      const s = await W.buildNpa(w, { sym: 'USDC', amount_raw: '500000' });
+      await W.present(w, W.presentationOf(s), 'under policy nonce 1');
+      await rotate(w, '2');
+      await Promise.all(Array.from({ length: 10 }, (_, i) => W.present(w, W.presentationOf(s), `concurrent ${i + 1} after rotation`)));
+      expect(w.sends).toHaveLength(1);
+    } finally { W.disposeWorld(w); }
+  });
+
+  pin(KERNEL_FIXES && B4_FIX)(`[XC1-R4-03] two rotations (nonce 2, then 3) with a presentation after each: still one payment; and a NEW agreement under nonce 3 still pays (control) [${on(KERNEL_FIXES && B4_FIX)}]`, async () => {
+    const w = await world();
+    try {
+      const s = await W.buildNpa(w, { sym: 'USDC', amount_raw: '500000' });
+      await W.present(w, W.presentationOf(s), 'under policy nonce 1');
+      await rotate(w, '2');
+      await W.present(w, W.presentationOf(s), 'under nonce 2');
+      await rotate(w, '3');
+      await W.present(w, W.presentationOf(s), 'under nonce 3');
+      expect(w.sends).toHaveLength(1);
+      const fresh = await W.buildNpa(w, { sym: 'USDC', amount_raw: '500000' });
+      const ok = await W.present(w, W.presentationOf(fresh), 'a new agreement under nonce 3');
+      expect(ok.status).toBe('SETTLED');
+      expect(w.sends).toHaveLength(2);
     } finally { W.disposeWorld(w); }
   });
 });
