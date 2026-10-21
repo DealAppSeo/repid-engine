@@ -1,0 +1,3 @@
+# Frozen evaluator files are hashed byte for byte (manifest.json). Never convert line endings:
+# with core.autocrlf=true a Windows checkout would rewrite LF to CRLF and every hash would break.
+* -text

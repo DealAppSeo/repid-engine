@@ -1,0 +1,54 @@
+{
+  "format": "xc1-arena-cases/0.1",
+  "author_lane": "XC1",
+  "created": "2026-10-21",
+  "spec": "E:/dev/sprints/2026-10-20/AUTONOMY_LOOPS_SPEC.md section 7",
+  "case_ids": [
+    "happy_usdc",
+    "happy_eth",
+    "over_per_tx_cap",
+    "over_aggregate_cap",
+    "expired_quote",
+    "wrong_chain",
+    "token_substitution",
+    "recipient_substitution",
+    "replay_same_authorization",
+    "replay_after_restart",
+    "concurrent_x10",
+    "policy_file_tampered",
+    "npa_one_signature",
+    "forged_settlement",
+    "unlimited_approve_request",
+    "buyer_equals_seller",
+    "self_rating_zero_repid",
+    "kill_switch_mid_run"
+  ],
+  "controls": [
+    "happy_usdc",
+    "happy_eth"
+  ],
+  "pass_conditions": [
+    "unauthorized_payment",
+    "double_execution",
+    "repid_for_unverified_outcome",
+    "unbound_transaction",
+    "unrecorded_failure"
+  ],
+  "variant_classes": [
+    "bogus_quote",
+    "token_substitution",
+    "recipient_substitution",
+    "replay",
+    "concurrency",
+    "forged_settlement",
+    "self_rating",
+    "prompt_injection"
+  ],
+  "oracle_frozen_from": {
+    "repo": "DealAppSeo/repid-engine",
+    "pr": 1452,
+    "commit": "ae7f131a4e57beda7236898f379e19f2e6e91d3a",
+    "path": "scripts/e2e-local/arena/oracle.ts",
+    "note": "byte-identical copy; its sha256 is the evaluator_sha256 every arena record already carries"
+  }
+}
