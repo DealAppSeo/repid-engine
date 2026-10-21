@@ -106,11 +106,19 @@ export interface ProofOfPayment {
 /**
  * Leg 5: the payment the file cites happened. x402 settles through a facilitator, so the payment
  * transaction's own `from` is the facilitator; the payer and payee are in the token's Transfer log,
- * and that is what is matched.
+ * and that is what is matched first. A native (ETH) payment emits no log: the transaction itself is
+ * the transfer, so it is matched on its own `from`, `to` and a non-zero `value`.
  */
 export function assessPayment(
   proof: ProofOfPayment | null | undefined,
-  paymentReceipt: { status: number | null; logs: ReadonlyArray<{ address: string; topics: ReadonlyArray<string> }> } | null | { error: string },
+  paymentReceipt:
+    | {
+        status: number | null;
+        logs: ReadonlyArray<{ address: string; topics: ReadonlyArray<string> }>;
+        tx?: { from: string; to: string | null; value: bigint };
+      }
+    | null
+    | { error: string },
   expectedChainId: number,
 ): Leg {
   if (!proof) return { leg: 'payment', outcome: 'NOT_CHECKED', detail: 'the file carries no proofOfPayment' };
@@ -124,7 +132,13 @@ export function assessPayment(
   const hit = paymentReceipt.logs.find(
     (l) => l.topics[0]?.toLowerCase() === TRANSFER_TOPIC && l.topics[1]?.toLowerCase() === pad(proof.fromAddress) && l.topics[2]?.toLowerCase() === pad(proof.toAddress),
   );
-  if (!hit) return { leg: 'payment', outcome: 'FAILED', detail: `no Transfer from ${proof.fromAddress} to ${proof.toAddress} in ${proof.txHash}` };
+  if (!hit) {
+    const tx = paymentReceipt.tx;
+    if (tx && tx.value > 0n && same(tx.from, proof.fromAddress) && same(tx.to, proof.toAddress)) {
+      return { leg: 'payment', outcome: 'VERIFIED', detail: `native transfer of ${ethers.formatEther(tx.value)} ETH ${proof.fromAddress} → ${proof.toAddress}` };
+    }
+    return { leg: 'payment', outcome: 'FAILED', detail: `no Transfer and no native transfer from ${proof.fromAddress} to ${proof.toAddress} in ${proof.txHash}` };
+  }
   return { leg: 'payment', outcome: 'VERIFIED', detail: `Transfer ${proof.fromAddress} → ${proof.toAddress} on token ${hit.address}` };
 }
 
@@ -138,6 +152,32 @@ export function assessPayment(
 export const FETCH_TIMEOUT_MS = 10_000;
 export const MAX_FILE_BYTES = 1_000_000;
 export const MAX_REDIRECTS = 3;
+
+/**
+ * A data: feedbackURI (RFC 2397) carries the file itself, so it is decoded here and never fetched:
+ * no network means none of the fetch policy applies. Same size cap as a fetched file. Null when
+ * `raw` is not a data: URI. Base64 must be strict, so every decoder reads the same bytes.
+ */
+export function decodeDataUri(raw: string): { status: number; body: Uint8Array } | { error: string } | null {
+  if (!/^data:/i.test(raw)) return null;
+  const comma = raw.indexOf(',');
+  if (comma < 0) return { error: 'not decoded: data: URI has no comma' };
+  const base64 = /;base64$/i.test(raw.slice(5, comma));
+  const payload = raw.slice(comma + 1);
+  let body: Buffer;
+  if (base64) {
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(payload) || payload.length % 4 !== 0) return { error: 'not decoded: data: URI is not strict base64' };
+    body = Buffer.from(payload, 'base64');
+  } else {
+    try {
+      body = Buffer.from(decodeURIComponent(payload), 'utf8');
+    } catch {
+      return { error: 'not decoded: data: URI has a bad percent-encoding' };
+    }
+  }
+  if (body.byteLength > MAX_FILE_BYTES) return { error: `not decoded: the file is over ${MAX_FILE_BYTES} bytes` };
+  return { status: 200, body: new Uint8Array(body) };
+}
 const BLOCKED_HOSTS = new Set(['localhost', 'localhost.localdomain', 'metadata.google.internal', 'metadata.azure.com', 'metadata']);
 
 /** Why this URL may not be fetched, or null when it may (before DNS: see isPublicAddress). */
