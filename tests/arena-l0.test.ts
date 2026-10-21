@@ -18,7 +18,7 @@
  * "one-use authorization, consumed atomically and durably"). Replay, replay after restart, and 10 concurrent
  * presentations all settle again. They are recorded as FAIL in the evidence; they are not hidden.
  */
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TypedDataEncoder } from 'ethers';
@@ -270,6 +270,29 @@ function arenaSuite(label: string, makeChain: () => TestChain, run: typeof descr
         const a = (ev.observations.attempts as Array<{ kernel: unknown; refusals: Array<{ code: string }> }>)[0]!;
         expect(a.kernel).toBeNull();
         expect(a.refusals.map((r) => r.code)).toContain('over_per_tx_cap');
+      });
+    });
+
+    describe('XC1-NPA-03: the kill switch is read again just before the broadcast', () => {
+      it('a switch that appears AFTER the preflight and BEFORE the broadcast stops the payment: nothing is sent, the attempt is REFUSED(kill_switch), the buyer account is untouched', async () => {
+        const w = await makeWorld({ chain, engine, evaluatorSha256: ORACLE_SHA });
+        try {
+          const s = await buildNpa(w, { sym: 'ETH', amount_raw: '500000000000000' });
+          const resolve = w.deps.resolveOwner;
+          // the operator pulls the switch while the payment is in the kernel (owner lookup runs after the preflight, before the tool)
+          w.deps = { ...w.deps, resolveOwner: async (...a: Parameters<typeof resolve>) => { writeFileSync(w.killPath, 'stop'); return resolve(...a); } };
+          const nonce0 = await chain.txCount(w.addr.buyer);
+          const att = await present(w, presentationOf(s), 'in flight when the switch appears');
+          expect(att.status).toBe('REFUSED');
+          expect(att.refusals.map((r) => r.code)).toEqual(['kill_switch']);
+          expect(att.tx_hash).toBeNull();
+          expect(w.sends).toHaveLength(0);
+          expect(await chain.txCount(w.addr.buyer)).toBe(nonce0);
+          expect(w.tally.count).toBe(0);
+        } finally {
+          rmSync(w.killPath, { force: true });
+          disposeWorld(w);
+        }
       });
     });
 

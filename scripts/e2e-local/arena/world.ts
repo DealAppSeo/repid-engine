@@ -10,7 +10,7 @@
  *     ->  kernel runUnderKernel(tool = send + readback)  ->  settlement classified from the chain.
  * Authorization comes only from the kernel; the preflight and the gate can only refuse.
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -310,6 +310,8 @@ export async function present(w: World, pres: Presentation, label: string): Prom
   const seen: { hash?: Hex; rb?: TxReadback } = {};
   const amount = BigInt(pres.request.amount_raw);
   const tool = async () => {
+    // The preflight read the kill-switch file once; a payment already past it reads it again just before it broadcasts (XC1-NPA-03).
+    if (existsSync(w.policy.kill_switch_path)) throw Object.assign(new Error('kill switch'), { name: 'KillSwitchError' }); // the kernel records the class of a failure, not its message
     const hash = await w.chain.send({ key: w.keys.buyer, asset: pres.request.asset, to: pres.request.recipient, amount });
     w.sends.push({ hash, asset: pres.request.asset, to: pres.request.recipient, amount });
     seen.hash = hash;
@@ -339,6 +341,10 @@ export async function present(w: World, pres: Presentation, label: string): Prom
   }
   att.tx_hash = seen.hash ?? null;
   att.readback = serializeReadback(seen.rb ?? null);
+  if (out.tool_error === 'KillSwitchError') {
+    att.refusals = [{ stage: 'policy', code: 'kill_switch', detail: 'the file appeared after the preflight, before the broadcast; nothing was sent' }];
+    return att; // still REFUSED: no transaction exists
+  }
   if (out.tool_error) {
     att.status = 'FAILED';
     att.settlement_why = `the payment tool threw (${out.tool_error})`;
