@@ -436,7 +436,8 @@ describe('(f) the receipt does not let a resetting cap read as a lifetime one', 
     expect((await runUnderKernel(spendRequest({ amount_raw: 600 }), async () => 'ok', h.deps)).verdict).toBe('ALLOW');
     expect((await runUnderKernel(spendRequest({ amount_raw: 600 }), async () => 'ok', h.deps)).decision_receipt!.decision.limits.binding_term).toBe('total');
     await h.ledger.appendPolicy(await signedPolicy(h.owner, { nonce: '2', per_tx_raw: '600', daily_raw: '100000', total_raw: '1000' }), iso);
-    const afterSupersession = await runUnderKernel(spendRequest({ amount_raw: 600 }), async () => 'ok', h.deps);
+    // CC1 2026-10-21 (XC1-R3-06): a used digest stays used across policy versions, so the reset is shown with a new one.
+    const afterSupersession = await runUnderKernel(spendRequest({ amount_raw: 600, args_hash: hashArgs({ call: 'after-supersession' }) }), async () => 'ok', h.deps);
     expect(afterSupersession.verdict).toBe('ALLOW'); // the same 1000 total, spent again: it reset
   });
 });

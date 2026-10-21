@@ -168,9 +168,11 @@ export function buildPaymentLeg(args: {
  * The ONE-USE AUTHORIZATION a call consumes (P0-TK-04/05, P0-I3-16). An ALLOW decision row consumes
  * its key, and the ledger refuses a second ALLOW decision row with the same key (store.ts), so a
  * replay — sequential, concurrent, or after a restart — is refused. What one authorization covers:
- *   spend, post   ONE use per argument digest under the policy (spec §4: bound to sha256(NPA)). The
- *                 key is the digest alone: never the tool name, class, asset label, chain id, amount
- *                 or payee, which a caller can vary without changing the payment (XC1-TK-07, -08).
+ *   spend, post   ONE use per argument digest per agent, for good (spec §4: the agreement's digest).
+ *                 The key is the agent and the digest alone: never the tool name, class, asset label,
+ *                 chain id, amount or payee, which a caller can vary without changing the payment
+ *                 (XC1-TK-07, -08), and never the policy hash, which the owner's next policy version
+ *                 changes: a digest already used stays used under every later policy (XC1-R3-06).
  *                 Spend and post share it, because flag OFF the class is the caller's word. Each use
  *                 is also bound by the spend budget and payee list, or by HAL's verdict on that post.
  *   read, other   nothing binds their arguments, so the owner's grant covers ONE run per policy
@@ -180,13 +182,14 @@ export function buildPaymentLeg(args: {
  * `enforced` is whether the capability registry decided the call (the receipt carries the marker).
  */
 export function authorizationKey(agentId: string, req: ReceiptRequest, policyHash: string, enforced: boolean): string {
+  const policy_hash = policyHash.toLowerCase();
   const scope =
     req.tool.class === 'spend' || req.tool.class === 'post'
       ? { effect: req.args_hash.toLowerCase() }
       : enforced
-        ? { impl: req.tool.name.trim() }
-        : { unclassified: true };
-  return keccak256(toUtf8Bytes(canonicalJson({ v: 1, agent_id: agentId, policy_hash: policyHash.toLowerCase(), ...scope })));
+        ? { policy_hash, impl: req.tool.name.trim() }
+        : { policy_hash, unclassified: true };
+  return keccak256(toUtf8Bytes(canonicalJson({ v: 1, agent_id: agentId, ...scope })));
 }
 
 // ── building ────────────────────────────────────────────────────────────────────────────────────

@@ -267,6 +267,28 @@ describe('TK-03..05 / I3-16: one-use authorization, consumed atomically and dura
     expect(pay).toHaveBeenCalledTimes(1);
   });
 
+  // B4 (XC1 re-grade 3, XC1-R3-06): the owner's next policy version is a new policy hash; a digest already
+  // used must stay used under it, also after a restart. read/other keep their per-version scope (tested above).
+  it('a used digest stays used after the owner signs the next policy version (nonce 2, same limits), also after a restart', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cc1-b4-'));
+    try {
+      const path = join(dir, 'ledger.jsonl');
+      const h = harness({ ledger: new StoreLedger(createJsonlStore(path)) });
+      await h.deps.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+      const pay = jest.fn(async () => 'paid');
+      expect((await run(h.deps, spendRequest(), pay)).verdict).toBe('ALLOW');
+      await h.deps.ledger.appendPolicy(await signedPolicy(h.owner, { nonce: '2' }), iso);
+      expect(codesOf(await run(h.deps, spendRequest(), pay))).toContain('authorization_consumed');
+      const restarted = { ...h.deps, ledger: new StoreLedger(createJsonlStore(path)) };
+      expect(codesOf(await run(restarted, spendRequest(), pay))).toContain('authorization_consumed');
+      expect(pay).toHaveBeenCalledTimes(1);
+      // control: a new digest under the new policy version pays
+      expect((await run(restarted, spendRequest({ args_hash: hashArgs({ npa: 'next' }) }), pay)).verdict).toBe('ALLOW');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('flag ON: a padded implementation id is the same payment authorization', async () => {
     const payment = jest.fn(async () => 'paid');
     const reg = createCapabilityRegistry();
