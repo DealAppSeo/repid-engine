@@ -14,9 +14,10 @@
  *                        which is the cue to delete the marker. A finding recorded this way cannot go stale.
  *   it('CHARACTERISE …') pins what happens today, so it cannot change unnoticed.
  *
- * The hole these pin: nothing in the engine's executor consumes the authorization (the NPA's EIP-712 digest) before the tool runs (spec §4,
- * "one-use authorization, consumed atomically and durably"). Replay, replay after restart, and 10 concurrent
- * presentations all settle again. They are recorded as FAIL in the evidence; they are not hidden.
+ * The holes this file used to pin: nothing in the engine's executor consumed the authorization (the NPA's EIP-712 digest) before the tool
+ * ran (spec §4, "one-use authorization, consumed atomically and durably"), so a replay, a replay after restart, 10 concurrent
+ * presentations and a re-spelled replay all settled again. The kernel's one-use authorization (#1453) closed them; the
+ * 'one-use authorization' block below asserts each one PASSES.
  */
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -330,26 +331,17 @@ function arenaSuite(label: string, makeChain: () => TestChain, run: typeof descr
       });
     });
 
-    describe('known holes: the executor has no one-use authorization', () => {
-      it.each(KNOWN_FAILING)('CHARACTERISE %s: the evidence records FAIL, a double execution, and pins it as known', async (c) => {
-        const ev = await go(c as CaseId | ExtraCaseId, { sym: 'USDC' });
-        expect(ev.oracle_verdict).toBe('FAIL');
-        expect(ev.breaches).toContain('double_execution');
-        expect(ev.pinned_known_failure).toBe(true);
-        expect(ev.discrepancies.some((d) => d.includes('nothing consumes the authorization'))).toBe(true);
-        const settled = (ev.observations.attempts as Array<{ status: string }>).filter((a) => a.status === 'SETTLED').length;
-        expect(settled).toBeGreaterThan(1);
-      });
-      it.failing('replay_same_authorization: the second presentation must be refused (SECURE; BREACHED today)', async () => {
+    describe('one-use authorization: one signed agreement settles once (the holes #1453 closed)', () => {
+      it('replay_same_authorization: the second presentation is refused (SECURE)', async () => {
         expect((await go('replay_same_authorization', { sym: 'USDC' })).oracle_verdict).toBe('PASS');
       });
-      it.failing('replay_after_restart: a presentation after an engine restart must be refused (SECURE; BREACHED today)', async () => {
+      it('replay_after_restart: a presentation after an engine restart is refused (SECURE)', async () => {
         expect((await go('replay_after_restart', { sym: 'USDC' })).oracle_verdict).toBe('PASS');
       });
-      it.failing('concurrent_x10: of ten simultaneous presentations exactly one may settle (SECURE; BREACHED today)', async () => {
+      it('concurrent_x10: of ten simultaneous presentations exactly one settles (SECURE)', async () => {
         expect((await go('concurrent_x10', { sym: 'USDC' })).oracle_verdict).toBe('PASS');
       });
-      it.failing('respelled_replay: the same signed agreement with its hex fields re-spelled must not settle again (SECURE; BREACHED today: no one-use key at all)', async () => {
+      it('respelled_replay: the same signed agreement with its hex fields re-spelled does not settle again (SECURE)', async () => {
         expect((await go('respelled_replay', { sym: 'USDC' })).oracle_verdict).toBe('PASS');
       });
       it('every case that is not a pinned hole passes (so the pins are the only FAILs)', async () => {
