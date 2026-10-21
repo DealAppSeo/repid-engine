@@ -30,7 +30,7 @@ function codesOf(r: KernelReceipt, ctx?: { persisted_decision_ids?: ReadonlySet<
 
 const HAL_PASS: HalEvidence = {
   verdict: 'PASS',
-  method: 'cross-llm-quorum',
+  method: 'hal-fact-check/cross-llm-quorum',
   votes: [{ family: 'a', verdict: 'PASS' }, { family: 'b', verdict: 'PASS' }, { family: 'c', verdict: 'FAIL' }],
   settled_by: null,
   grounded: true,

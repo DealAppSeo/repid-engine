@@ -806,7 +806,7 @@ describe('P0-VF an unknown or unavailable verifier is NOT_CHECKED, never a pass'
     }
   });
 
-  it.failing('[FAIL P0-VF-05] a HAL PASS whose method names no known verifier must not ALLOW a post (BREACHED: the kernel never checks `method`)', async () => {
+  it('[FAIL P0-VF-05] a HAL PASS whose method names no known verifier must not ALLOW a post (BREACHED: the kernel never checks `method`)', async () => {
     const h = await armed({ halCheck: async () => hal({ method: 'definitely-not-a-verifier' }) });
     const post = jest.fn(async () => 'POSTED');
     const out = await runUnderKernel(postRequest(), post, h.deps);

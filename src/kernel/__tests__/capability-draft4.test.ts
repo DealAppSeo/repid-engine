@@ -60,7 +60,7 @@ function toolRequest(name: string) {
 
 const halPass = async () => ({
   verdict: 'PASS' as const,
-  method: 'm',
+  method: 'fact-check',
   votes: [
     { family: 'a', verdict: 'PASS' as const },
     { family: 'b', verdict: 'PASS' as const },

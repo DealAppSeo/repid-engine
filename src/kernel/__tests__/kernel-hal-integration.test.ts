@@ -134,7 +134,7 @@ describe('(non-vacuity) a wrong adapter fails the gate OPEN; the real adapter ho
     return async (): Promise<HalEvidence> => {
       const r = await factCheck(DELIVERABLE, providers, {});
       const verdict: HalEvidence['verdict'] = r.decision === 'vetoed' ? 'VETO' : r.decision === 'abstain' ? 'ABSTAIN' : 'PASS';
-      return { verdict, method: 'WRONG-ADAPTER', votes: [], settled_by: null, grounded: false, same_domain: false };
+      return { verdict, method: 'hal-fact-check/cross-llm-quorum', votes: [], settled_by: null, grounded: false, same_domain: false };
     };
   }
 

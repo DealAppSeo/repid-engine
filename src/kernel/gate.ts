@@ -43,6 +43,16 @@ import type {
 
 const DAY_S = 86_400;
 const HAL_VERDICTS = ['PASS', 'FLAG', 'VETO', 'ABSTAIN'];
+/**
+ * The verifiers whose answer the kernel will weigh: the HAL adapter's methods (hal-adapter.ts) and
+ * HAL's own fact-check mode (hal/service.ts). Any other `method` is a verifier the kernel does not
+ * know, so its PASS is NOT_CHECKED, never a pass (P0-VF-05).
+ */
+export const KNOWN_HAL_METHODS: ReadonlySet<string> = new Set([
+  'hal-fact-check/cross-llm-quorum',
+  'hal-fact-check/no-deliverable',
+  'fact-check',
+]);
 const WALLET = /^0x[0-9a-fA-F]{40}$/;
 
 export interface Assessment {
@@ -101,7 +111,9 @@ async function gatherHal(deps: GateDeps, req: KernelRequest, worthAsking: boolea
   if (!deps.halCheck) return { state: 'not_checked', detail: 'HAL is not wired to the kernel' };
   try {
     const ev = await deps.halCheck(req);
-    return validHal(ev) ? { state: 'consulted', evidence: ev } : { state: 'not_checked', detail: 'HAL returned an unreadable answer' };
+    if (!validHal(ev)) return { state: 'not_checked', detail: 'HAL returned an unreadable answer' };
+    if (!KNOWN_HAL_METHODS.has(String(ev.method))) return { state: 'not_checked', detail: 'HAL answered through a verifier the kernel does not know' };
+    return { state: 'consulted', evidence: ev };
   } catch {
     return { state: 'not_checked', detail: 'HAL could not be reached' };
   }
