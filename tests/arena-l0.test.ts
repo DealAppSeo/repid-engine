@@ -285,12 +285,12 @@ function arenaSuite(label: string, makeChain: () => TestChain, run: typeof descr
       });
     });
 
-    describe('what the arena sees but the engine does not refuse', () => {
-      it('CHARACTERISE: the engine\'s own delta function pays a self-contract; only the arena\'s feedback gate withholds it', async () => {
+    describe('what the engine functions do when nothing is in front of them', () => {
+      it('CHARACTERISE: the delta function ALONE pays a self-contract (production refuses one at creation; the arena creates contracts directly, so its feedback gate withholds it)', async () => {
         const ev = await go('self_rating_zero_repid');
         expect(ev.oracle_verdict).toBe('PASS');
         expect((ev.observations.extra as { engine_probe: { provider_delta: number } }).engine_probe.provider_delta).toBeGreaterThan(0);
-        expect(ev.discrepancies.some((d) => d.startsWith('info: the engine\'s own delta function'))).toBe(true);
+        expect(ev.discrepancies.some((d) => d.startsWith('info: the engine\'s delta function ALONE'))).toBe(true);
       });
     });
 

@@ -230,7 +230,7 @@ function discrepancies(ev: Evidence, w: World): string[] {
     }
   }
   const probe = (ev.observations.extra as { engine_probe?: { provider_delta: number } } | undefined)?.engine_probe;
-  if (probe && probe.provider_delta !== 0) out.push(`info: the engine's own delta function moved a self-contract's provider by ${probe.provider_delta}; only the arena's feedback gate withheld it`);
+  if (probe && probe.provider_delta !== 0) out.push(`info: the engine's delta function ALONE moved a self-contract's provider by ${probe.provider_delta}. Production refuses a self-contract at creation (src/routes/v1/contracts.ts); the arena creates contracts directly, so its own feedback gate is what withheld the RepID here`);
   return out;
 }
 
