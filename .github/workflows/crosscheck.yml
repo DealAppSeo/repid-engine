@@ -8,7 +8,8 @@
 # of the typecheck+test job, and reviewers see a distinct "crosscheck" status.
 #
 # ── Sean / Cowork action items ───────────────────────────────────────────────────────
-#   1. Repo Settings → Secrets and variables → Actions → Secrets, add (if not present):
+#   1. Repo Settings → Secrets and variables → Actions → Secrets, add (if not present).
+#      Read ONLY by `crosscheck-live` (push to main) — never by a PR run, see "WHY TWO JOBS":
 #        SUPABASE_URL            project URL (rls + repid-guards checks)
 #        SUPABASE_SERVICE_KEY    service-role key — never logged
 #        GROQ_API_KEY            } HAL discrimination check. If any are absent the HAL
@@ -36,8 +37,26 @@ on:
   push:
     branches: [main]
 
+# Nothing here writes to the repo. Artifact upload uses the runtime token, not this one.
+permissions:
+  contents: read
+
+# WHY TWO JOBS (SEC-FIX-CI, 2026-10-21): agent lanes push branches to THIS repo, so their
+# PRs are not forks and DO receive secrets. The old single job handed the PROD service-role
+# key to every PR's code, and ran `npm install` (dependency install scripts) right before.
+# A secret only reaches a runner when its job references it — a step-level `if:` or an
+# expression that evaluates to '' does NOT keep it off the runner, where any PR code with
+# sudo can read the worker's memory. So the PR job references no secret at all, and the
+# prod-reading job only runs on push to main: code that already ships to Railway with the
+# same key, so it adds no exposure.
+#
+# What a PR run loses: the six checks that read the live DB (rls, repid-guards,
+# swarm-throughput, repid-floor, zkp-anchor, hal) SKIP with "needs SUPABASE_URL" — never a
+# silent pass. They read prod STATE, not the PR's diff, so the _TEST project would only turn
+# them into vacuous passes or false reds. They still run on every push to main.
 jobs:
   crosscheck:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -46,8 +65,37 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install (legacy peer deps per nixpacks.toml)
-        run: npm install --legacy-peer-deps
+      - name: Install (lockfile only, no dependency install scripts)
+        run: npm ci --legacy-peer-deps --ignore-scripts
+
+      - name: verify:crosscheck (code checks; live-DB checks SKIP)
+        env:
+          # Lets src/config boot with no hosted DB (g6 loads it); the verify suite's own
+          # getDb() still sees no credentials, so DB checks SKIP with an honest reason.
+          LOCAL_MODE: 'true'
+          WARN_ONLY: ${{ vars.CROSSCHECK_WARN_ONLY || 'repid-floor' }}
+        run: npm run verify:crosscheck
+
+      - name: Upload crosscheck report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crosscheck-report
+          path: verify-crosscheck-report.json
+          if-no-files-found: ignore
+
+  crosscheck-live:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install (lockfile only, no dependency install scripts)
+        run: npm ci --legacy-peer-deps --ignore-scripts
 
       - name: verify:crosscheck (re-derive load-bearing claims)
         env:
