@@ -16,11 +16,11 @@
  * collected, not just the first, so the evidence shows what else was wrong with a request. A presentation that is
  * not even well-formed is refused with `presentation_malformed` / `npa_malformed` and never throws.
  *
- * NOT HERE, ON PURPOSE: the one-use authorization (consume sha256(NPA) once, atomically and durably). That belongs
+ * NOT HERE, ON PURPOSE: the one-use authorization (consume the NPA's identity once, atomically and durably). That belongs
  * to the kernel's gate; writing it here would make a check that only this caller runs.
  */
 import { createHash } from 'node:crypto';
-import { verifyTypedData } from 'ethers';
+import { TypedDataEncoder, verifyTypedData } from 'ethers';
 
 export type Hex = `0x${string}`;
 export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as Hex;
@@ -255,13 +255,20 @@ export function npaMessage(n: Npa) {
   };
 }
 
-/** The authorization identity (spec §4): sha256 of the canonical NPA. Two signatures do not enter it. */
-export const npaHashOf = (n: Npa): string => sha256Hex(jcs(n));
+/**
+ * The authorization identity (spec §4): the EIP-712 digest of the NPA, i.e. exactly what both parties signed, as 64 hex
+ * characters. It is CANONICAL BY CONSTRUCTION: an address and a bytes32 enter it as bytes, so the same agreement spelled in
+ * another letter case, or carrying an extra property, has the same identity. (It used to be sha256 of the NPA's JSON, and one
+ * signed agreement then drew a fresh one-use key per spelling: XC1-NPA-01.) Two signatures do not enter it. Throws for an
+ * object that is not an NPA; use `npaHashOrNull` for an untrusted one.
+ */
+export const npaHashOf = (n: Npa): string => TypedDataEncoder.hash(npaDomain(n), NPA_TYPES, npaMessage(n)).slice(2);
 
-/** The same hash, or null for an object that has no canonical form (a refused presentation can carry anything). */
+/** The same identity, or null for anything that is not a well-formed NPA (a refused presentation can carry anything). */
 export function npaHashOrNull(n: unknown): string | null {
+  if (npaShapeProblem(n) !== null) return null;
   try {
-    return sha256Hex(jcs(n));
+    return npaHashOf(n as Npa);
   } catch {
     return null;
   }
@@ -279,9 +286,12 @@ export function recoverNpaSigner(n: Npa, sig: unknown): string | null {
   }
 }
 
-/** Why an object is not an NPA, or null. Names a field, never echoes a value. */
+const NPA_KEYS = new Set(['buyer', 'seller', 'service_hash', 'chain_id', 'asset', 'decimals', 'amount_raw', 'quote_source', 'quote_expires_at', 'max_fee_wei', 'settlement', 'nonce']);
+
+/** Why an object is not an NPA, or null. Names a field, never echoes a value. A property the NPA does not define is refused: it would sit outside what was signed. */
 export function npaShapeProblem(n: unknown): string | null {
   if (!isObj(n)) return 'npa';
+  for (const k of Object.keys(n)) if (!NPA_KEYS.has(k)) return `unknown:${k.slice(0, 40)}`;
   if (!isAddr(n['buyer'])) return 'buyer';
   if (!isAddr(n['seller'])) return 'seller';
   if (typeof n['service_hash'] !== 'string' || !BYTES32.test(n['service_hash'])) return 'service_hash';

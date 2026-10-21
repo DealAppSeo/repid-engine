@@ -10,7 +10,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Wallet } from 'ethers';
+import { TypedDataEncoder, Wallet } from 'ethers';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
   NPA_TYPES, ZERO_ADDRESS, checkPolicy, evaluateNpa, jcs, npaDomain, npaHashOf, npaHashOrNull, npaMessage, npaShapeProblem, policyIdOf, recoverNpaSigner, serviceHashOf, stampPolicy,
@@ -217,6 +217,7 @@ describe('evaluateNpa: what is not a presentation is refused, never thrown on', 
     ['decimals 256', { decimals: 256 }], ['amount a number', { amount_raw: 250000 }], ['amount negative', { amount_raw: '-1' }], ['amount with a leading zero', { amount_raw: '01' }],
     ['amount above uint256', { amount_raw: (2n ** 256n).toString() }], ['quote_source not a string', { quote_source: 5 }], ['quote_expires_at NaN', { quote_expires_at: NaN }],
     ['max_fee_wei an exponent', { max_fee_wei: '1e15' }], ['settlement not a string', { settlement: null }], ['nonce short', { nonce: '0x11' }],
+    ['an extra property', { note: 'not signed' }], ['an extra property with a prototype-looking name', JSON.parse('{"__proto__": {"buyer": "x"}}')],
   ];
   it.each(badNpa)('an NPA with %s -> npa_malformed (and no exception from hashing or recovery)', (_n, over) => {
     const npa = { ...baseNpa(), ...over };
@@ -314,11 +315,41 @@ describe('identities', () => {
     expect(() => jcs({ a: Infinity })).toThrow();
     expect(npaHashOrNull({ a: 1n })).toBeNull();
   });
-  it('the NPA identity ignores key order and the signatures, and changes with any field', () => {
+  it('the NPA identity is the EIP-712 digest: it ignores key order and the signatures, and changes with any signed field', () => {
     const n = baseNpa();
+    expect(npaHashOf(n)).toBe(TypedDataEncoder.hash(npaDomain(n), NPA_TYPES, npaMessage(n)).slice(2));
     expect(npaHashOf(JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(n).reverse()))))).toBe(npaHashOf(n));
-    expect(npaHashOf({ ...n, amount_raw: '250001' })).not.toBe(npaHashOf(n));
-    expect(npaHashOf({ ...n, nonce: `0x${'12'.repeat(32)}` })).not.toBe(npaHashOf(n));
+    const changed: Array<Partial<Npa>> = [{ amount_raw: '250001' }, { nonce: `0x${'12'.repeat(32)}` }, { quote_expires_at: NOW + 301 }, { max_fee_wei: '1' }, { chain_id: 1 }, { decimals: 5 }, { quote_source: 'x' }, { settlement: 'escrow' as never }, { buyer: X }, { seller: X }, { asset: DECOY }, { service_hash: `0x${'22'.repeat(32)}` }];
+    for (const c of changed) expect({ c, same: npaHashOf({ ...n, ...c }) === npaHashOf(n) }).toEqual({ c, same: false });
+  });
+  it('B3 (XC1-NPA-01): the identity does not depend on how the hex fields are spelled; one signed agreement is one authorization', () => {
+    const n = baseNpa();
+    const up = (h: string) => `0x${h.slice(2).toUpperCase()}` as Hex;
+    const spellings: Npa[] = [
+      { ...n, seller: n.seller.toLowerCase() as Hex },
+      { ...n, buyer: n.buyer.toLowerCase() as Hex },
+      { ...n, nonce: up(n.nonce) },
+      { ...n, service_hash: up(n.service_hash) },
+      { ...n, asset: up(n.asset) },
+      { ...n, buyer: n.buyer.toLowerCase() as Hex, seller: up(n.seller), asset: n.asset.toLowerCase() as Hex, nonce: up(n.nonce), service_hash: up(n.service_hash) },
+    ];
+    for (const s of spellings) expect({ s, id: npaHashOf(s), ok: npaHashOrNull(s) }).toEqual({ s, id: npaHashOf(n), ok: npaHashOf(n) });
+  });
+  it('B3: every re-spelling of a signed NPA passes the preflight WITH THE ORIGINAL SIGNATURES (it is the agreement both parties signed) and carries the one identity', async () => {
+    const base = await build();
+    const p = base.pres as { npa: { npa: Npa; buyer_sig: Hex; seller_sig: Hex }; request: Record<string, unknown> };
+    const up = (h: string) => `0x${h.slice(2).toUpperCase()}` as Hex;
+    for (const re of [{ seller: p.npa.npa.seller.toLowerCase() as Hex }, { nonce: up(p.npa.npa.nonce) }, { service_hash: up(p.npa.npa.service_hash) }]) {
+      const npa = { ...p.npa.npa, ...re };
+      expect(evaluateNpa({ ...base, pres: { ...p, npa: { ...p.npa, npa }, request: { ...p.request, recipient: npa.seller } } })).toEqual([]);
+      expect(npaHashOrNull(npa)).toBe(npaHashOf(p.npa.npa));
+    }
+  });
+  it('a property the NPA does not define sits outside what was signed: refused as malformed, and it has no identity', () => {
+    const n = { ...baseNpa(), note: 'not signed' };
+    expect(npaHashOrNull(n)).toBeNull();
+    expect(npaShapeProblem(n)).toBe('unknown:note');
+    expect(npaShapeProblem(JSON.parse('{"__proto__": {"x": 1}}'))).toBe('unknown:__proto__');
   });
   it('a signature recovers its signer, a different NPA recovers someone else, garbage recovers nobody and never throws', async () => {
     const n = baseNpa();

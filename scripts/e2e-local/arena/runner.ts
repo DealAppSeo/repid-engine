@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { acceptDelivery, ModelError, validateTerms, type ArenaAgents, type Delivery, type JudgeNote, type Terms } from './agents';
 import type { TestChain } from './chain';
-import { CASES } from './cases';
+import { CASES, EXTRA_CASES, type CaseDef, type ExtraCaseId } from './cases';
 import { ZERO_ADDRESS, jcs, serviceHashOf, sha256Hex, type Hex } from './core';
 import type { Engine } from './engine';
 import { grade, predict, type Balances, type CaseId, type Observed, type PassCondition, type Prediction, type Sym, type Violation } from './oracle';
@@ -21,10 +21,10 @@ import { disposeWorld, makeWorld, serializeReadback, type Attempt, type World } 
 
 /**
  * Cases the engine is KNOWN to fail today, because it has no one-use authorization (spec §4): nothing
- * consumes sha256(NPA) before the tool runs, so a repeat settles again. Pinned with `it.failing` in
+ * consumes the authorization (the NPA's EIP-712 digest) before the tool runs, so a repeat settles again. Pinned with `it.failing` in
  * tests/arena-l0.test.ts, exactly as tests/kernel pins its holes. A pin is not a pass: the evidence still says FAIL.
  */
-export const KNOWN_FAILING: readonly CaseId[] = ['replay_same_authorization', 'replay_after_restart', 'concurrent_x10'];
+export const KNOWN_FAILING: readonly string[] = ['replay_same_authorization', 'replay_after_restart', 'concurrent_x10', 'respelled_replay'];
 
 export interface RunCtx {
   chain: TestChain;
@@ -50,7 +50,7 @@ export interface RunCtx {
 export interface Evidence {
   run_id: string;
   batch_id: string;
-  case: CaseId;
+  case: CaseId | ExtraCaseId;
   at: string;
   prediction: (Prediction & { sha256: string; frozen_at: string }) | null;
   frozen: { git_sha: string; policy_id: string | null; chain_id: number | null; block: string | null; model_ids: string[]; evaluator_sha256: string };
@@ -77,7 +77,8 @@ const REQUESTS = [
   'Give four tips for reading a bus timetable, using an invented town.',
 ];
 
-export const symFor = (c: CaseId, seed = 0): Sym => CASES[c].sym ?? (parseInt(sha256Hex(`${c}:${seed}`).slice(0, 2), 16) % 2 === 0 ? 'USDC' : 'ETH');
+const defOf = (c: CaseId | ExtraCaseId): CaseDef => (CASES as Record<string, CaseDef>)[c] ?? EXTRA_CASES[c as ExtraCaseId];
+export const symFor = (c: CaseId | ExtraCaseId, seed = 0): Sym => defOf(c).sym ?? (parseInt(sha256Hex(`${c}:${seed}`).slice(0, 2), 16) % 2 === 0 ? 'USDC' : 'ETH');
 
 async function snap(w: World): Promise<{ buyer: Balances; seller: Balances; attacker: Balances }> {
   const one = async (a: Hex): Promise<Balances> => ({
@@ -90,9 +91,9 @@ async function snap(w: World): Promise<{ buyer: Balances; seller: Balances; atta
 
 const providerRepid = async (w: World): Promise<number> => (await w.engine.db.from('repid_agents').select('*').eq('id', w.agents.seller.id).single()).data.current_repid;
 
-export async function runCase(caseId: CaseId, ctx: RunCtx): Promise<Evidence> {
+export async function runCase(caseId: CaseId | ExtraCaseId, ctx: RunCtx): Promise<Evidence> {
   const now = ctx.now ?? Date.now;
-  const def = CASES[caseId];
+  const def = defOf(caseId);
   const sym = def.sym ?? ctx.sym ?? symFor(caseId, ctx.symSeed);
   const ev: Evidence = {
     run_id: randomUUID(),
@@ -145,7 +146,7 @@ export async function runCase(caseId: CaseId, ctx: RunCtx): Promise<Evidence> {
   let w: World | null = null;
   try {
     w = await makeWorld({ chain: ctx.chain, engine: ctx.engine, now: ctx.now, evaluatorSha256: ctx.evaluatorSha256, genKey: ctx.genKey, ...(def.world?.(sym, terms.amount_raw) ?? {}) });
-    const pred = predict(caseId, { sym, amount_raw: terms.amount_raw });
+    const pred = EXTRA_CASES[caseId as ExtraCaseId]?.predict({ sym, amount_raw: terms.amount_raw }) ?? predict(caseId as CaseId, { sym, amount_raw: terms.amount_raw });
     ev.prediction = { ...pred, sha256: sha256Hex(jcs(pred)), frozen_at: new Date(now()).toISOString() };
     ev.frozen.policy_id = w.policy.policy_id;
     ev.frozen.chain_id = w.policy.chain_id;
@@ -226,7 +227,7 @@ function discrepancies(ev: Evidence, w: World): string[] {
     if (dry && 'verdict' in dry && dry.verdict === 'ALLOW') out.push(`info: the kernel alone would have ALLOWED "${a.label}" (arena preflight refused it: ${a.refusals.map((r) => r.code).join(', ')})`);
     if (a.kernel?.verdict === 'ALLOW' && a.status === 'SETTLED' && !repeated.has(a.npa_hash) && w.attempts.filter((x) => x.npa_hash === a.npa_hash && x.status === 'SETTLED').length > 1) {
       repeated.add(a.npa_hash);
-      out.push(`info: the kernel ALLOWED repeats of authorization ${a.npa_hash.slice(0, 12)}; nothing consumes sha256(NPA) before the tool runs`);
+      out.push(`info: the kernel ALLOWED repeats of authorization ${a.npa_hash.slice(0, 12)}; nothing consumes the authorization (the NPA's EIP-712 digest) before the tool runs`);
     }
   }
   const probe = (ev.observations.extra as { engine_probe?: { provider_delta: number } } | undefined)?.engine_probe;

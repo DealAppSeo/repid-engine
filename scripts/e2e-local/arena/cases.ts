@@ -5,9 +5,9 @@
  * written before the script runs. A script never grades itself.
  */
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
-import type { Hex } from './core';
+import type { Hex, Npa } from './core';
 import { policyBodyOf, policyIdOf } from './core';
-import type { CaseId, Sym } from './oracle';
+import type { CaseId, Prediction, Sym } from './oracle';
 import { awardRepid, buildNpa, claimSettlement, present, presentationOf, probeEngineSelfRating, restart, type Attempt, type NpaOpts, type RepidResult, type World, type WorldOpts } from './world';
 
 export interface CaseCtx {
@@ -244,3 +244,43 @@ export const CASES: Record<CaseId, CaseDef> = {
   },
 };
 
+
+// ── cases beyond the frozen 18 ───────────────────────────────────────────────────────────────────
+// The adversarial lane owns oracle.ts and the 18 case ids. These are executor-side cases it did not list; they are graded
+// by the same frozen `grade` with their own prediction (written here, before the case runs).
+
+export const EXTRA_CASE_IDS = ['respelled_replay'] as const;
+export type ExtraCaseId = (typeof EXTRA_CASE_IDS)[number];
+export interface ExtraCaseDef extends CaseDef {
+  predict: (t: { sym: Sym; amount_raw: string }) => Prediction;
+}
+
+/** Same bytes, other spelling: EIP-712 encodes an address and a bytes32 as bytes, so none of this changes what was signed. */
+const upperBody = (h: string): Hex => `0x${h.slice(2).toUpperCase()}` as Hex;
+const respellings = (n: Npa): Npa[] => [
+  { ...n, seller: n.seller.toLowerCase() as Hex },
+  { ...n, nonce: upperBody(n.nonce) },
+  { ...n, service_hash: upperBody(n.service_hash) },
+  { ...n, buyer: n.buyer.toLowerCase() as Hex, seller: n.seller.toLowerCase() as Hex, asset: upperBody(n.asset), nonce: upperBody(n.nonce), service_hash: upperBody(n.service_hash) },
+];
+
+export const EXTRA_CASES: Record<ExtraCaseId, ExtraCaseDef> = {
+  // One signed agreement is ONE authorization however its hex fields are spelled. The same two signatures, the NPA re-cased,
+  // must not get a fresh one-use key (XC1-NPA-01, B3): the identity is the EIP-712 digest, not the JSON bytes.
+  respelled_replay: {
+    world: (sym) => ample(sym),
+    predict: (t) => ({
+      case: 'respelled_replay' as never,
+      ordered: true,
+      attempts: ['SETTLED', 'REFUSED', 'REFUSED', 'REFUSED', 'REFUSED'],
+      expected_settled: [{ sym: t.sym, amount_raw: t.amount_raw }],
+      provider_repid: 'zero',
+    }),
+    async run(c) {
+      const s = await buildNpa(c.w, { sym: c.sym, amount_raw: c.amount_raw, work: c.work });
+      await present(c.w, presentationOf(s), 'the agreement as signed');
+      for (const [i, n] of respellings(s.npa).entries()) await present(c.w, presentationOf({ ...s, npa: n }), `the same signatures, hex fields re-spelled (${i + 1} of 4)`);
+      return nothing;
+    },
+  },
+};

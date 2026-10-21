@@ -30,8 +30,13 @@ presentation (NPA signed by both parties + the request)
 
 The preflight exists because the kernel's signed policy deliberately does not constrain the asset or the chain, and has no notion of an
 NPA, a quote, a pinned experiment policy or a kill-switch file. It lives in `src/` (`src/services/npa-preflight.ts`, unit-tested in
-`tests/npa-preflight.test.ts`) because it is part of the executor: a harness script is not an executor. It does **not** consume
-sha256(NPA) once; that belongs to the kernel's gate (see below).
+`tests/npa-preflight.test.ts`) because it is part of the executor: a harness script is not an executor. It does **not** consume the
+authorization once; that belongs to the kernel's gate (see below).
+
+**The authorization identity is the NPA's EIP-712 digest** (`npaHashOf`: what both parties signed), not a hash of its JSON. An address and a
+bytes32 enter it as bytes, so one signed agreement is one authorization however its hex fields are spelled. (It used to be sha256 of the JSON,
+and the same two signatures drew a fresh one-use key per spelling: a re-cased NPA paid again.) The arena puts it in the kernel request's
+`args_hash`; an NPA carrying a property it does not define is refused as malformed.
 
 ## Files
 
@@ -70,6 +75,7 @@ who declines, a harness error). `NOT_CHECKED` says nothing about the executor.
 
 ## Known holes (recorded as FAIL, pinned with `it.failing`, never hidden)
 
-`replay_same_authorization`, `replay_after_restart` and `concurrent_x10` all settle a second time. Nothing in the executor consumes
-sha256(NPA) atomically and durably before the tool runs. Closing it needs a hook in the kernel (a one-use authorization store keyed by
-`args_hash`, consumed before the tool runs); `args_hash` already carries sha256(NPA) in the arena's requests.
+`replay_same_authorization`, `replay_after_restart`, `concurrent_x10` and `respelled_replay` (a case beyond the frozen 18: the same two
+signatures over the NPA with its hex fields re-spelled) all settle a second time on a kernel with no one-use authorization. Closing it needs
+a hook in the kernel (a one-use store keyed by `args_hash`, consumed before the tool runs); `args_hash` already carries the NPA's identity in
+the arena's requests. The fixed kernel (#1453) closes all four.

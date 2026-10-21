@@ -14,19 +14,21 @@
  *                        which is the cue to delete the marker. A finding recorded this way cannot go stale.
  *   it('CHARACTERISE …') pins what happens today, so it cannot change unnoticed.
  *
- * The hole these pin: nothing in the engine's executor consumes sha256(NPA) before the tool runs (spec §4,
+ * The hole these pin: nothing in the engine's executor consumes the authorization (the NPA's EIP-712 digest) before the tool runs (spec §4,
  * "one-use authorization, consumed atomically and durably"). Replay, replay after restart, and 10 concurrent
  * presentations all settle again. They are recorded as FAIL in the evidence; they are not hidden.
  */
 import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { TypedDataEncoder } from 'ethers';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { StubAgents, acceptDelivery, validateTerms } from '../scripts/e2e-local/arena/agents';
 import { MemoryChain, ViemChain, type TestChain } from '../scripts/e2e-local/arena/chain';
-import { ZERO_ADDRESS, classifySettlement, jcs, npaHashOf, npaSigner, policyBodyOf, policyIdOf, sha256Hex, signNpa, type Npa } from '../scripts/e2e-local/arena/core';
+import { NPA_TYPES, ZERO_ADDRESS, classifySettlement, jcs, npaDomain, npaHashOf, npaMessage, npaSigner, policyBodyOf, policyIdOf, sha256Hex, signNpa, type Npa } from '../scripts/e2e-local/arena/core';
 import { bootEngine } from '../scripts/e2e-local/arena/engine';
 import { CASE_IDS, CONTROL_CASES, grade, predict, type CaseId, type Observed, type Sym } from '../scripts/e2e-local/arena/oracle';
+import { EXTRA_CASE_IDS, type ExtraCaseId } from '../scripts/e2e-local/arena/cases';
 import { KNOWN_FAILING, runCase, type Evidence } from '../scripts/e2e-local/arena/runner';
 import { buildNpa, disposeWorld, makeWorld, present, presentationOf } from '../scripts/e2e-local/arena/world';
 
@@ -93,9 +95,10 @@ describe('NPA (EIP-712, two signatures)', () => {
     expect(await npaSigner(npa, null)).toBeNull();
     expect(await npaSigner(npa, '0x1234')).toBeNull();
   });
-  it('the authorization identity is the hash of the NPA, not of its signatures', () => {
-    expect(npaHashOf(npa)).toBe(sha256Hex(jcs(npa)));
+  it('the authorization identity is the EIP-712 digest of the NPA (what both parties signed), not of its signatures or its JSON bytes', () => {
+    expect(npaHashOf(npa)).toBe(TypedDataEncoder.hash(npaDomain(npa), NPA_TYPES, npaMessage(npa)).slice(2));
     expect(npaHashOf({ ...npa, nonce: `0x${'23'.repeat(32)}` })).not.toBe(npaHashOf(npa));
+    expect(npaHashOf({ ...npa, nonce: `0x${'22'.repeat(32)}`.toUpperCase().replace('0X', '0x') as `0x${string}` })).toBe(npaHashOf(npa)); // same bytes, other spelling
   });
 });
 
@@ -210,7 +213,7 @@ const REFUSAL_CASES: CaseId[] = [
 function arenaSuite(label: string, makeChain: () => TestChain, run: typeof describe) {
   run(`L0 arena on the ${label} chain`, () => {
     const chain = makeChain();
-    const go = (c: CaseId, o: { sym?: Sym; agents?: StubAgents; outDir?: string; genKey?: () => `0x${string}` } = {}) =>
+    const go = (c: CaseId | ExtraCaseId, o: { sym?: Sym; agents?: StubAgents; outDir?: string; genKey?: () => `0x${string}` } = {}) =>
       runCase(c, { chain, engine, agents: o.agents ?? new StubAgents(), batchId: 'test', gitSha: 'test', evaluatorSha256: ORACLE_SHA, sym: o.sym, outDir: o.outDir, genKey: o.genKey });
 
     it('every case in the spec has a script and a prediction', () => {
@@ -294,13 +297,23 @@ function arenaSuite(label: string, makeChain: () => TestChain, run: typeof descr
       });
     });
 
+    describe('B3: one signed agreement is ONE authorization, however its hex fields are spelled', () => {
+      it.each(['USDC', 'ETH'] as Sym[])('[%s] the five presentations (as signed, and four re-spellings under the SAME signatures) share one authorization identity and every one reaches the kernel', async (sym) => {
+        const ev = await go('respelled_replay', { sym });
+        const a = ev.observations.attempts as Array<{ npa_hash: string; kernel: unknown; refusals: Array<{ stage: string }> }>;
+        expect(a).toHaveLength(5);
+        expect(new Set(a.map((x) => x.npa_hash)).size).toBe(1); // the identity is not the JSON bytes
+        expect(a.every((x) => x.kernel !== null)).toBe(true); // the preflight accepts them: it IS the agreement both parties signed
+      });
+    });
+
     describe('known holes: the executor has no one-use authorization', () => {
       it.each(KNOWN_FAILING)('CHARACTERISE %s: the evidence records FAIL, a double execution, and pins it as known', async (c) => {
-        const ev = await go(c, { sym: 'USDC' });
+        const ev = await go(c as CaseId | ExtraCaseId, { sym: 'USDC' });
         expect(ev.oracle_verdict).toBe('FAIL');
         expect(ev.breaches).toContain('double_execution');
         expect(ev.pinned_known_failure).toBe(true);
-        expect(ev.discrepancies.some((d) => d.includes('nothing consumes sha256(NPA)'))).toBe(true);
+        expect(ev.discrepancies.some((d) => d.includes('nothing consumes the authorization'))).toBe(true);
         const settled = (ev.observations.attempts as Array<{ status: string }>).filter((a) => a.status === 'SETTLED').length;
         expect(settled).toBeGreaterThan(1);
       });
@@ -313,8 +326,11 @@ function arenaSuite(label: string, makeChain: () => TestChain, run: typeof descr
       it.failing('concurrent_x10: of ten simultaneous presentations exactly one may settle (SECURE; BREACHED today)', async () => {
         expect((await go('concurrent_x10', { sym: 'USDC' })).oracle_verdict).toBe('PASS');
       });
+      it.failing('respelled_replay: the same signed agreement with its hex fields re-spelled must not settle again (SECURE; BREACHED today: no one-use key at all)', async () => {
+        expect((await go('respelled_replay', { sym: 'USDC' })).oracle_verdict).toBe('PASS');
+      });
       it('every case that is not a pinned hole passes (so the pins are the only FAILs)', async () => {
-        for (const c of CASE_IDS.filter((x) => !KNOWN_FAILING.includes(x))) {
+        for (const c of [...CASE_IDS, ...EXTRA_CASE_IDS].filter((x) => !KNOWN_FAILING.includes(x))) {
           const ev = await go(c, { sym: 'ETH' });
           expect({ c, v: ev.oracle_verdict, why: ev.violations }).toEqual({ c, v: 'PASS', why: [] });
         }

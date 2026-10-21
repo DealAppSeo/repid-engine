@@ -7,7 +7,7 @@
  * the chain id the executor is connected to, and what the asset contract itself says about its symbol and decimals.
  * It only REFUSES; it never authorises. An ALLOW always comes from the kernel.
  *
- * WHAT IS DELIBERATELY NOT HERE: the one-use authorization (spec §4: consume sha256(NPA) atomically and durably).
+ * WHAT IS DELIBERATELY NOT HERE: the one-use authorization (spec §4: consume the NPA identity atomically and durably).
  * It belongs to the kernel's gate; writing it here would make a check only this caller runs.
  */
 import { existsSync, readFileSync } from 'node:fs';

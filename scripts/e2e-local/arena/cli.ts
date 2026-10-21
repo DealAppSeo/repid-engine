@@ -19,6 +19,7 @@ import { ViemChain } from './chain';
 import { sha256Hex } from './core';
 import { bootEngine } from './engine';
 import { CASE_IDS, CONTROL_CASES, type CaseId } from './oracle';
+import { EXTRA_CASE_IDS, type ExtraCaseId } from './cases';
 import { KNOWN_FAILING, runCase, type Evidence } from './runner';
 
 function parseArgs(argv: string[]): Record<string, string> {
@@ -54,12 +55,12 @@ export function summarise(batchId: string, evs: Evidence[]) {
 async function main() {
   const a = parseArgs(process.argv.slice(2));
   if (a['list-cases']) {
-    console.log(JSON.stringify({ cases: CASE_IDS, controls: CONTROL_CASES, known_failing: KNOWN_FAILING }));
+    console.log(JSON.stringify({ cases: CASE_IDS, controls: CONTROL_CASES, extra_cases: EXTRA_CASE_IDS, known_failing: KNOWN_FAILING }));
     return;
   }
   if (!a['rpc']) throw new Error('--rpc is required');
-  const cases = (a['cases'] ? a['cases'].split(',') : [...CASE_IDS]) as CaseId[];
-  for (const c of cases) if (!(CASE_IDS as readonly string[]).includes(c)) throw new Error(`unknown case ${c}`);
+  const cases = (a['cases'] ? a['cases'].split(',') : [...CASE_IDS, ...EXTRA_CASE_IDS]) as Array<CaseId | ExtraCaseId>;
+  for (const c of cases) if (!(CASE_IDS as readonly string[]).includes(c) && !(EXTRA_CASE_IDS as readonly string[]).includes(c)) throw new Error(`unknown case ${c}`);
 
   const engine = bootEngine();
   const chain = new ViemChain(a['rpc']);
