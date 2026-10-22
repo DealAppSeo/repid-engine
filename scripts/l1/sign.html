@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>L1 owner signature</title>
+<style>
+  :root { --bg: #fff; --fg: #111; --muted: #555; --line: #ccc; --warn: #8a4b00; --ok: #11642a; --bad: #a11; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #121212; --fg: #eee; --muted: #aaa; --line: #444; --warn: #f0b060; --ok: #6fd08c; --bad: #ff8080; } }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; max-width: 52rem; margin: 0 auto; padding: 1rem; }
+  pre { white-space: pre-wrap; word-break: break-word; border: 1px solid var(--line); padding: .75rem; max-height: 28rem; overflow: auto; font-size: 13px; }
+  code { word-break: break-all; }
+  .warn { color: var(--warn); font-weight: 600; } .ok { color: var(--ok); } .bad { color: var(--bad); }
+  button { font-size: 1rem; padding: .5rem 1rem; margin: .25rem 0; }
+  input { font: 1rem monospace; padding: .4rem; width: 16ch; }
+  li { margin: .5rem 0; }
+</style>
+</head>
+<body>
+<h1>Sign the L1 owner policy</h1>
+<p class="warn">Signing moves no funds and needs no gas. But the signature IS an authorization: until it expires (or the kill-switch file exists), it lets the L1 executor spend from the buyer wallet up to the caps on the sheet below.</p>
+<p>This page never sees a key. Your wallet signs; the page sends only the signature back to the local server, which checks it before writing it to disk.</p>
+<ol>
+  <li>Payload sha256 (computed in this browser from the exact bytes your wallet will sign):<br><code id="sha">loading…</code></li>
+  <li>Type the first 12 characters of the payload sha256 printed on the review sheet you checked:
+    <input id="confirm" maxlength="12" autocomplete="off" spellcheck="false"> <span id="match"></span></li>
+  <li><button id="connect" disabled>Connect wallet</button> <span id="acct"></span><br>The connected account must be <code id="owner"></code>, on Base Sepolia (chain 84532).</li>
+  <li><button id="sign" disabled>Sign with eth_signTypedData_v4</button> <span id="result"></span></li>
+</ol>
+<h2>The review sheet (rendered by the server from these same bytes)</h2>
+<pre id="sheet">loading…</pre>
+<script>
+(async () => {
+  const $ = (id) => document.getElementById(id);
+  const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const payload = await (await fetch('/payload')).text();
+  const info = await (await fetch('/info')).json();
+  const sha = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload)));
+  $('sha').textContent = sha;
+  $('owner').textContent = info.owner;
+  $('sheet').textContent = info.sheet;
+  let account = null;
+  $('confirm').addEventListener('input', () => {
+    const ok = $('confirm').value.toLowerCase() === sha.slice(0, 12);
+    $('match').textContent = ok ? 'matches' : '';
+    $('match').className = ok ? 'ok' : '';
+    $('connect').disabled = !ok;
+  });
+  $('connect').addEventListener('click', async () => {
+    if (!window.ethereum) { $('acct').textContent = 'No wallet found in this browser.'; $('acct').className = 'bad'; return; }
+    try {
+      const [a] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      if (!a || a.toLowerCase() !== info.owner.toLowerCase()) { $('acct').textContent = `Connected ${a}, which is not the owner on the sheet. Switch accounts in your wallet.`; $('acct').className = 'bad'; return; }
+      await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: info.chainIdHex }] });
+      const chain = await window.ethereum.request({ method: 'eth_chainId' });
+      if (chain !== info.chainIdHex) { $('acct').textContent = `The wallet is on ${chain}, not Base Sepolia.`; $('acct').className = 'bad'; return; }
+      account = a;
+      $('acct').textContent = `Connected ${a} on Base Sepolia.`;
+      $('acct').className = 'ok';
+      $('sign').disabled = false;
+    } catch (e) {
+      $('acct').textContent = `Wallet: ${e && e.message ? e.message : e}. If Base Sepolia is not in your wallet, add it there first.`;
+      $('acct').className = 'bad';
+    }
+  });
+  $('sign').addEventListener('click', async () => {
+    try {
+      // The exact payload string, unchanged: what was hashed above is what the wallet signs.
+      const signature = await window.ethereum.request({ method: 'eth_signTypedData_v4', params: [account, payload] });
+      const r = await (await fetch('/signature', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ signature }) })).json();
+      $('result').textContent = r.ok ? `Verified and saved to ${r.wrote}. You can close this page.` : `Refused: ${r.error}`;
+      $('result').className = r.ok ? 'ok' : 'bad';
+      $('sign').disabled = true;
+    } catch (e) {
+      $('result').textContent = `Not signed: ${e && e.message ? e.message : e}`;
+      $('result').className = 'bad';
+    }
+  });
+})();
+</script>
+</body>
+</html>
