@@ -1,0 +1,152 @@
+{
+  "record": {
+    "schema": "dev.trustshell.action-evidence/0.1-draft",
+    "observation": {
+      "platform": "github-actions",
+      "host": "api.github.com",
+      "url": "https://github.com/DealAppSeo/repid-engine/actions/runs/39610093655",
+      "owner": "DealAppSeo",
+      "repo": "repid-engine",
+      "run_id": 39610093655,
+      "run_attempt": 1,
+      "workflow": {
+        "name": "CI",
+        "path": ".github/workflows/ci.yml"
+      },
+      "head_sha": "11508aa771d7d0348ec2bbbdb1b205fa0d4dd43c",
+      "status": "completed",
+      "conclusion": "success",
+      "check": {
+        "verdict": "COMPLETE",
+        "results": [
+          {
+            "ok": true,
+            "label": "A workflow run with this id exists",
+            "detail": "CI · completed"
+          },
+          {
+            "ok": true,
+            "label": "The run finished",
+            "detail": "status: completed"
+          },
+          {
+            "ok": true,
+            "label": "The run succeeded",
+            "detail": "GitHub reports conclusion: success"
+          },
+          {
+            "ok": true,
+            "label": "Every job in the run passed",
+            "detail": "2 jobs"
+          },
+          {
+            "ok": true,
+            "label": "The commit exists on the remote",
+            "detail": "11508aa771d7d0348ec2bbbdb1b205fa0d4dd43c"
+          }
+        ]
+      },
+      "jobs": {
+        "http_status": 200,
+        "total": 2,
+        "items": [
+          {
+            "name": "zkp-vault",
+            "status": "completed",
+            "conclusion": "success",
+            "head_sha": "11508aa771d7d0348ec2bbbdb1b205fa0d4dd43c",
+            "run_attempt": 1
+          },
+          {
+            "name": "test",
+            "status": "completed",
+            "conclusion": "success",
+            "head_sha": "11508aa771d7d0348ec2bbbdb1b205fa0d4dd43c",
+            "run_attempt": 1
+          }
+        ]
+      },
+      "fetchedAt": "2026-10-21T20:21:56.548Z",
+      "freshness": "LIVE"
+    },
+    "claims": [
+      {
+        "claim": "Workflow run 39610093655 succeeded",
+        "sentence": "Workflow run 39610093655 succeeded.",
+        "template": "gha.run_succeeded",
+        "status": "SUPPORTED",
+        "evidence_fields": [
+          "/observation/status",
+          "/observation/conclusion",
+          "/observation/check/verdict",
+          "/observation/jobs"
+        ],
+        "scope": "Whether workflow run 39610093655 (attempt 1, commit 11508aa771d7) concluded success with every job read. Not which tests it ran, not any other workflow or check on the commit, and not whether the change works.",
+        "reason": "GitHub reports conclusion \"success\" for run 39610093655 (attempt 1, commit 11508aa771d7); 2 of 2 jobs concluded success. The line cites this run."
+      },
+      {
+        "claim": "run 39610093655",
+        "sentence": "Workflow run 39610093655 succeeded.",
+        "template": "gha.run_id",
+        "status": "SUPPORTED",
+        "evidence_fields": [
+          "/observation/owner",
+          "/observation/repo",
+          "/observation/run_id"
+        ],
+        "scope": "Run identity only: whether the run this claim cites is the inspected run. Not what the run shows.",
+        "reason": "The cited run is the inspected run, 39610093655."
+      },
+      {
+        "claim": "Fixed",
+        "sentence": "Fixed in 0123456789ab.",
+        "template": "excluded.fix",
+        "status": "NOT_CHECKED",
+        "evidence_fields": [],
+        "scope": "Outside what a workflow run record can show.",
+        "reason": "A run shows what its jobs concluded, not whether a change fixes what it set out to fix."
+      },
+      {
+        "claim": "in 0123456789ab",
+        "sentence": "Fixed in 0123456789ab.",
+        "template": "git.head_sha",
+        "status": "SUPPORTED",
+        "evidence_fields": [
+          "/observation/head_sha"
+        ],
+        "scope": "Commit identity only: whether the commit this claim cites is the one the inspected run ran on. A SHA is matched as a prefix, and a match supports only at 12 or more hex characters. Not what the commit changes or fixes.",
+        "reason": "The claim cites commit 0123456789ab; the inspected run is on 11508aa771d7."
+      },
+      {
+        "claim": "All tests pass",
+        "sentence": "All tests pass.",
+        "template": "ci.tests_pass",
+        "status": "NOT_CHECKED",
+        "evidence_fields": [],
+        "scope": "Not compared: nothing ties this claim to the inspected run.",
+        "reason": "This sentence cites neither this run's commit nor its run id, so nothing ties the claim to run 39610093655 (attempt 1, commit 11508aa771d7)."
+      }
+    ],
+    "assurance": {
+      "cryptographic_integrity": "NOT_CHECKED",
+      "observation": "PLATFORM_REPORTED"
+    },
+    "does_not_prove": [
+      "This is what GitHub can confirm. It is not a judgement about whether the code is correct.",
+      "It cannot show work done outside this repository, or on a branch that was never pushed.",
+      "A passing test suite proves the tests that exist passed — not that the right tests exist.",
+      "It does not establish who or what authored the change.",
+      "SUPPORTED means the platform record matches the narrow scope written next to the claim. It is not a finding that the claim is true in any broader sense.",
+      "A successful workflow run shows that run succeeded. It does not show which tests ran, that all tests or all checks passed, or that a change works.",
+      "Only this one workflow run was read. Other workflows, check suites and status checks on the same commit were not.",
+      "Every observed fact is GitHub reporting on its own run (PLATFORM_REPORTED). Nothing was re-run or independently observed.",
+      "Broader security: not checked. A CI conclusion is not a security review.",
+      "The record is not signed. Its SHA-256 shows whether the record changed after it was made, not who made it."
+    ]
+  },
+  "digest": {
+    "algorithm": "sha-256",
+    "canonicalization": "RFC 8785",
+    "value": "a972635816ba8a947e08b455d7bc5b3c6bc540a13422d021d3456e686e67041d"
+  }
+}
