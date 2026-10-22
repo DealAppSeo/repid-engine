@@ -8,6 +8,8 @@
  *     live current_repid. Zero live RepID change. This is a pure measurement.
  *   PARTICIPANT_RATING_MODE=live   (Sean-gated) → insert the row into
  *     participant_rating_ledger (migrations/2026-07-08-participant-rating-ledger.sql).
+ *     That table does NOT exist in prod (measured 2026-10-22: to_regclass is null), so live
+ *     mode would fail on its insert, loudly; the writer throws. Only shadow mode can run today.
  *     Even in live mode this writer NEVER mutates repid_agents.current_repid — it only
  *     records the rating edge / the would-be delta. Promoting a verified dogfood delta
  *     into live RepID is a SEPARATE, explicitly-gated step through the RepID engine.
