@@ -147,7 +147,7 @@ if (receipt.onchain_reputation_url) {
 if (receipt.zk_proofs.length) {
   const p = receipt.zk_proofs[0];
   console.log(`\n  7. ZERO-KNOWLEDGE PROOF attached  (${p.scheme}, real=${p.real})`);
-  console.log(`     Proves a reputation THRESHOLD without revealing the score.`);
+  console.log(`     Proves the score clears a THRESHOLD. A range proof: the score itself is public.`);
 }
 console.log(`\n${line}`);
 console.log(`  The point: being wrong costs the agent something, and you can verify`);

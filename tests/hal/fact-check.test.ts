@@ -213,7 +213,7 @@ describe('A1 verdict-count decision mode (HAL_DECISION_MODE=verdict)', () => {
     byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'FALSE', confidence: 100 }, m3: { verdict: 'TRUE', confidence: 80 } };
     const r = await factCheck('The Mona Lisa was painted by Picasso.', P);
     expect(r.decision).toBe('vetoed');
-    expect(r.decision_reason).toMatch(/2 of 3 independent model families judged this claim FALSE/);
+    expect(r.decision_reason).toMatch(/2 of 3 different model families judged this claim FALSE/);
   });
 
   test('2 FALSE from the SAME family → NOT a quorum → flagged (independence)', async () => {

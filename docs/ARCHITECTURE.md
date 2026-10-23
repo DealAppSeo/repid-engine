@@ -74,9 +74,11 @@ Prompt → ANFIS routes (with RepID context) → LLM → HAL 5-signal score → 
 - **Rigorous 337-item eval (headline)** (`scripts/eval/rigorous-hal-eval.ts` + a 337-item provenanced
   corpus: FEVER + HaluEval + TruthfulQA + canary) — the honest, harder-corpus number for the same real
   cross-LLM quorum, bootstrap 95% CIs: **F1 ≈ 0.80 [0.75–0.84], recall ≈ 0.95, AUC ≈ 0.90, ECE 0.056**
-  (well-calibrated). Caveats: the quorum's edge is **recall + vendor-independence, NOT raw accuracy** (a
-  strong single model edges it on F1); model **independence is partial** (some hosts serve identical
-  weights — weight-dedup in progress); **independent replication is in progress** before headlining.
+  (well-calibrated). Caveats: the quorum's edge is **recall + not depending on one vendor, NOT raw
+  accuracy** (a strong single model edges it on F1); the voters are **different model families, not
+  independent ones** (some hosts serve identical weights — weight-dedup in progress — and errors
+  correlate across families too: Kim et al., ICML 2025, arXiv 2506.07962); **a replication by
+  someone else is in progress** before headlining.
   Report: `reports/2026-07-09/HAL_RIGOROUS_EVAL.md`.
 - **Earned model leaderboard** (`scripts/eval/model-leaderboard.ts`) — deterministic re-scoring of the
   verified canary verdicts into receipt-backed, coverage-gated, multi-axis provider ratings; UNRATED for

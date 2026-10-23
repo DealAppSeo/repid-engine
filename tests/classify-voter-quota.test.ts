@@ -9,11 +9,11 @@
 const dbFrom = jest.fn();
 jest.mock('../src/db', () => ({ db: { from: dbFrom, rpc: jest.fn() } }));
 
-import { __resetVoteCooldowns, castVote, DEFAULT_VOTERS, voterQuota, type Voter } from '../src/classify/free-votes';
+import { __resetVoteCooldowns, castVote, CROSS_FAMILY_VOTERS, voterQuota, type Voter } from '../src/classify/free-votes';
 import { __resetClassifyStats, classifyStats, recordVotes } from '../src/classify/vote-health';
 
 const ENV = { GROQ_API_KEY: 'test-key-not-real', CEREBRAS_API_KEY: 'test-key-not-real' } as NodeJS.ProcessEnv;
-const GROQ = DEFAULT_VOTERS.find((v) => v.provider === 'groq')!;
+const GROQ = CROSS_FAMILY_VOTERS.find((v) => v.provider === 'groq')!;
 const CEREBRAS: Voter = { provider: 'cerebras', model: 'qwen-3.8-27b' };
 const key = (v: Voter) => `${v.provider}:${v.model}`;
 

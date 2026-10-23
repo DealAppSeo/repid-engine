@@ -21,7 +21,6 @@ import {
   askQuestion,
   BUDGET_PER_MIN,
   castVote,
-  DEFAULT_VOTERS,
   encodeClaim,
   parseQuestion,
   questionMiss,
@@ -39,7 +38,17 @@ import {
 } from '../src/routes/classify';
 
 const KEY = 'test-key-not-real';
-const ENV = { GROQ_API_KEY: KEY } as NodeJS.ProcessEnv;
+/**
+ * The pair these tests pin through CLASSIFY_VOTERS: two Groq votes, one family, so agreement never
+ * decides (S47). What is under test is the question flow, not the default pair, which since
+ * 2026-10-23 is two families whatever keys are set (tests/classify-two-families-default.test.ts).
+ */
+const GROQ_PAIR = [
+  { provider: 'groq', model: 'openai/gpt-oss-120b' },
+  { provider: 'groq', model: 'openai/gpt-oss-20b' },
+] as const;
+const PAIR = GROQ_PAIR.map((v) => `${v.provider}:${v.model}`).join(',');
+const ENV = { GROQ_API_KEY: KEY, CLASSIFY_VOTERS: PAIR } as NodeJS.ProcessEnv;
 const ON = { ...ENV, CLASSIFY_QUESTIONS: 'on' } as NodeJS.ProcessEnv;
 const GOAT = 'Does the host always open a door with a goat behind it?';
 const CLAIM = 'You should always switch doors.';
@@ -115,7 +124,7 @@ function classifyApp(options: Parameters<typeof createClassifyRouter>[0] = {}) {
 const CLEAN = {
   ONLY_ATTESTATIONS_LEAVE: undefined,
   CLASSIFY_FREE_VOTES: undefined,
-  CLASSIFY_VOTERS: undefined,
+  CLASSIFY_VOTERS: PAIR,
   CLASSIFY_QUESTIONS: undefined,
   CEREBRAS_API_KEY: undefined,
   NVIDIA_NIM_API_KEY: undefined,
@@ -147,7 +156,7 @@ describe('flag off: byte-for-byte today, and the extra call is never made', () =
         const res = await request(classifyApp()).post('/api/v1/classify').send({ text: CLAIM });
         expect(res.body).toMatchObject({ label: 'not-checked', by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'] });
         expect(Object.keys(res.body)).toEqual(['label', 'latency_ms', 'by', 'voters', 'deciders', 'votes']);
-        expect(rec.calls.map((c) => c.model)).toEqual(DEFAULT_VOTERS.map((v) => v.model));
+        expect(rec.calls.map((c) => c.model)).toEqual(GROQ_PAIR.map((v) => v.model));
         expect(rec.questionCalls()).toHaveLength(0);
       } finally {
         rec.restore();
@@ -198,7 +207,7 @@ describe('flag on, both UNSURE: one extra call, and a parsed question comes back
 
   it('asks the FIRST voter that answered UNSURE, on its own host, with the claim as one JSON string', async () => {
     await withProcessEnv(CLEAN, async () => {
-      const env = { ...ON, CEREBRAS_API_KEY: KEY } as NodeJS.ProcessEnv; // cross-family pair
+      const env = { ...ON, CEREBRAS_API_KEY: KEY, CLASSIFY_VOTERS: undefined } as NodeJS.ProcessEnv; // the default two-family pair
       const rec = recordHost(unsure);
       try {
         const out = await classifyTextWithPath(CLAIM, 2500, env);
@@ -275,7 +284,7 @@ describe('flag on, anything but both UNSURE: no extra call', () => {
   it('one UNSURE and one voter over its budget: no extra call', async () => {
     await withProcessEnv(CLEAN, async () => {
       const pre = recordHost(() => ({ content: 'TRUE' }));
-      for (let i = 0; i < BUDGET_PER_MIN.groq; i += 1) await castVote(DEFAULT_VOTERS[1]!, 'x', { env: ENV, timeoutMs: 500 });
+      for (let i = 0; i < BUDGET_PER_MIN.groq; i += 1) await castVote(GROQ_PAIR[1]!, 'x', { env: ENV, timeoutMs: 500 });
       pre.restore();
       const rec = recordHost(unsure);
       try {
@@ -476,7 +485,7 @@ describe('time: the question fits inside the deadline or does not happen', () =>
     await withProcessEnv(CLEAN, async () => {
       // Leave the first voter exactly one call: its vote spends it, so the question is refused.
       const pre = recordHost(() => ({ content: 'TRUE' }));
-      for (let i = 0; i < BUDGET_PER_MIN.groq - 1; i += 1) await castVote(DEFAULT_VOTERS[0]!, 'x', { env: ENV, timeoutMs: 500 });
+      for (let i = 0; i < BUDGET_PER_MIN.groq - 1; i += 1) await castVote(GROQ_PAIR[0]!, 'x', { env: ENV, timeoutMs: 500 });
       pre.restore();
       const rec = recordHost(unsure);
       try {
@@ -495,7 +504,7 @@ describe('time: the question fits inside the deadline or does not happen', () =>
     const boom = jest.fn(async () => {
       throw new Error('socket hang up');
     });
-    await expect(askQuestion(DEFAULT_VOTERS[0]!, CLAIM, { env: ENV, fetchImpl: boom, timeoutMs: 500 })).resolves.toEqual({
+    await expect(askQuestion(GROQ_PAIR[0]!, CLAIM, { env: ENV, fetchImpl: boom, timeoutMs: 500 })).resolves.toEqual({
       kind: 'abstain',
       reason: 'network',
     });
@@ -507,11 +516,11 @@ describe('the data-locality boundary refuses the extra call exactly as it refuse
     await withProcessEnv({ ONLY_ATTESTATIONS_LEAVE: undefined }, async () => {
       const impl = jest.fn();
       const env = { ...ON, ONLY_ATTESTATIONS_LEAVE: 'true' } as NodeJS.ProcessEnv;
-      expect(await askQuestion(DEFAULT_VOTERS[0]!, CLAIM, { env, fetchImpl: impl, timeoutMs: 500 })).toEqual({
+      expect(await askQuestion(GROQ_PAIR[0]!, CLAIM, { env, fetchImpl: impl, timeoutMs: 500 })).toEqual({
         kind: 'abstain',
         reason: 'boundary',
       });
-      expect(await castVote(DEFAULT_VOTERS[0]!, CLAIM, { env, fetchImpl: impl, timeoutMs: 500 })).toEqual({
+      expect(await castVote(GROQ_PAIR[0]!, CLAIM, { env, fetchImpl: impl, timeoutMs: 500 })).toEqual({
         kind: 'abstain',
         reason: 'boundary',
       });
@@ -536,7 +545,7 @@ describe('the data-locality boundary refuses the extra call exactly as it refuse
 describe('the question never rides on anything but not-checked by votes', () => {
   it('a pass, a veto, arithmetic and skipped from the real classifier carry no question', async () => {
     // Two families (Groq + Cerebras): only such a pair can pass or veto (S47).
-    await withProcessEnv({ ...CLEAN, CLASSIFY_QUESTIONS: 'on', CEREBRAS_API_KEY: KEY }, async () => {
+    await withProcessEnv({ ...CLEAN, CLASSIFY_QUESTIONS: 'on', CEREBRAS_API_KEY: KEY, CLASSIFY_VOTERS: undefined }, async () => {
       for (const [content, label] of [['TRUE', 'pass'], ['FALSE', 'veto']]) {
         const rec = recordHost(() => ({ content }));
         try {

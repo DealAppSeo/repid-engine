@@ -235,7 +235,7 @@ try {
       };
       ok(`VERIFIED LOCALLY by @hyperdag/proof-verifier${v.verifierVersion ? ` v${v.verifierVersion}` : ''} — verified=true`);
       if (statement) note(`statement: ${safe(JSON.stringify(statement), 400)}`);
-      note('the proof asserts RepID ≥ threshold WITHOUT revealing the score — and we checked the math, not their word.');
+      note('the proof asserts RepID ≥ threshold; the score is public in the statement (a range proof) — and we checked the math, not their word.');
     } else {
       result.proof = {
         state: 'UNKNOWN', verified: false, reason: v.reason, scheme: json.scheme, bytes, statement, canonicalAgentId,

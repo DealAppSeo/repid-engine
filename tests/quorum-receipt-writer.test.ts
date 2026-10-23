@@ -25,7 +25,7 @@ import type { FactCheckResult } from '../src/hal/fact-check';
 const SYNTHETIC_QUORUM: FactCheckResult = {
   hal_score: 0.82,
   decision: 'vetoed',
-  decision_reason: '2 of 3 independent model families judged this claim FALSE (llama, gemini, deepseek).',
+  decision_reason: '2 of 3 different model families judged this claim FALSE (llama, gemini, deepseek).',
   verdicts: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', verdict: 'FALSE', confidence: 90, latency_ms: 210 },
     { provider: 'gemini', model: 'gemini-2.0-flash', verdict: 'FALSE', confidence: 85, latency_ms: 340 },
