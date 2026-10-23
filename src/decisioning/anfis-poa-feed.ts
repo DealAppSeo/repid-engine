@@ -41,7 +41,10 @@
  *   write is TOLERANT: it never throws to the caller and never blocks the RepID event that fed it.
  * - No scoring formula / ANFIS params / secrets are written to the row.
  *
- * SCHEMA: migrations/2026-07-21-anfis-trust-weights.sql (FILE ONLY — not applied; prod DDL is Sean-gated).
+ * SCHEMA: migrations/2026-07-21-anfis-trust-weights.sql. This line used to say "FILE ONLY — not
+ * applied". That was FALSE by 2026-10-22: the table exists in prod (to_regclass non-null) and holds
+ * 0 rows. The rows are 0 because `ingestPoaOutcome` has no live caller; only `properScoreReward` is
+ * imported (repid-update.ts, for the prediction shadow). Prod DDL stays Sean-gated.
  */
 
 // Lazy DB handle so unit tests can inject a fake client without touching config/network.

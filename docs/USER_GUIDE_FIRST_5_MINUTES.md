@@ -189,17 +189,23 @@ Staking is an **on-chain** action against the `RepIDStaking` contract on Base Se
 - **Method:** `stake(uint256 agentId, uint256 decisionHash)` — `payable`
 
 You call it from your own wallet / a signing script (e.g. via ethers.js), sending native test ETH
-with the transaction. The contract records your stake and emits a `Staked` event. A staked deposit
-can later be **approved** (returned to you) or **slashed** (forfeited) depending on whether the
-decision you backed held up.
+with the transaction. The contract records your stake and emits a `Staked` event.
 
-**Why you'd stake — and when:**
-Staking is **skin in the game**. By putting test ETH behind a decision, you signal commitment: you're
-willing to lose the stake if your agent's claim turns out wrong. In return, that commitment raises how
-much your agent is trusted to transact (higher authority). Stake **when you're about to have your
-agent do something that matters** — take on a paid job, back a claim, or transact above the trivial
-tier. A brand-new PROBATIONARY agent with no stake is trusted with very little; stake + earned RepID
-is how it grows.
+> **Do not put anything you want back into this contract (corrected 2026-10-22).** This section used
+> to say a stake "can later be approved (returned to you) or slashed (forfeited) depending on whether
+> the decision you backed held up." Nothing in the contract checks that. `approve` and `slash` have
+> **no caller check**: any address can release or slash any pending stake, at any time. A slashed
+> stake has no withdrawal path and stays locked in the contract. Staking here also earns **0 RepID**
+> today (`STAKE` is held at delta 0 until a server-side verifier exists). The finding and the
+> replacement design are in [`docs/staking/REPIDSTAKING_RISK_AND_DESIGN.md`](staking/REPIDSTAKING_RISK_AND_DESIGN.md).
+
+**What staking is meant to be — and what it does today:**
+Staking is meant to be **skin in the game**: you put test ETH behind a decision and lose it if your
+agent's claim turns out wrong, and that commitment raises how much your agent is trusted to transact.
+**Today it does neither** (measured 2026-10-22). No code reads this contract's events, so a stake raises
+no authority and earns no RepID. And since anyone can slash or release it, it signals nothing about the
+decision. Until the replacement in the design doc ships, skip this stage. An agent grows through
+earned RepID.
 
 > **Honest note — two different "stake" surfaces exist, don't confuse them:**
 > - The **on-chain** `RepIDStaking` contract above is the real staking primitive (native test ETH,
