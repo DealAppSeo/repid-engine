@@ -71,6 +71,16 @@ describe('erc7231-mint, real path', () => {
     expect(errorLog).toHaveBeenCalledWith(expect.stringMatching(/REFUSED/));
   });
 
+  it('an RPC on Base mainnet (8453) is refused before anything is signed', async () => {
+    process.env.BASE_RPC_URL = 'https://rpc.example.test';
+    mockChainId = 8453n;
+    const r = await mintErc7231ForBuilder('b1');
+    expect(r).toMatchObject({ ok: false, is_simulated: false });
+    expect(r.error).toMatch(/84532/);
+    expect(mockMintTo).not.toHaveBeenCalled();
+    expect(mockStored).toBeNull();
+  });
+
   it('an RPC on Base Sepolia (84532) mints', async () => {
     process.env.BASE_RPC_URL = 'https://rpc.example.test';
     const r = await mintErc7231ForBuilder('b1');
