@@ -13,8 +13,8 @@
  */
 jest.mock('../src/db', () => ({ db: {} })); // ownerRelation's module imports db at load; it is never called here.
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
-import { dirname, join, relative, resolve } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { join, relative } from 'path';
 
 import {
   EVIDENCE_TIERS,
@@ -28,8 +28,8 @@ import {
 import { CASES, DISTINCT_ADMIN, DISTINCT_STRONG, SAME_ADMIN, SAME_STRONG, UNKNOWN } from './fixtures/antifarming-cases';
 import { ownerRelation } from '../src/services/owner-distinct-shadow';
 import type { OwnerClaim, OwnerResolution } from '../src/services/agent-owner-resolver';
+import { ROOT, discoverEntrypoints, reachable, referencesTo } from './helpers/import-graph';
 
-const ROOT = resolve(__dirname, '..');
 const MODULE = join(ROOT, 'src', 'shadow', 'antifarming-eligibility.ts');
 
 const subjectRecord = (c: (typeof CASES)[number]): EligibilityRecord => {
@@ -244,64 +244,9 @@ describe('anti-farming eligibility: OwnerLink is what ownerRelation returns', ()
 });
 
 // ── isolation ───────────────────────────────────────────────────────────────────────────────
+// The walker lives in tests/helpers/import-graph.ts, shared with tests/repid-uncertainty.test.ts.
 
 const read = (f: string) => readFileSync(f, 'utf8');
-
-/** Live entrypoints, discovered from what the deploy configs actually run. */
-function discoverEntrypoints(): string[] {
-  const commands: string[] = [];
-  for (const f of readdirSync(ROOT)) {
-    if (/^railway.*\.json$/.test(f)) commands.push(String(JSON.parse(read(join(ROOT, f)))?.deploy?.startCommand ?? ''));
-    if (/^Dockerfile/.test(f)) for (const m of read(join(ROOT, f)).matchAll(/^CMD\s+\[(.+)\]/gm)) commands.push(String(m[1]).replace(/[",]/g, ' '));
-  }
-  const scripts = JSON.parse(read(join(ROOT, 'package.json'))).scripts as Record<string, string>;
-  for (const k of ['start', 'indexer', 'worker']) if (scripts[k]) commands.push(scripts[k]);
-  const files = new Set<string>();
-  for (const cmd of commands) {
-    for (const tok of cmd.split(/\s+/)) {
-      if (!/\.(m?js|ts)$/.test(tok)) continue;
-      const src = tok.startsWith('dist/') ? tok.replace(/^dist\//, 'src/').replace(/\.js$/, '.ts') : tok;
-      files.add(join(ROOT, src));
-    }
-  }
-  return [...files];
-}
-
-const SPEC_RE = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g;
-
-/** Every local module reachable from `entry` through import / export-from / import() / require(). */
-function reachable(entry: string): Set<string> {
-  const seen = new Set<string>();
-  const queue = [resolve(entry)];
-  while (queue.length) {
-    const file = queue.pop() as string;
-    if (seen.has(file) || !existsSync(file)) continue;
-    seen.add(file);
-    for (const m of read(file).matchAll(SPEC_RE)) {
-      const base = resolve(dirname(file), String(m[1]));
-      const noJs = base.replace(/\.(m?js)$/, '');
-      for (const cand of [base, `${base}.ts`, `${noJs}.ts`, `${base}.js`, `${base}.mjs`, join(base, 'index.ts')]) {
-        if (existsSync(cand) && statSync(cand).isFile()) { queue.push(cand); break; }
-      }
-    }
-  }
-  return seen;
-}
-
-/** Files under `dirs` that mention the module by path. */
-function referencesTo(needle: string, dirs: string[]): string[] {
-  const hits: string[] = [];
-  const walk = (d: string) => {
-    for (const name of readdirSync(d)) {
-      if (name === 'node_modules' || name.startsWith('.')) continue;
-      const p = join(d, name);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (/\.(ts|js|mjs|cjs)$/.test(name) && read(p).includes(needle)) hits.push(relative(ROOT, p).replace(/\\/g, '/'));
-    }
-  };
-  for (const d of dirs) if (existsSync(d)) walk(d);
-  return hits.sort();
-}
 
 describe('anti-farming eligibility: isolation from every live path', () => {
   const entries = discoverEntrypoints();
@@ -325,9 +270,13 @@ describe('anti-farming eligibility: isolation from every live path', () => {
     for (const e of entries) expect([relative(ROOT, e), reachable(e).has(MODULE)]).toEqual([relative(ROOT, e), false]);
   });
 
-  test('nothing in src/ or scripts/ names it except itself and its printer; tests may', () => {
+  test('nothing in src/ or scripts/ names it except itself, its printer and the shadow RD module that reads it; tests may', () => {
     const hits = referencesTo('antifarming-eligibility', [join(ROOT, 'src'), join(ROOT, 'scripts')]);
-    expect(hits).toEqual(['scripts/shadow/print-antifarming-table.ts', 'src/shadow/antifarming-eligibility.ts']);
+    expect(hits).toEqual([
+      'scripts/shadow/print-antifarming-table.ts',
+      'src/shadow/antifarming-eligibility.ts',
+      'src/shadow/repid-uncertainty.ts', // shadow, and isolated by tests/repid-uncertainty.test.ts
+    ]);
   });
 
   test('POSITIVE CONTROL: the reference scan finds a name it is pointed at', () => {
