@@ -102,7 +102,7 @@ position sizes by demonstrating they can win.
 | `TRADING_CREDS_ENCRYPTION_KEY`   | 32-byte hex or any string ≥ 32 chars (sha256 derived)  |
 | `BASE_ERC7231_REGISTRY`          | optional — enables real on-chain mint                  |
 | `DEPLOYER_PRIVATE_KEY`           | optional — required if BASE_ERC7231_REGISTRY is set    |
-| `BASE_RPC_URL`                   | optional — defaults to https://mainnet.base.org        |
+| `BASE_RPC_URL`                   | required for the real mint. No default: unset, the mint refuses (until 2026-10-23 it defaulted to Base mainnet) |
 | `ALPACA_PAPER_BASE_URL`          | optional — defaults to https://paper-api.alpaca.markets/v2 |
 | `ALPACA_DATA_BASE_URL`           | optional — for cap-check price quotes                  |
 | `TELEGRAM_BOT_TOKEN`             | optional — for telegram notifications                  |
