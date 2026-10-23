@@ -30,8 +30,10 @@ const PRODUCTION_BASE = 'https://repid-engine-production.up.railway.app';
 const PER_CHAT_PER_MINUTE = 10;
 const MAX_CLAIM_CHARS = 1500;
 
-// Names every host a claim can reach: the two voters are Groq and, when its key is set, Cerebras
-// (src/classify/free-votes.ts activeVoters). A line naming only one would be false.
+// Names the default voters' hosts: Groq and Cerebras (src/classify/free-votes.ts activeVoters).
+// A line naming only one would be false. NOT COMPLETE: a stand-in from VOTER_POOL (THE FALLBACK,
+// e.g. Cloudflare Workers AI or OpenRouter) can also receive the text when a voter gives no answer,
+// and this line does not name it yet. This comment said "names every host" until 2026-10-23.
 export const PRIVACY_LINE =
   'Your text is sent to our checkers (Groq and Cerebras) and passes through Telegram. We store nothing.';
 
@@ -39,16 +41,16 @@ export const WELCOME = [
   'Paste one claim and I will check it.',
   '',
   'You get one of three answers:',
-  'PASS — two independent checks agree it is true.',
-  'VETO — caught: two independent checks agree it is false.',
+  'PASS — two checks from different model families agree it is true.',
+  'VETO — caught: two checks from different model families agree it is false.',
   'NOT CHECKED — I could not verify it (an opinion, a prediction, too long, or the checks disagreed). Not checked is not the same as true.',
   '',
   PRIVACY_LINE,
 ].join('\n');
 
 export function replyFor(label: ClassifyLabel): string {
-  if (label === 'pass') return 'PASS — two independent checks agree this is true.';
-  if (label === 'veto') return 'VETO — Caught. This did not pass: two independent checks agree it is false.';
+  if (label === 'pass') return 'PASS — two checks from different model families agree this is true.';
+  if (label === 'veto') return 'VETO — Caught. This did not pass: two checks from different model families agree it is false.';
   return 'NOT CHECKED — I could not verify this. Not checked is not the same as true.';
 }
 

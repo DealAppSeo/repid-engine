@@ -110,15 +110,16 @@ enum is consistent with the repo's prior art as well.
 Each row names two distinct checker **families** that must agree on it. The family
 ids are the real §7 disjointness families from
 `src/decisioning/family-registry.ts` (`KNOWN_FAMILIES`), plus `grok`, the
-independent tiebreak family HAL folds into its quorum (`src/hal/fact-check.ts`):
+tiebreak family HAL folds into its quorum (`src/hal/fact-check.ts`):
 
 ```
 deepseek  llama  glm  kimi  gemini  mistral  qwen  openai  anthropic  grok
 ```
 
 "Two families agree" is exactly the kernel/HAL quorum property: a claim is only
-settled when at least two INDEPENDENT families (not two providers of one family)
-converge. A row therefore names which two families the harness should require
+settled when at least two DIFFERENT model families (not two providers of one family)
+converge. Different is not independent: errors correlate across families too (Kim et al.,
+ICML 2025, arXiv 2506.07962). A row therefore names which two families the harness should require
 agreement from for that claim; family-disjointness is a hard rule, so the pair is
 always two distinct families.
 

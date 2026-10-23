@@ -11,13 +11,13 @@
  * enough that its "TRUE" cannot be a pass on its own. Requiring agreement trades coverage for
  * honesty, which is the contract: not-checked is always allowed, a false pass never is.
  *
- * WHICH MODELS. Defaults are the two Groq ids this repo has already called successfully
- * (`openai/gpt-oss-120b`, `openai/gpt-oss-20b`). Each Groq model has its own free quota, so the
- * two votes do not share one budget. They are the same family, so their errors correlate more
- * than two families would; a second family is a one-line `CLASSIFY_VOTERS` change, but its id
- * must first answer an authenticated call (src/hal/retired-models.ts: never ship an id from a
- * docs page). NVIDIA NIM is a TRIAL by NVIDIA's own terms: it is accepted here only when an
- * operator names it explicitly in CLASSIFY_VOTERS, never by default.
+ * WHICH MODELS. Two model families by default, whatever keys are set (CROSS_FAMILY_VOTERS):
+ * `openai/gpt-oss-120b` on Groq and `qwen-3.8-27b` on Cerebras, both ids this repo has already
+ * called successfully. Different families, not independent ones: errors correlate across families
+ * too, only less than within one. A new id must first answer an authenticated call
+ * (src/hal/retired-models.ts: never ship an id from a docs page). NVIDIA NIM is a TRIAL by
+ * NVIDIA's own terms: it is accepted here only when an operator names it explicitly in
+ * CLASSIFY_VOTERS, never by default.
  *
  * KILL SWITCH. CLASSIFY_FREE_VOTES=off returns the route to arithmetic-only with no redeploy of
  * code. With no key for a voter's provider, that voter abstains and the answer is not-checked.
@@ -165,28 +165,25 @@ function keyFor(provider: VoterProvider, env: NodeJS.ProcessEnv): string {
   return (env[KEY_VARS[provider]] ?? '').trim();
 }
 
-export const DEFAULT_VOTERS: readonly Voter[] = [
-  { provider: 'groq', model: 'openai/gpt-oss-120b' },
-  { provider: 'groq', model: 'openai/gpt-oss-20b' },
-];
-
 /**
- * Two model FAMILIES (B20, Grok's FIX FIRST on #1182): both defaults above are gpt-oss, so a
- * false claim both have learned the same wrong way could pass. `qwen-3.8-27b` on Cerebras is a
- * different family and is proven live on this account (llm_call_log, 93 calls in the week to
- * 2026-10-03). Its free tier allows 5 requests a minute, so this trades capacity for
- * independence, which the label contract favours: not-checked is always allowed, a false pass
- * never is. Used whenever a Cerebras key is present and CLASSIFY_VOTERS is not set.
+ * The default pair: two model FAMILIES (B20, Grok's FIX FIRST on #1182), gpt-oss on Groq and
+ * `qwen-3.8-27b` on Cerebras, proven live on this account (llm_call_log, 93 calls in the week to
+ * 2026-10-03). It is the default whatever keys are set. Until 2026-10-23 a missing Cerebras key
+ * swapped in gpt-oss-120b + gpt-oss-20b, one family, which S47 already made answer not-checked
+ * every time: two calls for an answer that could never decide. Now that slot gives no answer
+ * (`no_key`), THE FALLBACK may fill it with a canary-ready model of another family, and otherwise
+ * the label is not-checked. Different families are not independent opinions (their errors still
+ * correlate: Kim et al., ICML 2025, arXiv 2506.07962), but one family is one opinion.
  */
 export const CROSS_FAMILY_VOTERS: readonly Voter[] = [
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
   { provider: 'cerebras', model: 'qwen-3.8-27b' },
 ];
 
-/** The pair in use: CLASSIFY_VOTERS when set, else cross-family when Cerebras has a key, else Groq x2. */
+/** The pair in use: CLASSIFY_VOTERS when set, else the two-family default. */
 export function activeVoters(env: NodeJS.ProcessEnv = process.env): readonly Voter[] {
   if ((env.CLASSIFY_VOTERS ?? '').trim()) return parseVoters(env.CLASSIFY_VOTERS);
-  return keyFor('cerebras', env) ? CROSS_FAMILY_VOTERS : DEFAULT_VOTERS;
+  return CROSS_FAMILY_VOTERS;
 }
 
 /** Longest text the votes will look at. A long reply makes many claims; one word cannot judge it. */
@@ -195,10 +192,11 @@ export const DEFAULT_MAX_PROSE_CHARS = 1500;
 /**
  * Parses CLASSIFY_VOTERS ("groq:openai/gpt-oss-120b,cerebras:qwen-3.8-27b"). An entry with an
  * unknown provider or an empty model is dropped rather than guessed. Exactly two survivors are
- * required; any other count falls back to the defaults, because one voter cannot make a pass.
+ * required; any other count falls back to the two-family default, because one voter cannot make a
+ * pass. Two survivors of one family still run, and can only answer not-checked (oneFamily).
  */
 export function parseVoters(raw: string | undefined): readonly Voter[] {
-  if (!raw || !raw.trim()) return DEFAULT_VOTERS;
+  if (!raw || !raw.trim()) return CROSS_FAMILY_VOTERS;
   const voters: Voter[] = [];
   for (const part of raw.split(',')) {
     const i = part.indexOf(':');
@@ -210,7 +208,7 @@ export function parseVoters(raw: string | undefined): readonly Voter[] {
       voters.push({ provider: provider as VoterProvider, model });
     }
   }
-  return voters.length === 2 ? voters : DEFAULT_VOTERS;
+  return voters.length === 2 ? voters : CROSS_FAMILY_VOTERS;
 }
 
 export function freeVotesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -537,7 +535,7 @@ export interface VoteOptions {
  *
  * NO LOCAL REDIRECT, ON PURPOSE. The quorum honours LOCAL_LLM_BASE_URL by rewriting every
  * openai-compat endpoint to one local gateway. The votes do not: two voters sent to one gateway
- * are no longer two independent families, and the agreement rule would turn one opinion into a
+ * cannot be shown to be two model families, and the agreement rule would turn one opinion into a
  * pass. Under the boundary the votes abstain instead; not-checked is always allowed.
  */
 export function voteBoundaryOn(env: NodeJS.ProcessEnv): boolean {

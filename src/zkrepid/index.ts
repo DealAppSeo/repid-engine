@@ -1,5 +1,6 @@
 /**
- * zkRepID — the canonical entry point for proving a RepID without revealing it.
+ * zkRepID — the canonical entry point for RepID proofs. The goal is to prove a RepID without revealing
+ * it; today's statement carries the score in the clear (src/zkp/proof-statement-guard.ts).
  *
  * DECIDED 2026-08-17 (Sean): zkRepID is the canonical name for this layer.
  * Boundary and rationale: ./boundary.ts. Prose: docs/ZKREPID.md. Decision: DECISIONS.md §9.

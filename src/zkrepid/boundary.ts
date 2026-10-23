@@ -1,8 +1,8 @@
 /**
  * boundary.ts — what "zkRepID" names, and what it deliberately does not.
  *
- * DECIDED 2026-08-17 (Sean): **zkRepID is the canonical name** for the layer that proves a RepID
- * without revealing it. See docs/ZKREPID.md for the prose and DECISIONS.md §9 for the decision.
+ * DECIDED 2026-08-17 (Sean): **zkRepID is the canonical name** for the layer meant to prove a RepID
+ * without revealing it (today's statement carries the score in the clear: src/zkp/proof-statement-guard.ts). See docs/ZKREPID.md for the prose and DECISIONS.md §9 for the decision.
  *
  * ════════════════════════════════════════════════════════════════════════════════
  * WHY A BOUNDARY OBJECT AND NOT A DIRECTORY RENAME

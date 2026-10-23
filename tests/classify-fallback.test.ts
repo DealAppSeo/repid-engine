@@ -19,7 +19,6 @@ import {
   classifyByFreeVotes,
   CROSS_FAMILY_VOTERS,
   DAILY_CALLS,
-  DEFAULT_VOTERS,
   FAILURE_COOL_MS,
   MIN_ATTEMPT_MS,
   modelFamily,
@@ -170,8 +169,8 @@ describe('the pool', () => {
     expect(standbyVoters({ ...ENV, CLASSIFY_FALLBACK: ' OFF ' })).toEqual(CROSS_FAMILY_VOTERS);
   });
 
-  it('Groq x2 (no Cerebras key) still has the pair it had', () => {
-    expect(activeVoters({ GROQ_API_KEY: FAKE } as NodeJS.ProcessEnv)).toBe(DEFAULT_VOTERS);
+  it('no Cerebras key: still the two-family pair; its empty slot is what the fallback fills', () => {
+    expect(activeVoters({ GROQ_API_KEY: FAKE } as NodeJS.ProcessEnv)).toBe(CROSS_FAMILY_VOTERS);
   });
 
   it('families read from ids', () => {

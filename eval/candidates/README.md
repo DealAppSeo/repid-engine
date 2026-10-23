@@ -78,7 +78,7 @@ allowed and prompts should not be trained on or kept.
 
 - **Cerebras has no free tier any more**, and qwen-3.8-27b costs about $3 per 10,000 checks. Groq's
   free gpt-oss-120b runs out on tokens before requests (about 300 to 600 checks a day).
-- **Pairs worth measuring first** (two independent families each, near-free, production-allowed):
+- **Pairs worth measuring first** (two different model families each, near-free, production-allowed):
   1. gpt-oss (OpenAI family) + **Gemini 2.5 Flash-Lite, paid tier** (Google): about $0.34 per 10k
      checks. Google's *free* tier may use prompts and have them human-reviewed, so it cannot carry a
      user's text; the paid tier does not.

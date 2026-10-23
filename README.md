@@ -5,7 +5,10 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Standard: ERC-8004](https://img.shields.io/badge/Standard-ERC--8004-blue)](https://github.com/DealAppSeo/hyperdag-protocol)
 [![Network: Base Sepolia](https://img.shields.io/badge/Network-Base_Sepolia-success)](https://sepolia.basescan.org/)
-[![HAL: live](https://img.shields.io/badge/HAL-live-success)](#hal--hallucination-auditor-layer)
+[![HAL classifications, last 24h](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Frepid-engine-production.up.railway.app%2Fapi%2Fv1%2Fhal%2Fstats&query=%24.last_24h_classifications&label=HAL%20classifications%20%2824h%29&color=blue)](#get-apiv1halstats)
+[![HAL providers answering, last 24h](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Frepid-engine-production.up.railway.app%2Fapi%2Fv1%2Fhal%2Fstats&query=%24.quorum_health.answering_providers&label=HAL%20providers%20answering%20%2824h%29&color=blue)](#get-apiv1halstats)
+
+**Part of the HyperDAG trust stack.** This repository is the reputation engine and its public API. It scores AI agents (RepID), checks claims with models from different families (HAL), and writes some reputation to the ERC-8004 ReputationRegistry; it does not prove scores itself (the RepID range proofs come from the prover in [HyperDAG-core](https://github.com/DealAppSeo/HyperDAG-core)), and those proofs do not hide the score. How the pieces fit: [BUILDERS.md](https://github.com/DealAppSeo/hyperdag-protocol/blob/main/BUILDERS.md). Credits and licences: [ACKNOWLEDGEMENTS.md](https://github.com/DealAppSeo/hyperdag-protocol/blob/main/ACKNOWLEDGEMENTS.md), and [Credits](#credits) below for this repository. Test network only (Base Sepolia).
 
 `repid-engine` is the API and scoring engine of the HyperDAG Protocol Trust\* ecosystem. What it calls, and what calls it, is in [Where this sits](#where-this-sits).
 
@@ -60,7 +63,7 @@ It also calls, and the test does not pin: the LLM providers in the HAL quorum (`
 HyperDAG Protocol is a **portable trust harness**: it makes an AI agent's reputation mean
 something to a counterparty who had no part in producing it. Four links, in order —
 **HAL** decides whether the agent is telling the truth, **RepID** turns that history into a
-score, **zkRepID** makes the score checkable without revealing it, and **x402 + ERC-8004**
+score, **zkRepID** proves the score clears a threshold (a range proof; the score is public), and **x402 + ERC-8004**
 make it spendable and recordable on someone else's rails.
 
 This table is the shared vocabulary. It carries a status column because the words below are
@@ -378,11 +381,11 @@ The same real cross-LLM quorum over a **337-item fully-provenanced corpus** (FEV
 
 Caveats (state these wherever the number appears):
 
-- The quorum's real edge is **recall + vendor-independence, NOT raw accuracy** — a single strong model (DeepSeek, F1 ≈ 0.86 at full coverage) edged the quorum on F1 in that run; the quorum's value is not depending on any one vendor's uptime or honesty.
-- In that run, model independence was partial: some hosts served identical weights (e.g. Groq + DeepInfra both ran Llama-3.1-8B; error-correlation ≈ 0.88). The quorum's members have changed since (the live list is in `GET /api/v1/hal/stats`), which is one reason a re-run is a different ruler.
+- The quorum's real edge is **recall, and not depending on one vendor, NOT raw accuracy** — a single strong model (DeepSeek, F1 ≈ 0.86 at full coverage) edged the quorum on F1 in that run; the quorum's value is not depending on any one vendor's uptime or honesty.
+- The voters are **different model families, not independent ones.** In that run some hosts served identical weights (e.g. Groq + DeepInfra both ran Llama-3.1-8B; error-correlation ≈ 0.88). Different families share errors too: across 350+ models, Kim et al. found that when two models are both wrong on one leaderboard dataset, they give the same wrong answer 60% of the time ([*Correlated Errors in Large Language Models*](https://arxiv.org/abs/2506.07962), ICML 2025). Counting one vote per family removes duplicate models, not shared blind spots. The quorum's members have changed since (the live list is in `GET /api/v1/hal/stats`), which is one reason a re-run is a different ruler.
 - As of that report, the number had not been independently replicated.
 
-Full run + methodology, CIs, ablations, and the family-independence experiment: [`reports/2026-07-09/HAL_RIGOROUS_EVAL.md`](reports/2026-07-09/HAL_RIGOROUS_EVAL.md).
+Full run + methodology, CIs, ablations, and the experiment on how correlated the families were: [`reports/2026-07-09/HAL_RIGOROUS_EVAL.md`](reports/2026-07-09/HAL_RIGOROUS_EVAL.md).
 
 ### Earned model leaderboard
 
@@ -428,7 +431,7 @@ helmet()
 
 ### Provider resilience
 
-The HAL cross-LLM quorum (`src/hal/fact-check.ts`) counts one vote per model family, so two hosts of the same base model count once. When providers fail or rate-limit, the quorum **auto-backfills the next cheapest live families** (on unless `HAL_QUORUM_AUTOBACKFILL=false`), with OpenRouter as the last-resort family, so a burst of 429s still reaches a quorum instead of collapsing to the extractor. The live member list is in `GET /api/v1/hal/stats` (`quorum_family_names`).
+The HAL cross-LLM quorum (`src/hal/fact-check.ts`) counts one vote per model family, so two hosts of the same base model count once. Different families can still share a wrong answer (see [Evaluation](#rigorous-337-item-hal-eval)). When providers fail or rate-limit, the quorum **auto-backfills the next cheapest live families** (on unless `HAL_QUORUM_AUTOBACKFILL=false`), with OpenRouter as the last-resort family, so a burst of 429s still reaches a quorum instead of collapsing to the extractor. The live member list is in `GET /api/v1/hal/stats` (`quorum_family_names`).
 
 ### Scoring pipeline (`src/engine/repid-update.ts`)
 
@@ -500,12 +503,26 @@ For security-relevant findings (RepID gaming, on-chain attack surfaces, HAL bypa
 
 ---
 
-## License
+## Credits
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+The ecosystem-wide list is [ACKNOWLEDGEMENTS.md](https://github.com/DealAppSeo/hyperdag-protocol/blob/main/ACKNOWLEDGEMENTS.md). This is what this repository itself uses.
+
+| Work | By | Licence | Where it is used here |
+| :-- | :-- | :-- | :-- |
+| [Plonky3](https://github.com/Plonky3/Plonky3), including `p3-poseidon2` | Polygon Labs (Polygon Zero team) | MIT or Apache-2.0 | `zkp-vault/` depends on the `p3-*` crates (`zkp-vault/Cargo.toml`). The production prover is a separate repository, [HyperDAG-core](https://github.com/DealAppSeo/HyperDAG-core). |
+| [x402](https://github.com/x402-foundation/x402), the HTTP 402 payment protocol | Created by Coinbase ([coinbase/x402](https://github.com/coinbase/x402)); now maintained by the x402 Foundation | Apache-2.0 | Implemented in this repository (`src/services/x402-*.ts`). No x402 package is imported. |
+| [TruthfulQA](https://github.com/sylinrl/TruthfulQA): Lin, Hilton and Evans, *TruthfulQA: Measuring How Models Mimic Human Falsehoods*, ACL 2022, [arXiv 2109.07958](https://arxiv.org/abs/2109.07958) | Stephanie Lin, Jacob Hilton, Owain Evans | Apache-2.0 | `scripts/hal-ablation/data/TruthfulQA.csv` is an unmodified copy of the upstream `TruthfulQA.csv` (the same git blob, `4206d1e`). 90 claims in `eval/rigorous/rigorous-corpus-v1.jsonl` are built from its questions and answers. |
+| [FEVER](https://fever.ai/dataset/fever.html): Thorne, Vlachos, Christodoulopoulos and Mittal, *FEVER: a large-scale dataset for Fact Extraction and VERification*, NAACL 2018, [arXiv 1803.05355](https://arxiv.org/abs/1803.05355) | University of Cambridge and Amazon | CC BY-SA 3.0 | 100 claims copied word for word into `eval/rigorous/rigorous-corpus-v1.jsonl` and the copies of it in `data/hal_corpus_v1/`. That is a share-alike licence, unlike the rest of this repository. Noted here, not relicensed. |
+| [HaluEval](https://github.com/RUCAIBox/HaluEval): Li, Cheng, Zhao, Nie and Wen, *HaluEval: A Large-Scale Hallucination Evaluation Benchmark for Large Language Models*, [arXiv 2305.11747](https://arxiv.org/abs/2305.11747) | RUCAIBox | MIT | 100 question-and-answer pairs, rewritten as statements, in the same corpus. |
+
+`contracts/RepIDStaking.sol` carries `SPDX-License-Identifier: MIT`, while the rest of this repository is Apache-2.0. Noted here, not relicensed.
 
 ---
 
-**Part of the HyperDAG Protocol ecosystem.** How the pieces fit: [BUILDERS.md](https://github.com/DealAppSeo/hyperdag-protocol/blob/main/BUILDERS.md#how-the-pieces-fit).
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Sean Goodwin.
+
+---
 
 ERC-8004 compatible. Apache 2.0 licensed. Micah 6:8.
