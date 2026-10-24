@@ -70,7 +70,7 @@ generalise an existing one. Narratives stay in `reports/<date>/`.
 
 ## What this is
 
-`repid-engine` is the proprietary behavioral reputation scoring backend for the HyperDAG Protocol Trust* ecosystem (`trustrepid.dev` · github.com/DealAppSeo/hyperdag-protocol). It is an Express API that mutates agent reputation (`repid`) scores in Supabase and stubs out an EAS / ERC-8004 / ZKP attestation pipeline.
+`repid-engine` is the behavioral reputation scoring backend, Apache-2.0 licensed (`LICENSE`), for the HyperDAG Protocol Trust* ecosystem (`trustrepid.dev` · github.com/DealAppSeo/hyperdag-protocol). It is an Express API that mutates agent reputation (`repid`) scores in Supabase and stubs out an EAS / ERC-8004 / ZKP attestation pipeline.
 
 > ## ⚠ THIS REPOSITORY IS **PUBLIC**
 >
@@ -93,7 +93,9 @@ generalise an existing one. Narratives stay in `reports/<date>/`.
 > - `scripts/hooks/publication-guard.js` blocks the shapes it can recognise. It cannot
 >   recognise prose, so the judgement about metrics and identifiers is yours.
 >
-> The code remains proprietary by licence; it is not private by access.
+> The code is Apache-2.0 (`LICENSE`, `package.json`): neither private by access nor proprietary by
+> licence. This line said "proprietary by licence" until 2026-10-23; `LICENSE` contradicted it. If
+> proprietary was the intent, the licence is what would change, and that is Sean's decision.
 
 ## OPERATOR ENVIRONMENT — do not infer this, it is written here
 

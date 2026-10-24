@@ -1,7 +1,8 @@
 # zkRepID — the canonical name
 
-**Decided 2026-08-17 (Sean).** `zkRepID` is the canonical name for the layer that proves a
-RepID without revealing it. Recorded in `DECISIONS.md` §9; the boundary is code, in
+**Decided 2026-08-17 (Sean).** `zkRepID` is the canonical name for the layer meant to prove a
+RepID without revealing it. Today's proofs carry the score in the clear next to the threshold
+(`src/zkp/proof-statement-guard.ts`): a range proof, not a hidden score. Recorded in `DECISIONS.md` §9; the boundary is code, in
 `src/zkrepid/boundary.ts`, and it is checked by `tests/zkrepid-boundary.test.ts`.
 
 > **This document is machine-checked.** Every module path below is asserted to appear here

@@ -245,8 +245,9 @@ function shortFailureReason(err: string | undefined): string {
 export interface FactCheckResult {
   hal_score: number; // 0..1, higher = more likely false/risky (matches HAL convention)
   decision: HalDecision;
-  // A1 — human-readable explanation of WHY (verdict mode), e.g. "2 of 3 independent model
-  // families judged this claim FALSE (Groq/Llama, Gemini, DeepSeek)". The demo surface.
+  // A1 — human-readable explanation of WHY (verdict mode), e.g. "2 of 3 different model
+  // families judged this claim FALSE (Groq/Llama, Gemini, DeepSeek)". The demo surface. Different,
+  // not independent: errors correlate across families too (Kim et al., arXiv 2506.07962).
   decision_reason?: string;
   /**
    * What Trinity's own `ground_truth_facts` corpus said about this claim, and
@@ -1341,13 +1342,13 @@ export async function factCheck(
     const trueN = familyAware ? trueFams.length : ok.filter((v) => v.verdict === 'TRUE').length;
     if (falseN >= MIN_QUORUM_FOR_VETO) {
       decision = 'vetoed';
-      decision_reason = `${falseN} of ${familyAware ? families_used : providers_used} independent model ${familyAware ? 'families' : 'providers'} judged this claim FALSE (${falseFams.join('/')}).`;
+      decision_reason = `${falseN} of ${familyAware ? families_used : providers_used} ${familyAware ? 'different model families' : 'model providers'} judged this claim FALSE (${falseFams.join('/')}).`;
     } else if (falseN === 1) {
       decision = 'flagged';
-      decision_reason = `Only 1 ${familyAware ? 'family' : 'provider'} judged this FALSE (${falseFams.join('/')}) — no independent quorum. Flagged for review, not vetoed.`;
+      decision_reason = `Only 1 ${familyAware ? 'family' : 'provider'} judged this FALSE (${falseFams.join('/')}) — no quorum. Flagged for review, not vetoed.`;
     } else if (trueN >= MIN_QUORUM_FOR_VETO) {
       decision = 'clean';
-      decision_reason = `${trueN} independent ${familyAware ? 'families' : 'providers'} judged this claim TRUE (${trueFams.join('/')}); no FALSE verdicts.`;
+      decision_reason = `${trueN} ${familyAware ? 'different model families' : 'model providers'} judged this claim TRUE (${trueFams.join('/')}); no FALSE verdicts.`;
     } else {
       // 0 FALSE and no TRUE quorum → nothing checkable was confirmed either way.
       decision = 'abstain';
@@ -1370,7 +1371,7 @@ export async function factCheck(
     // clear. Verdict mode above already treats a single-family FALSE exactly this way.
     if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
       decision = 'flagged';
-      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attemptedForSummary} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) held at 'flagged' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'} to veto or to clear.`;
+      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attemptedForSummary} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) held at 'flagged' — need >= ${MIN_QUORUM_FOR_VETO} different ${familyAware ? 'model families' : 'providers'} to veto or to clear.`;
     }
     // ...AND TOO FEW CHECKERS CANNOT CLEAR EITHER [F2, 2026-10-07]. The comment above has always
     // said so; the code only held back vetoes. A 'clean' from one family — or from none, when every
@@ -1381,7 +1382,7 @@ export async function factCheck(
     // TRUE quorum.
     if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision === 'clean') {
       decision = 'abstain';
-      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attemptedForSummary} attempted): would-be 'clean' (score ${hal_score.toFixed(3)}) is NOT CHECKED, not a pass — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'} to clear.`;
+      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attemptedForSummary} attempted): would-be 'clean' (score ${hal_score.toFixed(3)}) is NOT CHECKED, not a pass — need >= ${MIN_QUORUM_FOR_VETO} different ${familyAware ? 'model families' : 'providers'} to clear.`;
     }
 
     // CC1 verdict-driven gate (HAL_VERDICT_DRIVEN_VETO, default OFF): a 'vetoed' baseDecision with
@@ -1411,7 +1412,7 @@ export async function factCheck(
       const label = familyAware ? 'families' : 'providers';
       const downgraded: HalDecision = trueN * 2 > units ? 'clean' : 'flagged';
       decision = downgraded;
-      decision_reason = `${trueN} of ${units} independent model ${label} judged this claim TRUE and only ${falseN} judged it FALSE — a minority may not veto a TRUE plurality (downgraded to '${downgraded}').`;
+      decision_reason = `${trueN} of ${units} ${familyAware ? 'different model families' : 'model providers'} judged this claim TRUE and only ${falseN} judged it FALSE — a minority may not veto a TRUE plurality (downgraded to '${downgraded}').`;
       quorum_note = `Plurality guard: TRUE plurality (${trueN} TRUE > ${falseN} FALSE of ${units} ${label}) overruled a FALSE-minority veto; would-be 'vetoed' downgraded to '${downgraded}'.`;
     }
   }

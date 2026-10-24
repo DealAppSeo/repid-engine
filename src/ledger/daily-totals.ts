@@ -93,7 +93,7 @@ function zeroPair(): PairCounts {
  * `sameFamily` [F2, 2026-10-07]: two deciders of one model family cannot AGREE — that is one
  * opinion said twice, and the stamp already answers not-checked for it (free-votes.ts, oneFamily).
  * Counting such a pair as agreed_true / agreed_false made the ledger report agreement the stamp
- * refused to. It is 'incomplete': the check did not get two independent answers.
+ * refused to. It is 'incomplete': the check did not get answers from two model families.
  */
 export function pairBucket(a: VoteOutcome, b: VoteOutcome, sameFamily = false): keyof PairCounts {
   if (sameFamily) return 'incomplete';

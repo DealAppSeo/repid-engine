@@ -38,7 +38,7 @@ callers decide whether to:
 The Pythagorean Comma exists because perfect harmonization is
 mathematically impossible across systems — twelve perfect fifths do
 not exactly equal seven octaves; the residual is the comma. Sean's
-design carries this insight into cross-LLM consensus: independent LLMs
+design carries this insight into cross-LLM consensus: LLMs from different families
 producing **byte-identical or near-identical** answers is structurally
 suspicious.
 
@@ -47,7 +47,7 @@ Causes that can produce too-tight agreement:
 1. **Memorized training data.** If all three providers were trained on
    the same Wikipedia paragraph, they emit the same paragraph. The
    answer may still be correct, but the system is no longer doing
-   independent reasoning — and what's correct on a memorized fact may
+   separate reasoning — and what's correct on a memorized fact may
    be wrong elsewhere from the same source.
 2. **Coordinated prompt injection.** A successful supply-chain attack
    that places identical instructions into the system prompts of all

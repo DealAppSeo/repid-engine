@@ -43,7 +43,7 @@ failure.
 | HAL vetoes a false claim with a *calibrated* confidence, not a raw score | Run: raw halScore 1 → calibrated P(hallucination) 0.9999, ruler `rigorous-v1@596f10de18d0, T=0.8192 bias=0.4079` | CC | 2026-08-07 |
 | A confident-wrong outcome costs more than a right one earns (asymmetric delta) | Run leg 6: FAILURE_AGENT_FAULT, value 500, **δ −119.99**, RepID 2070→1950; STEP 1 commit `d18459c` enforces asymmetric deltas | CC | 2026-08-07 |
 | Dual-auth gate is fail-closed: both authorities present + HAL veto ⇒ REFUSE | Run leg 7: agent=OK human=OK → **REFUSE** (blocker `hal_vetoed` listed) | CC | 2026-08-07 |
-| ZK range proof is verified locally, not taken on the server's word | Run leg 3: `plonky3_range_check`, 10673 proof bytes, statement RepID ≥ 999 without revealing 2070 | CC | 2026-08-07 |
+| ZK range proof is verified locally, not taken on the server's word | Run leg 3: `plonky3_range_check`, 10673 proof bytes, statement RepID ≥ 999, with the score (2070) public in the statement (corrected 2026-10-23: this row said "without revealing 2070") | CC | 2026-08-07 |
 | Poseidon2 scoped nullifier is scope-separated (ZKP invariant 2) | Run leg 4: ownership → 284393528, consent → 1572901508 (same secret, different scope) | CC | 2026-08-07 |
 | On-chain reputation writes are live on Base Sepolia | Run leg 5: 78 lifetime writes; IdentityRegistry `0x8004A818…BD9e`, ReputationRegistry `0x8004B663…8713`, chain 84532 | CC | 2026-08-07 |
 | A full economic loop (USDC settle → on-chain reputation attestation) happened | `GET /api/v1/receipts/hero`: settlement tx `0x2a7ac1…`, attestation tx `0xd362c1…`, both on basescan | prior | ≤2026-08-06 |
