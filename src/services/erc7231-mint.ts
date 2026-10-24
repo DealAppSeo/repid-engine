@@ -3,7 +3,12 @@
  *
  * Two paths:
  *   - REAL    : env BASE_ERC7231_REGISTRY + DEPLOYER_PRIVATE_KEY set →
- *               ethers v6 call against Base. Returns tx_hash + token_id.
+ *               ethers v6 call against the BASE_RPC_URL node, which must be
+ *               Base Sepolia (84532). Returns tx_hash + token_id. With no
+ *               BASE_RPC_URL, or a node on any other chain, it REFUSES and
+ *               signs nothing. Until 2026-10-23 an unset BASE_RPC_URL fell
+ *               back to Base MAINNET, so the registry variable alone would
+ *               have had the deployer key sign there.
  *   - SIMULATE: either env var missing → returns a deterministic fake
  *               token id (sha256(builder_id||now) prefixed 'sim_') and
  *               is_simulated=true.
@@ -15,6 +20,8 @@
  */
 
 import { createHash } from 'crypto';
+import { Contract, Interface, JsonRpcProvider, Wallet } from 'ethers';
+import { NETWORKS } from '../config/network';
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 
@@ -66,11 +73,25 @@ export async function mintErc7231ForBuilder(builderId: string): Promise<MintResu
   return { ok: true, builder_id: builderId, erc7231_token_id: tokenId, is_simulated: true };
 }
 
+/** The only chain this mint may sign on. */
+const MINT_CHAIN_ID = NETWORKS['base-sepolia']!.chainId;
+
+/** Fail closed, loudly: nothing is signed, nothing is written. */
+function refuse(builderId: string, error: string): MintResult {
+  console.error(`[erc7231-mint] REFUSED for builder ${builderId}: ${error}`);
+  return { ok: false, builder_id: builderId, is_simulated: false, error };
+}
+
 async function realMint(builderId: string, address: string, registry: string, deployerKey: string): Promise<MintResult> {
+  // No default network: a missing RPC is a configuration error, never a reason to pick a chain.
+  const rpcUrl = (process.env.BASE_RPC_URL ?? '').trim();
+  if (!rpcUrl) return refuse(builderId, 'BASE_RPC_URL is not set; there is no default network');
   try {
-    const { JsonRpcProvider, Wallet, Contract, Interface } = await import('ethers');
-    const rpcUrl = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
     const provider = new JsonRpcProvider(rpcUrl);
+    const { chainId } = await provider.getNetwork();
+    if (Number(chainId) !== MINT_CHAIN_ID) {
+      return refuse(builderId, `BASE_RPC_URL is on chain ${chainId}, not Base Sepolia (${MINT_CHAIN_ID})`);
+    }
     const wallet = new Wallet(deployerKey, provider);
     const abi = [
       'function mintTo(address to) external returns (uint256)',
