@@ -10,7 +10,7 @@
 ## One Line
 The only AI trading agent with a mathematical veto —
 HAL blocks trades when constitutional dissonance exceeds
-0.48, producing 0.00% drawdown vs 49.63% without it.
+0.48.
 
 ## The Problem
 AI trading agents execute during market crises without
@@ -28,11 +28,12 @@ When dissonance > 0.48: trade is CAPITAL PROTECTED (not executed).
 Congressional trading signal: hardcoded -1.0 (always vetoed).
 Execution mode: paper trading always.
 
-## Proven Results (Backtest)
-- 4 for 4 crisis events: COVID crash, Ukraine invasion,
-  SVB collapse, FTX contagion — all CAPITAL PROTECTED
-- 0.00% drawdown WITH HAL veto
-- 49.63% drawdown WITHOUT HAL veto
+## Backtest results: none exist
+~~4 for 4 crisis events; 0.00% drawdown with the HAL veto vs 49.63% without.~~
+**RETRACTED 2026-10-23, do not cite.** No run is behind these numbers. No code in this repo or in
+trusttrader computes a drawdown from a price path, and `public.backtest_variance`, the only table that
+could hold a run, had 0 rows when checked on 2026-10-23. The four events named here (COVID, Ukraine,
+SVB, FTX) do not even match trusttrader's own table (COVID, China mining ban, FTX, Bitcoin ETF rally).
 - Live demo at trusttrader.dev/challenge
 
 ## RepID Integration
