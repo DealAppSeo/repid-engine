@@ -12,6 +12,9 @@
  * Payer and payee come from a stablecoin Transfer log, never from the transaction's `from`: x402
  * settles through a facilitator, and a Transfer of a token anyone can mint proves nothing.
  *
+ * Not checked here: whether the same payment backs other feedback entries. One transaction cannot
+ * show that; a consumer counting grounded feedback must count each paymentTx once.
+ *
  * Reads go through `Rpc`, so a run can be recorded and replayed offline (tests/fixtures/grounding).
  * The tape format is the one agent-receipt-verify uses: [JSON.stringify([method, params]), result].
  */
@@ -277,7 +280,11 @@ export async function groundFeedback(
   ] as const) {
     const wallet = await call('getAgentWallet', [agentId], block);
     if (wallet === null) detail[fact] = `getAgentWallet could not be read at ${when}`;
-    else if (wallet === 'reverted' || same(wallet as string, ZERO)) set(fact, 'false', `no wallet bound at ${when}`);
+    else if (wallet === 'reverted') {
+      // A revert is "no wallet" only when the agent did not exist yet; otherwise the registry may predate getAgentWallet.
+      if (block === payBlock && facts.paymentAfterRegistration === 'false') set(fact, 'false', `the agent did not exist at ${when}`);
+      else detail[fact] = `getAgentWallet reverted at ${when} (the registry may predate it there)`;
+    } else if (same(wallet as string, ZERO)) set(fact, 'false', `no wallet bound at ${when}`);
     else set(fact, payees.has((wallet as string).toLowerCase()) ? 'true' : 'false', `bound wallet at ${when}: ${wallet}`);
   }
 

@@ -91,7 +91,7 @@ const transfer = (token: string, from: string, to: string, amount: bigint) => ({
   data: ethers.toBeHex(amount, 32),
 });
 
-function world(w: { rater?: string; transfers?: ReturnType<typeof transfer>[]; down?: boolean; feedbackHash?: string; feedbackURI?: string } = {}): Rpc {
+function world(w: { rater?: string; transfers?: ReturnType<typeof transfer>[]; down?: boolean; feedbackHash?: string; feedbackURI?: string; walletReverts?: boolean } = {}): Rpc {
   const rater = w.rater ?? RATER;
   const ev = abi.encodeEventLog('NewFeedback', [7n, rater, 0n, 100n, 0, 'x402', 'x402', '', '', w.feedbackURI ?? '', w.feedbackHash ?? PAY]);
   return async (method, params) => {
@@ -102,7 +102,10 @@ function world(w: { rater?: string; transfers?: ReturnType<typeof transfer>[]; d
       return null;
     }
     const call = abi.parseTransaction({ data: (params[0] as { data: string }).data })!;
-    if (call.name === 'getAgentWallet') return abi.encodeFunctionResult('getAgentWallet', [WALLET]);
+    if (call.name === 'getAgentWallet') {
+      if (w.walletReverts) throw new RpcError('execution reverted', true);
+      return abi.encodeFunctionResult('getAgentWallet', [WALLET]);
+    }
     if (call.name === 'ownerOf') return abi.encodeFunctionResult('ownerOf', [OWNER]);
     return abi.encodeFunctionResult('isAuthorizedOrOwner', [call.args[0].toLowerCase() === OWNER.toLowerCase()]);
   };
@@ -161,6 +164,12 @@ describe('attacks and failures', () => {
     const fetchFile = async () => ({ status: 200, body });
     const r = await groundFeedback(world({ feedbackHash: '0x' + 'c'.repeat(64), feedbackURI: 'https://x.test/f.json' }), 'eip155:84532', FB, { fetchFile });
     expect(r.paymentTx).toBeNull();
+    expect(r.grounded).toBe('not_measured');
+  });
+
+  it('getAgentWallet reverting on an agent that exists is not measured, not "no wallet"', async () => {
+    const r = await groundFeedback(world({ walletReverts: true }), 'eip155:84532', FB);
+    expect(r.facts.paidIsBoundWallet).toBe('not_measured');
     expect(r.grounded).toBe('not_measured');
   });
 
