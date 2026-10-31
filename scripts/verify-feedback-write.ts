@@ -51,7 +51,7 @@ function arg(name: string): string | undefined {
  * resolved address public, redirects followed by hand and each hop re-checked, a timeout, and a
  * size cap. Anything refused comes back as an error, which the file leg reports as NOT_CHECKED.
  */
-async function fetchFeedbackFile(start: string): Promise<{ status: number; body: Uint8Array } | { error: string }> {
+export async function fetchFeedbackFile(start: string): Promise<{ status: number; body: Uint8Array } | { error: string }> {
   let url = start;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     const problem = await resolvedTargetProblem(url);
