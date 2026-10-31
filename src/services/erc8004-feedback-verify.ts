@@ -108,7 +108,12 @@ export interface ProofOfPayment {
  * transaction's own `from` is the facilitator; the payer and payee are in the token's Transfer log,
  * and that is what is matched first. A native (ETH) payment emits no log: the transaction itself is
  * the transfer, so it is matched on its own `from`, `to` and a non-zero `value`.
+ *
+ * VERIFIED here means the cited transfer happened, nothing more: it does not say the rater paid
+ * the rated agent. That is the grounding check (scripts/ground-feedback.ts); on 2026-10-31 this leg
+ * was VERIFIED on writes whose payment the rated agent had made, not received.
  */
+const NOT_GROUNDING = '; a transfer happened, not proof the rater paid this agent (scripts/ground-feedback.ts checks that)';
 export function assessPayment(
   proof: ProofOfPayment | null | undefined,
   paymentReceipt:
@@ -135,11 +140,11 @@ export function assessPayment(
   if (!hit) {
     const tx = paymentReceipt.tx;
     if (tx && tx.value > 0n && same(tx.from, proof.fromAddress) && same(tx.to, proof.toAddress)) {
-      return { leg: 'payment', outcome: 'VERIFIED', detail: `native transfer of ${ethers.formatEther(tx.value)} ETH ${proof.fromAddress} → ${proof.toAddress}` };
+      return { leg: 'payment', outcome: 'VERIFIED', detail: `native transfer of ${ethers.formatEther(tx.value)} ETH ${proof.fromAddress} → ${proof.toAddress}${NOT_GROUNDING}` };
     }
     return { leg: 'payment', outcome: 'FAILED', detail: `no Transfer and no native transfer from ${proof.fromAddress} to ${proof.toAddress} in ${proof.txHash}` };
   }
-  return { leg: 'payment', outcome: 'VERIFIED', detail: `Transfer ${proof.fromAddress} → ${proof.toAddress} on token ${hit.address}` };
+  return { leg: 'payment', outcome: 'VERIFIED', detail: `Transfer ${proof.fromAddress} → ${proof.toAddress} on token ${hit.address}${NOT_GROUNDING}` };
 }
 
 /**

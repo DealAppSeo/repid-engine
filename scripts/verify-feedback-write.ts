@@ -9,7 +9,8 @@
  *   identity  the agent exists on the IdentityRegistry
  *   file      keccak256 of the file at feedbackURI equals the feedbackHash the write committed to
  *   fields    the file's agentRegistry, agentId, clientAddress, value and tags match the event
- *   payment   the file's proofOfPayment names a real token Transfer, or a native ETH transfer, from payer to payee
+ *   payment   the file's proofOfPayment names a real token Transfer, or a native ETH transfer, from payer to payee.
+ *             That a transfer happened, not that the rater paid this agent: scripts/ground-feedback.ts checks that.
  *
  * A data: feedbackURI is decoded in place, never fetched.
  *
