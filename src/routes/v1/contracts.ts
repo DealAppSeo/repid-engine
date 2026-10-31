@@ -1133,16 +1133,33 @@ router.post('/:id/outcome', async (req: Request, res: Response) => {
       });
     }
 
-    // 6. One rating per contract (idempotent guard at the app layer; the unique
-    //    index on service_outcomes.contract_id is the DB backstop).
-    const { data: existing } = await db
+    // 6. CLAIM the contract's one rating BEFORE any score moves. The unique index
+    //    service_outcomes_contract_uniq makes the insert atomic: of N concurrent requests
+    //    exactly one inserts, the rest get 23505 and a 409 without touching RepID.
+    //    Before 2026-10-31 this was check, apply, then insert, so N parallel requests all
+    //    passed the check and all paid. If anything after the claim fails, the rating is
+    //    spent and no delta is applied: one missed delta, never a repeated one.
+    const { data: claimRow, error: claimErr } = await db
       .from('service_outcomes')
+      .insert({
+        contract_id: contract.id,
+        x402_payment_id: contract.x402_payment_id ?? null,
+        provider_agent_id: contract.provider_agent_id,
+        buyer_agent_id: contract.buyer_agent_id,
+        rater_agent_id,
+        rating,
+        note: typeof note === 'string' ? note : null,
+        dispute_eligible: false,
+      })
       .select('id')
-      .eq('contract_id', contract.id)
-      .maybeSingle();
-    if (existing) {
-      return res.status(409).json({ error: 'outcome_already_recorded', message: 'This contract already has an outcome rating' });
+      .single();
+    if (claimErr || !claimRow) {
+      if (String((claimErr as { code?: unknown } | null)?.code) === '23505') {
+        return res.status(409).json({ error: 'outcome_already_recorded', message: 'This contract already has an outcome rating' });
+      }
+      return res.status(503).json({ error: 'outcome_not_recorded', message: 'Could not record the rating, so no score moved. Retry.' });
     }
+    const recordedId: number | null = (claimRow as any).id ?? null;
 
     // 7. Rater weight from the rater's CURRENT repid.
     const { data: rater } = await db
@@ -1176,35 +1193,21 @@ router.post('/:id/outcome', async (req: Request, res: Response) => {
       raterRepid,
     );
 
-    // 10. Persist the parallel service_outcomes row (does not mutate contract).
-    //     Best-effort: if the table isn't migrated yet, the delta still applied.
-    let recordedId: number | null = null;
+    // 10. Record what the claim applied. Best-effort: the claim row already exists.
     try {
-      const { data: row, error: insErr } = await db
+      const { error: updErr } = await db
         .from('service_outcomes')
-        .insert({
-          contract_id: contract.id,
-          x402_payment_id: contract.x402_payment_id ?? null,
+        .update({
           settlement_tx_hash: settlementTxHash,
-          provider_agent_id: contract.provider_agent_id,
-          buyer_agent_id: contract.buyer_agent_id,
-          rater_agent_id,
-          rating,
-          note: typeof note === 'string' ? note : null,
           rater_repid_at_rating: raterRepid,
           rater_weight: outcome.raterWeight,
           provider_delta_applied: outcome.providerDelta,
           dispute_eligible: outcome.disputeEligible,
         })
-        .select('id')
-        .single();
-      if (insErr) {
-        console.error('[outcome] service_outcomes insert failed (delta already applied):', insErr.message);
-      } else {
-        recordedId = (row as any)?.id ?? null;
-      }
+        .eq('id', recordedId);
+      if (updErr) console.error('[outcome] service_outcomes update failed (delta applied):', updErr.message);
     } catch (e: any) {
-      console.error('[outcome] service_outcomes insert error:', e?.message ?? String(e));
+      console.error('[outcome] service_outcomes update error:', e?.message ?? String(e));
     }
 
     // 11. Mark the pending-outcome row resolved if present (flag-path bookkeeping).

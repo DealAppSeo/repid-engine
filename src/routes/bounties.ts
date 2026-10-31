@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { updateRepId } from '../engine/repid-update';
-import { authorizeBountyVerification } from '../services/bounty-authorization';
+import { authorizeBountyVerification, verifierIndependence } from '../services/bounty-authorization';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { trustedClientIp } from '../middleware/client-ip';
 import { authMiddleware } from '../middleware/auth';
@@ -197,6 +197,13 @@ router.post('/bounties/:id/verify', async (req: Request, res: Response) => {
       verifierAgentId,
       message: 'Bounty returned to CLAIMED state',
     });
+  }
+
+  // Approve pays the claimant, so the verifier must be someone else, under another owner.
+  // Checked before the state change: a refused approval leaves the bounty COMPLETED.
+  if (bounty.claimant_agent_id) {
+    const indep = await verifierIndependence(verifierAgentId, bounty.claimant_agent_id);
+    if (!indep.ok) return res.status(403).json({ error: indep.detail, reason: indep.reason });
   }
 
   // Approve: mark verified and pay out via AUDIT_CONTRIBUTION score event. Only the request

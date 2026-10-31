@@ -61,6 +61,7 @@
  */
 
 import { validateAgentApiKey } from '../auth/api-keys';
+import { resolveOwner, sameOwner, type AgentRef, type OwnerResolution } from './agent-owner-resolver';
 
 /**
  * The scope a key must carry to verify a bounty.
@@ -152,4 +153,46 @@ export async function authorizeBountyVerification(
   }
 
   return { ok: true, verifierAgentId: validated.agent_id };
+}
+
+/**
+ * Is the verifier independent of the claimant it would pay?
+ *
+ * The scope check above says WHO may verify. It does not say whom they may pay, so a
+ * key holding `bounty_verify` could claim a bounty, complete it, and approve its own
+ * payout. Same for a sibling agent under one owner. Neither is verification.
+ *
+ * Fail closed: independence must be POSITIVELY established, the same rule the
+ * confirmed-outcome path uses (scoring/confirmed-outcome.ts, rule 4). An owner we
+ * cannot resolve is not evidence of a different owner, so `unknown` and `none` both
+ * refuse. Any shared claim counts, not only the winning one: an agent that moved its
+ * wallet keeps its builder link.
+ */
+export type IndependenceRefusal = 'self_verification' | 'same_owner' | 'owner_not_established';
+
+export async function verifierIndependence(
+  verifierAgentId: string,
+  claimantAgentId: string,
+  resolve: (ref: AgentRef) => Promise<OwnerResolution> = resolveOwner,
+): Promise<{ ok: true } | { ok: false; reason: IndependenceRefusal; detail: string }> {
+  if (verifierAgentId.trim() === claimantAgentId.trim()) {
+    return { ok: false, reason: 'self_verification', detail: 'An agent cannot verify a bounty it claimed.' };
+  }
+  let v: OwnerResolution, c: OwnerResolution;
+  try {
+    [v, c] = await Promise.all([resolve({ id: verifierAgentId }), resolve({ id: claimantAgentId })]);
+  } catch (e) {
+    return { ok: false, reason: 'owner_not_established', detail: `Owner lookup failed: ${(e as Error).message}` };
+  }
+  if (v.status !== 'resolved' || c.status !== 'resolved') {
+    return {
+      ok: false,
+      reason: 'owner_not_established',
+      detail: `Could not establish that verifier and claimant have different owners (verifier: ${v.status}, claimant: ${c.status}).`,
+    };
+  }
+  if (v.claims.some((a) => c.claims.some((b) => sameOwner(a, b)))) {
+    return { ok: false, reason: 'same_owner', detail: 'Verifier and claimant share an owner.' };
+  }
+  return { ok: true };
 }

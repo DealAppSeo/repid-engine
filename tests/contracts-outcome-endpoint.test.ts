@@ -20,7 +20,9 @@ const state: {
   rater: any;
   existingOutcome: any;
   inserted: any[];
-} = { contract: null, rater: null, existingOutcome: null, inserted: [] };
+  updated: any[];
+  insertFails: boolean;
+} = { contract: null, rater: null, existingOutcome: null, inserted: [], updated: [], insertFails: false };
 
 // Spy on the delta application.
 const applyOutcomeMock = jest.fn(async () => ({
@@ -47,13 +49,19 @@ jest.mock('../src/db', () => {
     const chain: any = {
       select: () => chain,
       eq: () => chain,
+      // Behaves like service_outcomes_contract_uniq: a second row for a contract is 23505.
+      // The check and the write happen in one synchronous step, as they do in Postgres.
       insert: (row: any) => {
+        const dup = (row.contract_id !== undefined && state.existingOutcome) ||
+          state.inserted.some((r) => r.contract_id !== undefined && r.contract_id === row.contract_id);
+        if (state.insertFails) return { select: () => ({ single: async () => ({ data: null, error: { code: '08006', message: 'connection lost' } }) }) };
+        if (dup) return { select: () => ({ single: async () => ({ data: null, error: { code: '23505', message: 'duplicate key' } }) }) };
         state.inserted.push(row);
         return {
           select: () => ({ single: async () => ({ data: { id: 999 }, error: null }) }),
         };
       },
-      update: () => ({ eq: async () => ({ data: null, error: null }) }),
+      update: (patch: any) => ({ eq: async () => { state.updated.push(patch); return { data: null, error: null }; } }),
       maybeSingle: async () => resolver(),
       single: async () => resolver(),
     };
@@ -113,6 +121,8 @@ beforeEach(() => {
   state.rater = { current_repid: 1000 };
   state.existingOutcome = null;
   state.inserted = [];
+  state.updated = [];
+  state.insertFails = false;
   applyOutcomeMock.mockClear();
 });
 
@@ -206,8 +216,9 @@ describe('POST /contracts/:id/outcome — happy path + idempotency', () => {
     const outcomeRow = state.inserted.find((r) => r.rating === 'good');
     expect(outcomeRow).toBeDefined();
     expect(outcomeRow.contract_id).toBe('c-1');
-    expect(outcomeRow.settlement_tx_hash).toBe('0xabc');
     expect(outcomeRow.note).toBe('held up great');
+    // The claim row is written first; what it applied is recorded after.
+    expect(state.updated).toContainEqual(expect.objectContaining({ settlement_tx_hash: '0xabc', provider_delta_applied: 60, rater_weight: 1.0 }));
   });
 
   test('409 when an outcome already exists for the contract (one rating/contract)', async () => {
@@ -215,6 +226,35 @@ describe('POST /contracts/:id/outcome — happy path + idempotency', () => {
     const res = await request(app).post('/api/v1/contracts/c-1/outcome').send({ rating: 'good', rater_agent_id: BUYER });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('outcome_already_recorded');
+    expect(applyOutcomeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /contracts/:id/outcome — one rating pays once, even under concurrency', () => {
+  test('five parallel ratings of one contract: one 200, four 409, the delta applied once', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        request(app).post('/api/v1/contracts/c-1/outcome').send({ rating: 'good', rater_agent_id: BUYER }),
+      ),
+    );
+    const codes = results.map((r) => r.status).sort();
+    expect(codes).toEqual([200, 409, 409, 409, 409]);
+    expect(applyOutcomeMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('a retry after a successful rating (e.g. the client timed out) is 409 and pays nothing more', async () => {
+    const first = await request(app).post('/api/v1/contracts/c-1/outcome').send({ rating: 'good', rater_agent_id: BUYER });
+    const retry = await request(app).post('/api/v1/contracts/c-1/outcome').send({ rating: 'good', rater_agent_id: BUYER });
+    expect(first.status).toBe(200);
+    expect(retry.status).toBe(409);
+    expect(applyOutcomeMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('if the claim cannot be written, no score moves (503, not a silent pay)', async () => {
+    state.insertFails = true;
+    const res = await request(app).post('/api/v1/contracts/c-1/outcome').send({ rating: 'good', rater_agent_id: BUYER });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('outcome_not_recorded');
     expect(applyOutcomeMock).not.toHaveBeenCalled();
   });
 });

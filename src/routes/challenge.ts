@@ -38,7 +38,18 @@ router.post('/challenge', async (req: Request, res: Response) => {
       hint: 'Select a defender from the agent list',
     });
   }
-  if (challengerId === defenderId) {
+  // The challenger is the authenticated principal when the key is agent-bound; a body string
+  // must not choose who files (and so who gains). Operator keys are unchanged, as in score.ts.
+  const principal = (req as any).agent_id;
+  if (typeof principal === 'string' && principal.trim() &&
+      principal.trim().toLowerCase() !== String(challengerId).trim().toLowerCase()) {
+    return res.status(403).json({
+      error: 'Forbidden: challengerId does not match the authenticated principal',
+      field: 'body.challengerId',
+    });
+  }
+  // Case-insensitive: the UUID regex accepts upper case, so 'ABC…' and 'abc…' are one agent.
+  if (String(challengerId).toLowerCase() === String(defenderId).toLowerCase()) {
     return res.status(400).json({
       error: 'Cannot challenge yourself',
       hint: 'Select a different agent as your defender',

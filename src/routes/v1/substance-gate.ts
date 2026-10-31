@@ -19,6 +19,20 @@ router.post('/substance-gate/events', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
+  // A failed gate slashes `agentName`, so an agent-bound key may only report itself.
+  // Operator keys (no bound agent) are unchanged.
+  const principal = (req as any).agent_id;
+  if (typeof principal === 'string' && principal.trim()) {
+    const { data: named, error: nameErr } = await db
+      .from('repid_agents').select('id').eq('agent_name', String(agentName)).maybeSingle();
+    if (nameErr || !named || String((named as any).id) !== principal.trim()) {
+      return res.status(403).json({
+        error: 'Forbidden: agentName is not the agent this API key is bound to',
+        field: 'body.agentName',
+      });
+    }
+  }
+
   try {
     // 1. Write substance_gate_events
     const gateEventId = await recordGateEvent(db, task, fastResult, agentName, contentHash);
