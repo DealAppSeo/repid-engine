@@ -77,14 +77,15 @@ router.get('/recent-transactions', async (req: Request, res: Response) => {
     const rows = (data ?? []).map((c: any) => {
       const settlement = c.x402_settlements ?? null;
       const service = c.agent_services ?? null;
-      // Honest sim flag: prefer the settlement's flag; fall back to the
-      // contract metadata; default to false only when neither is present.
-      const isSimulated =
+      // Honest sim flag: prefer the settlement's flag; fall back to the contract metadata.
+      // Neither present means UNKNOWN (null), never "real": defaulting to false let a row with
+      // no flag at all read as a real payment downstream.
+      const rawSim =
         settlement?.is_simulated ??
-        (c.metadata && typeof c.metadata === 'object' ? (c.metadata as any).is_simulated : undefined) ??
-        false;
-      // tx_hash only meaningful for a real settlement.
-      const txHash = isSimulated ? null : (settlement?.tx_hash ?? null);
+        (c.metadata && typeof c.metadata === 'object' ? (c.metadata as any).is_simulated : undefined);
+      const isSimulated: boolean | null = typeof rawSim === 'boolean' ? rawSim : null;
+      // tx_hash only for a settlement known to be real.
+      const txHash = isSimulated === false ? (settlement?.tx_hash ?? null) : null;
 
       return {
         contract_id: c.id,
@@ -92,7 +93,7 @@ router.get('/recent-transactions', async (req: Request, res: Response) => {
         service_name: service?.service_name ?? null,
         amount: settlement?.amount ?? c.agreed_price_usdc_raw ?? null,
         asset: settlement?.asset ?? 'USDC',
-        is_simulated: Boolean(isSimulated),
+        is_simulated: isSimulated,
         tx_hash: txHash,
         status: c.status,
         provider_agent_id: c.provider_agent_id,

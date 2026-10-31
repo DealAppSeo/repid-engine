@@ -128,7 +128,8 @@ export function buildTrackRecord(settled: number, disputed: number): TrackRecord
   } else {
     const disputeText =
       disputed === 0 ? 'no disputes' : `${disputed} dispute${disputed === 1 ? '' : 's'}`;
-    summary = `${settled} settled job${settled === 1 ? '' : 's'} · ${verified_rate}% verified · ${disputeText}`;
+    // The rate is settled / (settled + disputed): jobs nobody disputed, not jobs anyone verified.
+    summary = `${settled} settled job${settled === 1 ? '' : 's'} · ${verified_rate}% not disputed · ${disputeText}`;
     if (sample_size_warning) {
       summary += ` · too few jobs for the rate to mean much`;
     }

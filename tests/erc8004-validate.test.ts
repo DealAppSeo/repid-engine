@@ -42,7 +42,10 @@ app.use('/api/v1', v1Router);
 
 const AGENT_ID = '11111111-2222-3333-4444-555555555555';
 
-function passportFixture(overrides: { registered_onchain: boolean }) {
+/** The real enum (services/agent-passport.ts), not a boolean: a boolean fixture hid the bug. */
+type MintState = 'MINTED' | 'UNVERIFIED' | 'NOT_MINTED';
+function passportFixture(overrides: { registered_onchain: MintState }) {
+  const minted = overrides.registered_onchain !== 'NOT_MINTED';
   return {
     passport_version: '1',
     as_of: '2026-07-29T00:00:00.000Z',
@@ -55,14 +58,14 @@ function passportFixture(overrides: { registered_onchain: boolean }) {
     reputation: { repid_score: 1390, tier: 'ESTABLISHED', activity_30d: 12 },
     identity_erc8004: {
       registered_onchain: overrides.registered_onchain,
-      token_id: overrides.registered_onchain ? '5863' : null,
-      contract_address: overrides.registered_onchain
+      token_id: minted ? '5863' : null,
+      contract_address: minted
         ? '0x8004A818BFB912233c491871b3d84c89A494BD9e'
         : null,
-      chain_id: overrides.registered_onchain ? 84532 : null,
-      network: overrides.registered_onchain ? 'base-sepolia' : null,
-      mint_tx_hash: overrides.registered_onchain ? '0xminttx' : null,
-      mint_basescan_url: overrides.registered_onchain
+      chain_id: minted ? 84532 : null,
+      network: minted ? 'base-sepolia' : null,
+      mint_tx_hash: minted ? '0xminttx' : null,
+      mint_basescan_url: minted
         ? 'https://sepolia.basescan.org/tx/0xminttx'
         : null,
       minted_at: null,
@@ -77,7 +80,7 @@ afterEach(() => jest.clearAllMocks());
 describe('GET /api/v1/erc8004/validate/:agent_id', () => {
   test('minted agent → registered_onchain, no fabricated fields', async () => {
     (buildAgentPassport as jest.Mock).mockResolvedValue(
-      passportFixture({ registered_onchain: true })
+      passportFixture({ registered_onchain: 'MINTED' })
     );
     const res = await request(app).get(`/api/v1/erc8004/validate/${AGENT_ID}`);
 
@@ -99,12 +102,21 @@ describe('GET /api/v1/erc8004/validate/:agent_id', () => {
 
   test('unminted agent → offchain_only (never "verified")', async () => {
     (buildAgentPassport as jest.Mock).mockResolvedValue(
-      passportFixture({ registered_onchain: false })
+      passportFixture({ registered_onchain: 'NOT_MINTED' })
     );
     const res = await request(app).get(`/api/v1/erc8004/validate/${AGENT_ID}`);
     expect(res.status).toBe(200);
     expect(res.body.validation_status).toBe('offchain_only');
     expect(res.body.identity.token_id).toBeNull();
+  });
+
+  test('a recorded mint that was not confirmed on chain is not "registered_onchain"', async () => {
+    (buildAgentPassport as jest.Mock).mockResolvedValue(
+      passportFixture({ registered_onchain: 'UNVERIFIED' })
+    );
+    const res = await request(app).get(`/api/v1/erc8004/validate/${AGENT_ID}`);
+    expect(res.status).toBe(200);
+    expect(res.body.validation_status).toBe('mint_recorded_unverified');
   });
 
   test('unknown agent → 404', async () => {

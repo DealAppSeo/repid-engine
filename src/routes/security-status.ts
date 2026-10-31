@@ -46,7 +46,8 @@ router.get('/security/status', async (_req: Request, res: Response) => {
   const chains = [halChain, toolChain].filter(Boolean) as NonNullable<typeof halChain>[];
   const totalEntries = chains.reduce((s, c) => s + c.total_rows, 0);
   const anyBreak = chains.some((c) => c.breaks > 0);
-  const chainStatus = chains.length === 0 ? 'UNVERIFIED' : anyBreak ? 'CHAIN_BREAK' : 'VALID';
+  // VALID needs something to have been chained: zero rows read is EMPTY, not a pass.
+  const chainStatus = chains.length === 0 ? 'UNVERIFIED' : anyBreak ? 'CHAIN_BREAK' : totalEntries === 0 ? 'EMPTY' : 'VALID';
 
   res.json({
     rls_status: rls

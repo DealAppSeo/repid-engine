@@ -171,6 +171,10 @@ async function main(): Promise<number> {
   for (const l of legs) console.log(`${l.outcome.padEnd(11)} ${l.leg.padEnd(8)} ${l.detail}`);
   const verdict = overall(legs);
   console.log(`\n${verdict}: ${txHash}${decoded ? ` (feedbackURI ${decoded.feedbackURI})` : ''}`);
+  if (verdict === 'VERIFIED') {
+    // A reader of the last line alone must not take VERIFIED to mean the rater paid (#1469).
+    console.log('note: the payment leg means a transfer happened, not that the rater paid this agent; scripts/ground-feedback.ts checks that.');
+  }
   return exitCodeOf(verdict);
 }
 

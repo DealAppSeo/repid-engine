@@ -358,9 +358,11 @@ router.post('/agents/:id/x402-gate', async (req: Request, res: Response) => {
   const limit = tierLimits[agent.tier] ?? 0;
   const tierAllowed = amount <= limit;
   // Sprint 3: also check latest EAS attestation from ValidationRegistry
-  const easCheck = { passed: true, stub: true,
+  // NOT WIRED: no attestation is read here, so it is reported as NOT_CHECKED, never as passed.
+  // `allowed` rests on the tier limit alone, as it always effectively did (the stub was true).
+  const easCheck = { passed: null, status: 'NOT_CHECKED' as const, stub: true,
     schema: 'constitutional-compliance-v1' };
-  const allowed = tierAllowed && easCheck.passed;
+  const allowed = tierAllowed;
 
   return res.json({
     allowed, agentId: req.params.id, agentName: agent.agent_name,

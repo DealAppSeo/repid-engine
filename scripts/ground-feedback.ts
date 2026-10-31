@@ -32,13 +32,18 @@ async function main(): Promise<number> {
     const HASH = /^0x[0-9a-fA-F]{64}$/;
     for (const line of readFileSync(batch, 'utf8').split('\n')) {
       const [tx, paymentTx] = line.trim().split(/\s+/);
-      if (!tx || !HASH.test(tx)) continue;
+      if (!tx) continue;
+      if (!HASH.test(tx)) { tally.skipped = (tally.skipped ?? 0) + 1; continue; }
       const r = await groundFeedback(live, network, tx, { fetchFile, paymentTx: paymentTx && HASH.test(paymentTx) ? paymentTx : undefined });
       tally[r.grounded] = (tally[r.grounded] ?? 0) + 1;
       console.log(JSON.stringify(r));
     }
     console.error(JSON.stringify(tally));
-    return 0;
+    // Same codes as one entry: 0 only when every entry was grounded. Anything unmeasured
+    // (or a line that was not a tx hash) is 2, never a pass; otherwise any 'no' is 1.
+    if (tally.not_measured || tally.skipped) return 2;
+    if (tally.no) return 1;
+    return tally.yes ? 0 : 2; // an empty batch measured nothing
   }
 
   const tx = process.argv[2];
