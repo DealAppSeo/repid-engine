@@ -17,6 +17,9 @@
  *
  * Reads go through `Rpc`, so a run can be recorded and replayed offline (tests/fixtures/grounding).
  * The tape format is the one agent-receipt-verify uses: [JSON.stringify([method, params]), result].
+ *
+ * Twin: trustshell src/lib/erc8004-grounding.ts (the portable `trustshell erc8004` command). Both
+ * replay the same tapes, so a change to one that the other does not make fails a test.
  */
 import { ethers } from 'ethers';
 
@@ -240,7 +243,9 @@ export async function groundFeedback(
     const why = pay
       ? `payment ${paymentTx} did not succeed`
       : out.paymentSource === 'feedbackHash'
-        ? 'neither the feedbackHash nor a committed file names a payment on this chain (it may be a receipt commitment); name the payment to check it'
+        ? opts.fetchFile
+          ? 'neither the feedbackHash nor the committed file names a payment on this chain (it may be a receipt commitment); name the payment to check it'
+          : 'the feedbackHash is not a transaction on this chain (it may be a receipt commitment or a file hash; the file was not read); name the payment to check it'
         : `the RPC returned no receipt for payment ${paymentTx} (not found, or pruned on this node)`;
     for (const f of FACTS) if (f !== 'raterNotOwnerOrOperator') detail[f] = why;
     out.grounded = verdict(facts);
