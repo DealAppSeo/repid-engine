@@ -237,6 +237,15 @@ describe('POST /bounties/:id/verify — the verifier must be independent of the 
     expect(mockUpdateRepId).not.toHaveBeenCalled();
   });
 
+  it('refuses the claimant verifying under an upper-cased copy of its own id', async () => {
+    owners({ 'claimant-agent': '0xowner-b', 'CLAIMANT-AGENT': '0xowner-b' });
+    const { res, updates } = await approveAs('CLAIMANT-AGENT');
+    expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('self_verification');
+    expect(updates).toEqual([]);
+    expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+
   it('refuses a sibling agent under the same owner (case-insensitive wallet)', async () => {
     owners({ 'sibling-verifier': '0xOWNER-B', 'claimant-agent': '0xowner-b' });
     const { res, updates } = await approveAs('sibling-verifier');

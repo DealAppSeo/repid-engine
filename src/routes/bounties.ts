@@ -209,10 +209,13 @@ router.post('/bounties/:id/verify', async (req: Request, res: Response) => {
   // Approve: mark verified and pay out via AUDIT_CONTRIBUTION score event. Only the request
   // whose guarded update moves COMPLETED -> VERIFIED pays; a concurrent or repeated verify
   // matches no row and gets 409, so one completion pays once.
-  const { data: verified, error: verErr } = await db.from('repid_bounties').update({
+  let move = db.from('repid_bounties').update({
     status: 'VERIFIED',
     verified_at: new Date().toISOString(),
-  }).eq('id', req.params.id).eq('status', 'COMPLETED').select('id');
+  }).eq('id', req.params.id).eq('status', 'COMPLETED');
+  // Pay only the claimant the independence check was run against.
+  if (bounty.claimant_agent_id) move = move.eq('claimant_agent_id', bounty.claimant_agent_id);
+  const { data: verified, error: verErr } = await move.select('id');
   if (verErr) return res.status(500).json({ error: verErr.message });
   if (!verified?.length) return noTransition(res, req.params.id, 'COMPLETED');
 

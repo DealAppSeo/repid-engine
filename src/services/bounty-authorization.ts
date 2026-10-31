@@ -175,7 +175,7 @@ export async function verifierIndependence(
   claimantAgentId: string,
   resolve: (ref: AgentRef) => Promise<OwnerResolution> = resolveOwner,
 ): Promise<{ ok: true } | { ok: false; reason: IndependenceRefusal; detail: string }> {
-  if (verifierAgentId.trim() === claimantAgentId.trim()) {
+  if (verifierAgentId.trim().toLowerCase() === claimantAgentId.trim().toLowerCase()) {
     return { ok: false, reason: 'self_verification', detail: 'An agent cannot verify a bounty it claimed.' };
   }
   let v: OwnerResolution, c: OwnerResolution;
