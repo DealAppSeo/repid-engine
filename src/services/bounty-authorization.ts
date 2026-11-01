@@ -197,7 +197,9 @@ export async function verifierIndependence(
   // Different keys prove different owners only within ONE namespace. A builder id and an SBT
   // token can name the same human (Strix, #1470), so with no namespace in common the owners
   // cannot be compared, and that is not independence.
-  const kinds = (r: OwnerResolution) => new Set(r.claims.filter((x) => x.ownerKey).map((x) => x.ownerKeyKind));
+  // 'opaque' (e.g. a KYA custodian tier) is not an owner identity, so it cannot show a difference.
+  const kinds = (r: OwnerResolution) =>
+    new Set(r.claims.filter((x) => x.ownerKey && x.ownerKeyKind !== 'opaque').map((x) => x.ownerKeyKind));
   const vk = kinds(v);
   if (![...kinds(c)].some((k) => vk.has(k))) {
     return {

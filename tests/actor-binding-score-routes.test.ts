@@ -79,25 +79,32 @@ beforeEach(() => {
   recordGateEvent.mockClear();
 });
 
-describe('POST /challenge — the challenger is the key, not the body', () => {
+describe('POST /challenge — operator-only: an agent key cannot penalise a defender it picks', () => {
   const body = { challengerId: B_ID(), defenderId: A_ID(), claim: 'the defender cited a retracted paper' };
 
   it('refuses agent A filing as agent B, before any database access', async () => {
     const res = await request(app(challengeRouter)).post('/challenge').set('x-test-agent', A_ID()).send(body);
     expect(res.status).toBe(403);
-    expect(res.body.field).toBe('body.challengerId');
+    expect(res.body.reason).toBe('operator_only');
     expect(dbCalls).toEqual([]);
   });
 
-  it('refuses a self-challenge written in upper case', async () => {
-    const res = await request(app(challengeRouter)).post('/challenge').set('x-test-agent', A_ID())
+  it('refuses agent B filing as itself too: the defender is still the caller\'s pick', async () => {
+    const res = await request(app(challengeRouter)).post('/challenge').set('x-test-agent', B_ID()).send(body);
+    expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('operator_only');
+    expect(dbCalls).toEqual([]);
+  });
+
+  it('refuses a self-challenge written in upper case (operator key)', async () => {
+    const res = await request(app(challengeRouter)).post('/challenge')
       .send({ ...body, challengerId: A_ID(), defenderId: A_ID().toUpperCase() });
     expect(res.status).toBe(400);
     expect(dbCalls).toEqual([]);
   });
 
-  it('lets a bound key file as itself (gets past the binding check)', async () => {
-    const res = await request(app(challengeRouter)).post('/challenge').set('x-test-agent', B_ID().toUpperCase()).send(body);
+  it('an operator key gets past the gate', async () => {
+    const res = await request(app(challengeRouter)).post('/challenge').send(body);
     expect(res.status).not.toBe(403);
   });
 });
@@ -154,30 +161,34 @@ describe('POST /api/v1/substance-gate/events — an agent can only report its ow
   });
 });
 
-describe('POST /api/v1/challenge/create — the same rule on the second challenge door', () => {
-  const body = (challenger: string) => ({ challenger_agent: challenger, defender_agent: 'agent-a', claim: 'a claim', stake_repid: 5 });
+describe('POST /api/v1/challenge/create — operator-only: the arena moves both agents by a caller-set stake', () => {
+  const body = (challenger: string) => ({ challenger_agent: challenger, defender_agent: 'agent-a', claim: 'a claim', stake_repid: 1_000_000 });
   beforeEach(() => arena.mockClear());
 
   it('refuses agent A challenging as agent B: no arena run, no RepID moved', async () => {
     const res = await request(app(v1Router, '/api/v1')).post('/api/v1/challenge/create')
       .set('x-test-agent', A_ID()).send(body('agent-b'));
     expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('operator_only');
     expect(arena).not.toHaveBeenCalled();
   });
 
-  it('refuses a self-challenge that differs only in case', async () => {
+  it('refuses agent B challenging as itself with a huge stake against a defender it picks', async () => {
     const res = await request(app(v1Router, '/api/v1')).post('/api/v1/challenge/create')
-      .set('x-test-agent', A_ID()).send({ ...body('AGENT-A') });
+      .set('x-test-agent', B_ID()).send(body('agent-b'));
+    expect(res.status).toBe(403);
+    expect(arena).not.toHaveBeenCalled();
+  });
+
+  it('refuses a self-challenge that differs only in case (operator key)', async () => {
+    const res = await request(app(v1Router, '/api/v1')).post('/api/v1/challenge/create').send({ ...body('AGENT-A') });
     expect(res.status).toBe(400);
     expect(arena).not.toHaveBeenCalled();
   });
 
-  it('lets a bound key challenge as itself, and leaves operator keys unchanged', async () => {
-    const own = await request(app(v1Router, '/api/v1')).post('/api/v1/challenge/create')
-      .set('x-test-agent', B_ID()).send(body('agent-b'));
+  it('an operator key still runs the arena', async () => {
     const op = await request(app(v1Router, '/api/v1')).post('/api/v1/challenge/create').send(body('agent-b'));
-    expect(own.status).toBe(200);
     expect(op.status).toBe(200);
-    expect(arena).toHaveBeenCalledTimes(2);
+    expect(arena).toHaveBeenCalledTimes(1);
   });
 });

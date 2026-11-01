@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { actorMismatch } from './actor-binding';
+import { agentBoundKey } from './actor-binding';
 import { db } from '../db';
 import { auditConstitutionalCompliance } from '../layers/constitutional-audit';
 import { checkAndAwardBadges } from '../engine/badges';
@@ -39,12 +39,14 @@ router.post('/challenge', async (req: Request, res: Response) => {
       hint: 'Select a defender from the agent list',
     });
   }
-  // The challenger is the authenticated principal when the key is agent-bound; a body string
-  // must not choose who files (and so who gains). Operator keys are unchanged, as in score.ts.
-  if (await actorMismatch(req, String(challengerId))) {
+  // OPERATOR-ONLY. A challenge penalises a defender the caller chooses, on a certainty the
+  // caller states, and agent keys are self-issued at public registration. Binding the
+  // challenger to the key (the first fix) still let any new agent grief any other. Until a
+  // challenge is settled on evidence, only an operator key may file one (actor-binding.ts).
+  if (agentBoundKey(req)) {
     return res.status(403).json({
-      error: 'Forbidden: challengerId does not match the authenticated principal',
-      field: 'body.challengerId',
+      error: 'Forbidden: challenges are filed with an operator key until they are settled on evidence',
+      reason: 'operator_only',
     });
   }
   // Case-insensitive: the UUID regex accepts upper case, so 'ABC…' and 'abc…' are one agent.

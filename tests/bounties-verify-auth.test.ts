@@ -268,6 +268,18 @@ describe('POST /bounties/:id/verify — the verifier must be independent of the 
     expect(mockUpdateRepId).not.toHaveBeenCalled();
   });
 
+  it('an opaque claim (a KYA custodian tier) is not an owner identity and cannot show a difference', async () => {
+    mockResolveOwner.mockImplementation(async (ref) => {
+      const claim = { source: 'kya', assurance: 'declared', ownerKey: 'tier-' + ref.id, ownerKeyKind: 'opaque', capUsdcPerTx: null, capUsdcTotal: null } as any;
+      return { status: 'resolved', agentId: ref.id!, owner: claim, claims: [claim], conflicts: [], reason: null, probes: [] };
+    });
+    const { res, updates } = await approveAs('real-verifier');
+    expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('owner_not_established');
+    expect(updates).toEqual([]);
+    expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+
   it('refuses when either owner cannot be established: unknown is not independent', async () => {
     owners({ 'real-verifier': '0xowner-a' }); // claimant unresolved
     const { res, updates } = await approveAs('real-verifier');

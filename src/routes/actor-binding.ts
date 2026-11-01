@@ -19,6 +19,17 @@ import { db } from '../db';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * True when the key is bound to an agent. Routes that let the caller name a SECOND agent and
+ * move its score on the caller's own say-so (the challenge routes: the defender is any agent, the
+ * verdict comes from claim text the caller writes) are operator-only: binding the challenger is
+ * not enough when registration is public and keys are self-issued (Strix, #1470).
+ */
+export function agentBoundKey(req: Request): boolean {
+  const principal = (req as any).agent_id;
+  return typeof principal === 'string' && principal.trim() !== '';
+}
+
 /** null when the request may act as `actor` (an id or an agent_name); otherwise why not. */
 export async function actorMismatch(req: Request, actor: unknown): Promise<string | null> {
   const principal = (req as any).agent_id;
