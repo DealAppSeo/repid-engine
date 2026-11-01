@@ -39,7 +39,14 @@ jest.mock('../src/services/substance-gate-writer', () => ({
   appendGateAuditChain: jest.fn(),
 }));
 
+const arena = jest.fn(async () => ({ resolved: true }));
+jest.mock('../src/testing/red-team', () => ({
+  ...jest.requireActual('../src/testing/red-team'),
+  createAndResolveArenaChallenge: (...a: unknown[]) => arena(...(a as [])),
+}));
+
 import challengeRouter from '../src/routes/challenge';
+import v1Router from '../src/routes/v1';
 import substanceGateRouter from '../src/routes/v1/substance-gate';
 
 /** Stand-in for authMiddleware: x-test-agent sets the bound agent; absent = operator key. */
@@ -114,5 +121,33 @@ describe('POST /api/v1/substance-gate/events — an agent can only report its ow
   it('leaves operator keys (no bound agent) unchanged', async () => {
     await request(app(substanceGateRouter, '/api/v1')).post('/api/v1/substance-gate/events').send(event('agent-b'));
     expect(recordGateEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/v1/challenge/create — the same rule on the second challenge door', () => {
+  const body = (challenger: string) => ({ challenger_agent: challenger, defender_agent: 'agent-a', claim: 'a claim', stake_repid: 5 });
+  beforeEach(() => arena.mockClear());
+
+  it('refuses agent A challenging as agent B: no arena run, no RepID moved', async () => {
+    const res = await request(app(v1Router, '/api/v1')).post('/api/v1/challenge/create')
+      .set('x-test-agent', A_ID()).send(body('agent-b'));
+    expect(res.status).toBe(403);
+    expect(arena).not.toHaveBeenCalled();
+  });
+
+  it('refuses a self-challenge that differs only in case', async () => {
+    const res = await request(app(v1Router, '/api/v1')).post('/api/v1/challenge/create')
+      .set('x-test-agent', A_ID()).send({ ...body('AGENT-A') });
+    expect(res.status).toBe(400);
+    expect(arena).not.toHaveBeenCalled();
+  });
+
+  it('lets a bound key challenge as itself, and leaves operator keys unchanged', async () => {
+    const own = await request(app(v1Router, '/api/v1')).post('/api/v1/challenge/create')
+      .set('x-test-agent', B_ID()).send(body('agent-b'));
+    const op = await request(app(v1Router, '/api/v1')).post('/api/v1/challenge/create').send(body('agent-b'));
+    expect(own.status).toBe(200);
+    expect(op.status).toBe(200);
+    expect(arena).toHaveBeenCalledTimes(2);
   });
 });

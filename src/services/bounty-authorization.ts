@@ -194,5 +194,17 @@ export async function verifierIndependence(
   if (v.claims.some((a) => c.claims.some((b) => sameOwner(a, b)))) {
     return { ok: false, reason: 'same_owner', detail: 'Verifier and claimant share an owner.' };
   }
+  // Different keys prove different owners only within ONE namespace. A builder id and an SBT
+  // token can name the same human (Strix, #1470), so with no namespace in common the owners
+  // cannot be compared, and that is not independence.
+  const kinds = (r: OwnerResolution) => new Set(r.claims.filter((x) => x.ownerKey).map((x) => x.ownerKeyKind));
+  const vk = kinds(v);
+  if (![...kinds(c)].some((k) => vk.has(k))) {
+    return {
+      ok: false,
+      reason: 'owner_not_established',
+      detail: 'Verifier and claimant owners are recorded in different namespaces, so they cannot be compared.',
+    };
+  }
   return { ok: true };
 }

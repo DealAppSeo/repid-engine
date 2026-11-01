@@ -255,6 +255,19 @@ describe('POST /bounties/:id/verify — the verifier must be independent of the 
     expect(mockUpdateRepId).not.toHaveBeenCalled();
   });
 
+  it('refuses owners recorded in different namespaces: a builder id and an SBT token can be one human', async () => {
+    mockResolveOwner.mockImplementation(async (ref) => {
+      const kind = ref.id === 'real-verifier' ? 'builder_id' : 'human_sbt_token';
+      const claim = { source: 'binding', assurance: 'onchain', ownerKey: 'k-' + ref.id, ownerKeyKind: kind, capUsdcPerTx: null, capUsdcTotal: null } as any;
+      return { status: 'resolved', agentId: ref.id!, owner: claim, claims: [claim], conflicts: [], reason: null, probes: [] };
+    });
+    const { res, updates } = await approveAs('real-verifier');
+    expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('owner_not_established');
+    expect(updates).toEqual([]);
+    expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+
   it('refuses when either owner cannot be established: unknown is not independent', async () => {
     owners({ 'real-verifier': '0xowner-a' }); // claimant unresolved
     const { res, updates } = await approveAs('real-verifier');

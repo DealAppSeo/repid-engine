@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { actorMismatch } from './actor-binding';
 import { db } from '../db';
 import { auditConstitutionalCompliance } from '../layers/constitutional-audit';
 import { checkAndAwardBadges } from '../engine/badges';
@@ -40,9 +41,7 @@ router.post('/challenge', async (req: Request, res: Response) => {
   }
   // The challenger is the authenticated principal when the key is agent-bound; a body string
   // must not choose who files (and so who gains). Operator keys are unchanged, as in score.ts.
-  const principal = (req as any).agent_id;
-  if (typeof principal === 'string' && principal.trim() &&
-      principal.trim().toLowerCase() !== String(challengerId).trim().toLowerCase()) {
+  if (await actorMismatch(req, String(challengerId))) {
     return res.status(403).json({
       error: 'Forbidden: challengerId does not match the authenticated principal',
       field: 'body.challengerId',

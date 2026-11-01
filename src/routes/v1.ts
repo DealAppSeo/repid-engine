@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { actorMismatch } from './actor-binding';
 import { db } from '../db';
 import { matchEnvOperatorKey } from '../auth/api-keys';
 import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
@@ -934,8 +935,16 @@ router.post('/challenge/create', async (req: Request, res: Response) => {
   if (!challenger_agent || !defender_agent || !claim || typeof stake_repid !== 'number') {
     return res.status(400).json({ error: 'challenger_agent, defender_agent, claim, stake_repid required' });
   }
-  if (challenger_agent === defender_agent) {
+  if (String(challenger_agent).trim().toLowerCase() === String(defender_agent).trim().toLowerCase()) {
     return res.status(400).json({ error: 'challenger and defender must be different' });
+  }
+  // This resolves the challenge and moves both agents' RepID, so an agent-bound key may only
+  // challenge as itself (actor-binding.ts). Operator keys are unchanged.
+  if (await actorMismatch(req, String(challenger_agent))) {
+    return res.status(403).json({
+      error: 'Forbidden: challenger_agent is not the agent this API key is bound to',
+      field: 'body.challenger_agent',
+    });
   }
   try {
     const result = await createAndResolveArenaChallenge({
