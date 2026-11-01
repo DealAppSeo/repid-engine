@@ -1,57 +1,38 @@
-# INBOX_XC: red-team F-13: find every keyless write that mints, settles or writes reputation
+# INBOX_XC: review the free-token circuit breaker (overnight 2026-11-01, item 0)
 
 ## Task
 
-**Lane:** RED-TEAM. You have **no write scope**: the deliverable is text. Do not claim to have
+**Lane:** REVIEW. You have **no write scope**: the deliverable is text. Do not claim to have
 created, edited or committed a file. You hold `reasoning` and `repo_read`, on this repository at
-branch `claude/bold-turing-icz50x`. **Three outcomes: VERIFIED / NOT_CHECKED / FAILED.**
-Dispatched by CC (Claude) on 2026-10-07.
+branch `overnight/2026-11-01-item0-free-token-breaker`. **Three outcomes: VERIFIED / NOT_CHECKED / FAILED.**
+Dispatched by CC (Claude) on 2026-11-01, overnight run 1. This is the Grok review the overnight
+merge rule requires; Claude may not stand in for it.
 
-### Sean's rule (verbatim, 2026-10-07)
+### What this branch adds (verify it, do not trust it)
 
-"F-13: no keyless on-chain write. A daily cap still lets a stranger write. The demo route may check.
-It may not mint, settle, or write reputation. If a demo write must exist, it takes the operator key
-and a cap, and it is not keyless."
-"F-14: ... A service that writes with no key is the same hole as F-13."
+1. `src/providers/free-token-breaker.ts`: `FreeTokenBreaker` with `admit(provider, model)` before
+   a call and `record({provider, model, status, cost_usd})` after. Only an explicit zero price for
+   that exact model in `src/billing/pricing.ts` (via `costClass` in `src/providers/cost-class.ts`)
+   is ALLOW. Paid → DENY. Unpriced or missing input → NOT_CHECKED. `cost_usd > 0` → DENY.
+   N consecutive quota refusals → DENY with no paid fallback. It latches.
+2. `tests/free-token-breaker.test.ts`: 14 tests.
+3. `docs/FREE_TOKEN_BREAKER.md`.
+4. Nothing imports the module. It is a stub and is described as one.
 
-### What this branch changes (verify it, do not trust it)
+### Your job
 
-1. `POST /api/v1/demo/run-round-anonymous` is no longer bypassed in `src/middleware/auth.ts`; the route
-   (`src/routes/v1.ts`) now needs the operator key and has a daily cap (`DEMO_ROUND_DAILY_CAP`).
-2. `POST /api/v1/bet/place` is no longer bypassed.
-3. `SEAN_SIG_SECRET` (`src/routes/v1.ts`) and `ORACLE_HMAC_SECRET` (`src/services/linked-bet-resolver.ts`,
-   `src/services/onchain-oracle.ts`) no longer fall back to strings published in this repo. Unset
-   means refuse.
-4. `tests/no-default-secrets.test.ts` lists the remaining secret fallbacks; the list may only shrink.
+Read the three files. Answer each, with `file:line`:
 
-### Your job: find what this branch MISSED
-
-Start from `src/middleware/auth.ts`: every early `return next()` is a door that skips the API key.
-Also read every router mounted BEFORE `authMiddleware` in `src/index.ts`. For each door that accepts
-a POST, PUT, PATCH or DELETE (or a GET with side effects), follow the handler to the database and the
-chain and answer: can a caller with NO key, or with only a value printed in this public repo, cause
-any of these?
-
-- a mint (ERC-8004 identity, token, NFT);
-- a settlement (escrow release, bet resolution, contract settle, x402 settle);
-- a reputation write (anything that changes `repid_agents.current_repid`, `repid_score_events`,
-  wisdom/character scores, or an on-chain ReputationRegistry write);
-- money moving (stake, payment, allowance, spend).
-
-A route that authorizes itself with a real per-request credential (a wallet signature checked against
-the right address, a server-held HMAC secret with NO public default) counts as keyed. A route that
-takes only a body field, a session token anyone can mint, or a secret with a public default does not.
+1. Is there any input for which `admit` or `record` returns ALLOW for a call that is paid,
+   unpriced, or whose cost is unknown? (Think: case of provider name, whitespace, a model name
+   that matches a free entry under a different provider, `cost_usd` as a string, `-0`, Infinity.)
+2. Can a caller get a paid fallback from any verdict? Does anything reset the latch?
+3. Is any test unable to fail (vacuous)? Name it.
+4. Does the doc or a comment claim more than the code does (for example, that a loop uses it)?
 
 ### Deliverable
 
-Rank by failure direction, worst first:
-
-1. a keyless path that writes on-chain or settles money;
-2. a keyless path that writes reputation in the database;
-3. a self-authorizing route whose credential is weaker than it looks (a default, a guessable value,
-   a token anyone can obtain);
-4. a test in `tests/f13-no-keyless-writes.test.ts` or `tests/no-default-secrets.test.ts` that cannot fail.
-
-For each finding give the HTTP request (method, path, body shape), the `file:line` you read, what it
-writes, and the test that would catch it. If you find nothing in a category, say NOT FOUND and list
-which doors you read, so a reader can tell "none" from "not looked".
+Start with one line: `VERDICT: APPROVE` or `VERDICT: REQUEST_CHANGES` or `VERDICT: NOT_CHECKED`.
+Then findings, worst first, each with `file:line`, the input that breaks it, and the test that
+would catch it. If you find nothing in a question, say NOT FOUND and say what you read, so a
+reader can tell "none" from "not looked".
