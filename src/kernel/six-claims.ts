@@ -5,7 +5,7 @@
  * stated SEPARATELY, each with its own status, its supporting evidence, and its explicit gaps, plus
  * a top-level "what this does not establish" line:
  *
- *   Integrity      — the record is whole and chained (hash + prev_hash), unsigned in the MVP.
+ *   Integrity      — the record is whole: its receipt_hash is recomputed and matches. Unsigned in the MVP; the chain is checked elsewhere.
  *   Authenticity   — who authorized it: the accountable owner is resolved and the policy signature holds.
  *   Observation    — what was actually seen: was a payment read back from the chain (MEASURED), or only authorized.
  *   Correctness    — was the content independently settled (holdout / known answer / person), or only voted on (PROVISIONAL).
@@ -22,6 +22,7 @@
  */
 import type { KernelReceipt } from './types';
 import { KERNEL_RECEIPT_SCHEMA } from './types';
+import { receiptHash } from './receipt';
 
 export type ClaimStatus = 'VERIFIED' | 'NOT_CHECKED' | 'FAILED' | 'NOT_APPLICABLE';
 
@@ -64,18 +65,35 @@ export interface InTotoStatement {
 const HEX32 = /^0x[0-9a-f]{64}$/;
 
 function integrity(r: KernelReceipt): Claim {
-  const hashOk = typeof r.header.receipt_hash === 'string' && HEX32.test(r.header.receipt_hash);
+  const shapeOk = typeof r.header.receipt_hash === 'string' && HEX32.test(r.header.receipt_hash);
   const schemaOk = r.header.schema === KERNEL_RECEIPT_SCHEMA;
+  // Recompute, never trust the stored value: a well-formed hash over different contents is exactly
+  // the tampering this claim exists to catch. It used to check only the hash's shape, and said
+  // "chained" from a single receipt that cannot see its predecessor.
+  let recomputed: string | null = null;
+  try {
+    recomputed = receiptHash(r);
+  } catch {
+    recomputed = null;
+  }
+  const matches = shapeOk && recomputed === r.header.receipt_hash;
+  const status: ClaimStatus = !shapeOk || !schemaOk || recomputed === null ? 'NOT_CHECKED' : matches ? 'VERIFIED' : 'FAILED';
   const supports = [
-    hashOk ? 'receipt_hash is a keccak256 over the canonical receipt' : 'receipt_hash missing or malformed',
-    r.header.prev_hash ? `chained to prev_hash ${r.header.prev_hash.slice(0, 10)}…` : 'chain root (no prev_hash)',
+    !shapeOk ? 'receipt_hash missing or malformed'
+      : recomputed === null ? 'receipt_hash could not be recomputed'
+      : matches ? 'receipt_hash recomputed over the canonical receipt: it matches'
+      : 'receipt_hash does NOT match the receipt contents',
+    r.header.prev_hash ? `prev_hash ${r.header.prev_hash.slice(0, 10)}… (reported, not compared here)` : 'chain root (no prev_hash)',
     `schema ${String(r.header.schema)}`,
   ];
   return {
-    status: hashOk && schemaOk ? 'VERIFIED' : 'NOT_CHECKED',
-    statement: 'The record is whole and chained.',
+    status,
+    statement: 'The record is whole: its hash matches its contents.',
     supports,
-    gaps: ['unsigned — integrity rests on the keccak256 hash and the ledger chain, not a signature (header.signer is null)'],
+    gaps: [
+      'unsigned — integrity rests on the keccak256 hash, not a signature (header.signer is null)',
+      'the chain is not checked here: prev_hash is reported, not compared with the previous receipt (verifyReceiptChain does that)',
+    ],
   };
 }
 
@@ -148,14 +166,21 @@ function authorization(r: KernelReceipt): Claim {
   const verdict = r.decision.verdict;
   const status: ClaimStatus = verdict === 'ALLOW' ? 'VERIFIED' : verdict === 'DENY' ? 'FAILED' : 'NOT_CHECKED';
   const reasonCodes = r.decision.reasons.map((x) => x.code);
+  const sig = r.decision.policy.signature;
+  const gaps: string[] = [];
+  if (verdict !== 'ALLOW') gaps.push('the action was not permitted (this is a refusal, not an authorization)');
+  // An ALLOW says the kernel's rules passed for the policy it was handed; whether that policy is the
+  // owner's is the signature, which this claim used to imply by calling every policy "signed".
+  if (sig !== 'VERIFIED') gaps.push(`policy signature ${sig}: the policy applied was not shown to be the owner's (see authenticity)`);
   return {
     status,
-    statement: 'The kernel permitted this action under a signed owner policy.',
+    statement: 'The kernel permitted this action under the policy it was given.',
     supports: [
       `verdict ${verdict}`,
+      `policy signature ${sig}`,
       ...(reasonCodes.length ? [`reasons: ${reasonCodes.join(', ')}`] : []),
     ],
-    gaps: verdict === 'ALLOW' ? [] : ['the action was not permitted (this is a refusal, not an authorization)'],
+    gaps,
   };
 }
 
@@ -173,9 +198,11 @@ function containment(r: KernelReceipt): Claim {
   ];
   return {
     status: executedOnlyOnAllow ? 'VERIFIED' : 'FAILED',
+    // Narrowed from "the execution boundary held": what is checked is executed ⇒ ALLOW, not what the
+    // tool did once it ran (the gaps say the kernel cannot see inside it).
     statement: prohibitedRefused
-      ? 'The execution boundary held: a hard-prohibited capability was refused.'
-      : 'The execution boundary held: the tool ran only under an ALLOW decision.',
+      ? 'A hard-prohibited capability was refused, and nothing ran without an ALLOW decision.'
+      : 'The tool ran only under an ALLOW decision.',
     supports: [
       `executed ${r.decision.executed}`,
       `verdict ${r.decision.verdict}`,

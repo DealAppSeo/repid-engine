@@ -360,13 +360,15 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     return res.status(404).json({ error: 'Agent not found' });
   }
 
-  // Decision count (best-effort; failures default to 0).
-  const { count: decisionCount } = await db
+  // Decision count (best-effort). A failed count is null (unknown), never 0: zero is a claim.
+  const { count: decisionCountRaw, error: decisionCountError } = await db
     .from('repid_score_events')
     .select('id', { count: 'exact', head: true })
     .eq('agent_id', agentId);
+  const decisionCount = decisionCountError ? null : (decisionCountRaw ?? 0);
+  const countOrNull = (r: { count: number | null; error: unknown }) => (r.error ? null : (r.count ?? 0));
 
-  // Sprint A7 — score-event aggregates. All best-effort; failures default to 0/null.
+  // Sprint A7 — score-event aggregates. All best-effort; a failed read is null, never 0.
   const [
     cleanRes,
     flaggedRes,
@@ -431,15 +433,15 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     description: (agent as any).description ?? null,
     repid: (agent as any).current_repid ?? STARTING_REPID,
     erc8004_token_id: tokenId,
-    total_decisions: decisionCount ?? 0,
+    total_decisions: decisionCount,
     base_sepolia_explorer_url: explorerUrl,
     created_at: (agent as any).created_at ?? null,
     last_active_at: (agent as any).last_active_at ?? null,
     // Sprint A7 — score-event aggregates.
-    total_score_events: decisionCount ?? 0,
-    total_clean: cleanRes.count ?? 0,
-    total_flagged: flaggedRes.count ?? 0,
-    total_vetoed: vetoedRes.count ?? 0,
+    total_score_events: decisionCount,
+    total_clean: countOrNull(cleanRes),
+    total_flagged: countOrNull(flaggedRes),
+    total_vetoed: countOrNull(vetoedRes),
     avg_hal_score: avgHalScore,
     last_event_at: lastEventAt,
     // WHAT BACKS THE SCORE. Stated as a decomposition rather than a claim, so a

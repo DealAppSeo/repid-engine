@@ -44,8 +44,9 @@ export interface BadgeData {
   repid: number | null;
   /** Denominatored, per §10. Never a bare rate. */
   track_record: string;
-  settled_jobs: number;
-  disputed_jobs: number;
+  /** null = the count could not be read (NOT_CHECKED), never shown as "no jobs". */
+  settled_jobs: number | null;
+  disputed_jobs: number | null;
   verified_rate: number | null;
   sample_size_warning: boolean;
   stake_at_risk_usdc: number | null;
@@ -116,7 +117,8 @@ function textWidth(s: string, size: number): number {
  * endorsement and we have not earned the right to give one on 1 job.
  */
 export function renderBadgeSvg(d: BadgeData, variant: BadgeVariant = 'full'): string {
-  const cautious = d.sample_size_warning || d.stake_at_risk_usdc == null || d.settled_jobs === 0;
+  const cautious =
+    d.sample_size_warning || d.stake_at_risk_usdc == null || d.settled_jobs === 0 || d.settled_jobs === null;
   const accent = cautious ? '#d97706' : '#16a34a';
   const bg = '#0f172a';
   const fg = '#e2e8f0';
@@ -127,7 +129,9 @@ export function renderBadgeSvg(d: BadgeData, variant: BadgeVariant = 'full'): st
   if (variant === 'compact') {
     const label = 'TrustMarket';
     const value =
-      d.settled_jobs === 0 ? 'no jobs yet' : `${d.settled_jobs} jobs · ${d.verified_rate}%`;
+      d.settled_jobs === null ? 'record not checked'
+      : d.settled_jobs === 0 ? 'no jobs yet'
+      : `${d.settled_jobs} jobs · ${d.verified_rate ?? '?'}%`;
     const lw = textWidth(label, 11) + 16;
     const vw = textWidth(value, 11) + 16;
     const w = lw + vw;
