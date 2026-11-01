@@ -121,6 +121,29 @@ describe('log order is chosen by the tx author (Strix on #1473)', () => {
   });
 });
 
+describe('a refund in another asset (Strix, second review of #1473)', () => {
+  const OTHER_TOKEN = '0x6666666666666666666666666666666666666666';
+  const other = (from: string, to: string, units: bigint): ChainLog => ({ ...usdc(from, to, units), address: OTHER_TOKEN });
+
+  it('a USDC payment refunded in a different ERC-20 in the same tx is not a payment', async () => {
+    const r = await resolve(chain([usdc(PAYER, WALLET_A, ONE_USDC), other(WALLET_A, PAYER, ONE_USDC)]));
+    expect(r.g_verified).toBe(0);
+    expect(r.reason).toBe('multiple_transfers_in_tx');
+  });
+
+  it('a tx that does not call the token contract directly is not a settlement', async () => {
+    // Native ETH moved by an internal call emits no log, so a wrapping contract could refund
+    // invisibly. A transferWithAuthorization settlement calls USDC itself.
+    const c = chain([usdc(PAYER, WALLET_A, ONE_USDC)]);
+    const r = await resolve({
+      ...c,
+      getTransaction: async () => ({ hash: TX, from: PAYER, to: STRANGER, value: 0n, blockNumber: 1 }),
+    });
+    expect(r.g_verified).toBe(0);
+    expect(r.reason).toBe('not_direct_token_call');
+  });
+});
+
 describe('same owner, different wallets', () => {
   it("a transfer between two of the agent's own wallets is not a payment", async () => {
     const r = await resolve(chain([usdc(WALLET_A2, WALLET_A, ONE_USDC)]), [WALLET_A, WALLET_A2]);

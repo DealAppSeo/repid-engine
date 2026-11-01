@@ -396,8 +396,16 @@ async function resolvePayment(
   // high. A check keyed to any one log POSITION is bypassable, since the tx author orders
   // the logs (Strix on #1473: a decoy placed first). An x402 settlement is a single
   // transferWithAuthorization, so it emits exactly one Transfer; anything else refuses.
-  if (transfers.length > 1) {
+  // Counted across EVERY contract, not just this token: a refund in another asset is
+  // still a refund (Strix, second review of #1473).
+  const transferLogs = receipt.logs.filter((l) => (l.topics[0] || '').toLowerCase() === TRANSFER_TOPIC);
+  if (transfers.length > 1 || transferLogs.length > 1) {
     return zero('multiple_transfers_in_tx', { amount_usd: amountUsd, parties });
+  }
+  // Native ETH moved by an internal call emits no log, so a wrapping contract could refund
+  // invisibly. A transferWithAuthorization settlement calls the token contract itself.
+  if (!eqAddr(tx.to, token)) {
+    return zero('not_direct_token_call', { amount_usd: amountUsd, parties });
   }
 
   // E2: floor is EXCLUSIVE of the bound. Looping exactly $0.10 does not ground.
