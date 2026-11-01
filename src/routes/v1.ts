@@ -138,6 +138,15 @@ router.post('/hal/signals', async (req: Request, res: Response) => {
 
 
 /**
+ * The webhook event for a /verify-proof outcome. It used to be `proof.verified` for every outcome,
+ * including a rejected proof and an unchecked stub. Only a verifier that ran and accepted is verified.
+ */
+export function proofWebhookEvent(r: { valid?: unknown; cryptographically_verified?: unknown }): string {
+  if (r.cryptographically_verified !== true) return 'proof.not_checked';
+  return r.valid === true ? 'proof.verified' : 'proof.failed';
+}
+
+/**
  * Pure decision for a stored proof row (no DB side effects).
  * - If proof_bytes present: real WASM cryptographic verify, FAIL-CLOSED through the shared
  *   `verifyProofLocally` boundary (see the incident note inside).
@@ -281,7 +290,7 @@ router.post('/verify-proof', async (req: Request, res: Response) => {
   }));
   if (logError) console.error(logError);
 
-  fireWebhook('proof.verified', {
+  fireWebhook(proofWebhookEvent(result), {
     ...result,
     agent_id,
     tier,
@@ -318,12 +327,21 @@ router.post('/dag/verify-node', async (req: Request, res: Response) => {
   if (!node_id || !parent_hash || !agent_id || !payload) return res.status(400).json({ error: 'Missing req fields' });
   
   const node_hash = createHash('sha256').update(`${node_id}${parent_hash}${agent_id}${JSON.stringify(payload)}`).digest('hex');
-  
-  const { error } = await db.from('trinity_agent_logs').insert(buildAgentLogRow({ action: 'dag_node_verified', agent: agent_id, metadata: { node_id, parent_hash, agent_id } }));
-    if (error) console.error(error);
-  fireWebhook('dag.node_verified', { node_id, parent_hash, agent_id, node_hash });
 
-  res.json({ node_hash, valid: true, dag_depth: 1, verified_at: new Date().toISOString() });
+  // HONEST (2026-11-01): there is no stored DAG node or parent to compare against, so this can only
+  // hash what the caller sent. It used to answer valid:true and dag_depth:1, log `dag_node_verified`
+  // and fire `dag.node_verified` without comparing anything. Nothing was verified, so nothing says so.
+  const { error } = await db.from('trinity_agent_logs').insert(buildAgentLogRow({ action: 'dag_node_hashed', agent: agent_id, metadata: { node_id, parent_hash, agent_id, verdict: 'NOT_CHECKED' } }));
+    if (error) console.error(error);
+
+  res.json({
+    node_hash,
+    valid: null,
+    verdict: 'NOT_CHECKED',
+    reason: 'nothing to compare against: this hashes the fields you sent; it does not look up a stored node or its parent',
+    dag_depth: null,
+    computed_at: new Date().toISOString(),
+  });
 });
 
 // HONEST REWRITE (2026-07-29): this endpoint used to fabricate

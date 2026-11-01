@@ -31,7 +31,9 @@ jest.mock('../src/db', () => {
             order: () => chain,
             limit: () => chain,
             then: (resolve: any) => {
-              if (chain._isCount) {
+              if (chain._isCount && (global as any).__cardTestCountError) {
+                resolve({ count: null, data: null, error: { message: 'statement timeout' } });
+              } else if (chain._isCount) {
                 resolve({ count: (global as any).__cardTestCountResult ?? 0, data: null, error: null });
               } else {
                 resolve({ data: (global as any).__cardTestEventRows ?? [], error: null });
@@ -64,6 +66,7 @@ beforeEach(() => {
   (global as any).__cardTestAgentRow = null;
   (global as any).__cardTestCountResult = 0;
   (global as any).__cardTestEventRows = [];
+  (global as any).__cardTestCountError = false;
 });
 
 describe('GET /api/v1/agents/:id/card', () => {
@@ -155,6 +158,26 @@ describe('GET /api/v1/agents/:id/card', () => {
     // avg of [0.1, 0.2, 0.3] = 0.2
     expect(res.body.avg_hal_score).toBeCloseTo(0.2, 5);
     expect(res.body.last_event_at).toBe('2026-05-07T05:00:00Z');
+  });
+
+  it('reports an unreadable count as null, never as 0 events', async () => {
+    (global as any).__cardTestAgentRow = {
+      id: VALID_UUID,
+      agent_name: 'ReadFailsAgent',
+      description: null,
+      current_repid: 1000,
+      erc8004_token_id: null,
+      created_at: '2026-05-07T03:00:00Z',
+      last_active_at: null,
+    };
+    (global as any).__cardTestCountError = true;
+    const res = await request(app).get(`/api/v1/agents/${VALID_UUID}/card`);
+    expect(res.status).toBe(200);
+    expect(res.body.total_decisions).toBeNull();
+    expect(res.body.total_score_events).toBeNull();
+    expect(res.body.total_clean).toBeNull();
+    expect(res.body.total_flagged).toBeNull();
+    expect(res.body.total_vetoed).toBeNull();
   });
 
   it('handles agents with zero events (avg null, last_event_at null)', async () => {

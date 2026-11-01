@@ -20,6 +20,8 @@ interface DbState {
   disputedCount: number;
   stakes: any[];
   sample: any[];
+  /** When true, every service_contracts count fails the way a dropped connection does. */
+  countError?: boolean;
 }
 const st: DbState = {
   service: null,
@@ -53,6 +55,7 @@ function makeQuery(table: string) {
 
   const countResult = () => {
     if (table !== 'service_contracts') return { count: 0, data: [], error: null };
+    if (st.countError) return { count: null, data: null, error: { message: 'connection reset' } };
     if (notDisputed) return { count: st.disputedCount, data: [], error: null };
     const wantsSettled = filters.some(([c, v]) => c === 'status' && v === 'settled');
     return { count: wantsSettled ? st.settledCount : 0, data: [], error: null };
@@ -97,6 +100,7 @@ beforeEach(() => {
   st.disputedCount = 0;
   st.stakes = [];
   st.sample = [];
+  st.countError = false;
 });
 
 // ===========================================================================
@@ -131,6 +135,26 @@ describe('track record is always denominatored (§10)', () => {
     const t = buildTrackRecord(9, 1);
     expect(t.verified_rate).toBe(90);
     expect(t.summary).toContain('1 dispute');
+  });
+});
+
+// ===========================================================================
+describe('an unreadable track record is NOT_CHECKED, never zero jobs', () => {
+  it('buildTrackRecord with an unknown count says NOT_CHECKED and computes no rate', () => {
+    const t = buildTrackRecord(null, 0);
+    expect(t.settled_jobs).toBeNull();
+    expect(t.verified_rate).toBeNull();
+    expect(t.summary).toMatch(/NOT_CHECKED/);
+    expect(t.summary).not.toBe('No completed jobs yet.');
+  });
+
+  it('a failed count does not tell buyers the provider never completed a job', async () => {
+    st.countError = true;
+    const m = (await buildServiceManifest(SERVICE_ID))!;
+    expect(m.track_record.settled_jobs).toBeNull();
+    expect(m.track_record.summary).toMatch(/NOT_CHECKED/);
+    expect(m.caveats.join(' ')).not.toMatch(/never completed a job/);
+    expect(m.caveats.join(' ')).toMatch(/could not be read/);
   });
 });
 

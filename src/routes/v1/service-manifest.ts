@@ -55,7 +55,8 @@ serviceManifestRouter.get('/llms.txt', async (_req: Request, res: Response) => {
   const base =
     process.env.PUBLIC_BASE_URL || 'https://repid-engine-production.up.railway.app';
 
-  const withRecord = services.filter((s) => s.track_record.settled_jobs > 0).length;
+  const withRecord = services.filter((s) => (s.track_record.settled_jobs ?? 0) > 0).length;
+  const unread = services.filter((s) => s.track_record.settled_jobs === null).length;
   const withStake = services.filter((s) => s.provider.stake_status === 'recorded').length;
 
   const lines = [
@@ -68,7 +69,8 @@ serviceManifestRouter.get('/llms.txt', async (_req: Request, res: Response) => {
     '## Honest size of this market right now',
     '',
     `- active services: ${services.length}`,
-    `- services whose provider has any settled track record: ${withRecord}`,
+    `- services whose provider has any settled track record: ${withRecord}` +
+      (unread ? ` (${unread} could not be read: NOT_CHECKED, not zero)` : ''),
     `- services with stake recorded against the provider: ${withStake}`,
     '',
     'These are live counts, not projections. If they look small, they are small.',

@@ -37,8 +37,9 @@ import { db } from '../db';
 export const MIN_MEANINGFUL_JOBS = 10;
 
 export interface TrackRecord {
-  settled_jobs: number;
-  disputed_jobs: number;
+  /** null when the count could not be read: unknown, never rendered as 0. */
+  settled_jobs: number | null;
+  disputed_jobs: number | null;
   /** null when there is no denominator to divide by — never 0/0 rendered as 0%. */
   verified_rate: number | null;
   /** Human-legible and denominatored, per §10. */
@@ -117,7 +118,16 @@ function rawToUsdc(raw: number): string {
  * Denominatored track record. The denominator is never dropped and a rate is
  * never invented from an empty sample.
  */
-export function buildTrackRecord(settled: number, disputed: number): TrackRecord {
+export function buildTrackRecord(settled: number | null, disputed: number | null): TrackRecord {
+  if (settled === null || disputed === null) {
+    return {
+      settled_jobs: settled,
+      disputed_jobs: disputed,
+      verified_rate: null,
+      summary: 'Track record NOT_CHECKED: it could not be read. This is not the same as no jobs.',
+      sample_size_warning: false,
+    };
+  }
   const total = settled + disputed;
   const verified_rate = total > 0 ? Number(((settled / total) * 100).toFixed(1)) : null;
   const sample_size_warning = settled < MIN_MEANINGFUL_JOBS;
@@ -205,20 +215,27 @@ export async function buildProviderTrust(agentId: string): Promise<ProviderTrust
     .maybeSingle();
   if (!agent) return null;
 
-  // Track record: settled vs disputed, for THIS provider.
-  const { count: settledCount } = await db
+  // Track record: settled vs disputed, for THIS provider. A failed count is unknown (null), never 0:
+  // reading an error as 0 told buyers a provider had "never completed a job".
+  const { count: settledCount, error: settledError } = await db
     .from('service_contracts')
     .select('*', { count: 'exact', head: true })
     .eq('provider_agent_id', agentId)
     .eq('status', 'settled');
-  const { count: disputedCount } = await db
+  const { count: disputedCount, error: disputedError } = await db
     .from('service_contracts')
     .select('*', { count: 'exact', head: true })
     .eq('provider_agent_id', agentId)
     .not('disputed_at', 'is', null);
 
-  const track_record = buildTrackRecord(settledCount ?? 0, disputedCount ?? 0);
-  if (track_record.sample_size_warning && track_record.settled_jobs > 0) {
+  const track_record = buildTrackRecord(
+    settledError ? null : (settledCount ?? 0),
+    disputedError ? null : (disputedCount ?? 0),
+  );
+  if (track_record.settled_jobs === null || track_record.disputed_jobs === null) {
+    caveats.push('The track record could not be read, so this says nothing about whether this provider has completed jobs.');
+  }
+  if (track_record.sample_size_warning && (track_record.settled_jobs ?? 0) > 0) {
     caveats.push(
       `This provider has ${track_record.settled_jobs} settled job(s). A success rate over so few ` +
         `jobs is not yet evidence of reliability.`,
@@ -291,7 +308,8 @@ async function assembleManifest(svc: {
 }): Promise<ServiceManifest> {
   const trust = await buildProviderTrust(svc.provider_agent_id);
   const caveats = [...(trust?.caveats ?? [])];
-  const track_record = trust?.track_record ?? buildTrackRecord(0, 0);
+  // No trust row means the provider could not be read; that is unknown, not zero jobs.
+  const track_record = trust?.track_record ?? buildTrackRecord(null, null);
   const sampleRow = trust?.sample_receipt ?? null;
   const base = publicBase();
   const priceRaw = Number(svc.base_price_usdc_raw ?? 0);
