@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
+import { actorMismatch } from '../actor-binding';
 import { recordGateEvent, slashRepIDForGateFail, appendGateAuditChain } from '../../services/substance-gate-writer';
 
 const VALIDATION_QUEUE_TIERS = new Set([
@@ -17,6 +18,15 @@ router.post('/substance-gate/events', async (req: Request, res: Response) => {
   
   if (!task || !fastResult || !agentName || !contentHash) {
     return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // A failed gate slashes `agentName`, so an agent-bound key may only report itself.
+  // Operator keys (no bound agent) are unchanged.
+  if (await actorMismatch(req, String(agentName))) {
+    return res.status(403).json({
+      error: 'Forbidden: agentName is not the agent this API key is bound to',
+      field: 'body.agentName',
+    });
   }
 
   try {

@@ -25,15 +25,33 @@ import bountiesRouter from '../src/routes/bounties';
 import { validateAgentApiKey } from '../src/auth/api-keys';
 import { updateRepId } from '../src/engine/repid-update';
 import { BOUNTY_VERIFY_SCOPE } from '../src/services/bounty-authorization';
+import { resolveOwner, type OwnerResolution } from '../src/services/agent-owner-resolver';
 
 const fromMock = jest.fn();
 
 jest.mock('../src/db', () => ({ db: { from: (...args: unknown[]) => fromMock(...args) } }));
 jest.mock('../src/auth/api-keys', () => ({ validateAgentApiKey: jest.fn() }));
 jest.mock('../src/engine/repid-update', () => ({ updateRepId: jest.fn() }));
+jest.mock('../src/services/agent-owner-resolver', () => ({
+  ...jest.requireActual('../src/services/agent-owner-resolver'),
+  resolveOwner: jest.fn(),
+}));
 
 const mockValidate = validateAgentApiKey as jest.MockedFunction<typeof validateAgentApiKey>;
 const mockUpdateRepId = updateRepId as jest.MockedFunction<typeof updateRepId>;
+const mockResolveOwner = resolveOwner as jest.MockedFunction<typeof resolveOwner>;
+
+/** An owner resolution with one wallet claim, or an unresolved one. */
+function owned(agentId: string, ownerKey: string | null): OwnerResolution {
+  if (ownerKey === null) return { status: 'unknown', agentId, owner: null, claims: [], conflicts: [], reason: 'test', probes: [] };
+  const claim = { source: 'binding', assurance: 'onchain', ownerKey, ownerKeyKind: 'wallet', capUsdcPerTx: null, capUsdcTotal: null } as any;
+  return { status: 'resolved', agentId, owner: claim, claims: [claim], conflicts: [], reason: null, probes: [] };
+}
+
+/** Owners by agent id; an id not listed resolves as unknown. */
+function owners(map: Record<string, string>) {
+  mockResolveOwner.mockImplementation(async (ref) => owned(ref.id!, map[ref.id!] ?? null));
+}
 
 function buildApp() {
   const app = express();
@@ -72,6 +90,7 @@ describe('POST /bounties/:id/verify — authorization', () => {
     jest.clearAllMocks();
     mockValidate.mockResolvedValue(null);
     mockUpdateRepId.mockResolvedValue({ delta: 100 } as never);
+    owners({ 'real-verifier': '0xowner-a', 'claimant-agent': '0xowner-b' });
   });
 
   it('rejects an anonymous caller before reading or mutating any bounty state', async () => {
@@ -142,6 +161,18 @@ describe('POST /bounties/:id/verify — authorization', () => {
     expect(mockUpdateRepId).not.toHaveBeenCalled();
   });
 
+  it('a revoked bounty_verify key is refused before any read (validate returns null)', async () => {
+    mockValidate.mockResolvedValue(null); // revoked_at set: validateAgentApiKey no longer returns it
+    const res = await request(buildApp())
+      .post('/bounties/bounty-1/verify')
+      .set('x-api-key', 'ts_live_revoked')
+      .send({ approved: true });
+    expect(res.status).toBe(401);
+    expect(res.body.reason).toBe('invalid_credential');
+    expect(fromMock).not.toHaveBeenCalled();
+    expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+
   it('an unreachable credential store denies rather than admits', async () => {
     mockValidate.mockRejectedValue(new Error('connection refused'));
 
@@ -178,5 +209,100 @@ describe('POST /bounties/:id/verify — authorization', () => {
     expect(res.status).toBe(403);
     expect(fromMock).not.toHaveBeenCalled();
     expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /bounties/:id/verify — the verifier must be independent of the claimant', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUpdateRepId.mockResolvedValue({ delta: 100 } as never);
+  });
+
+  async function approveAs(verifier: string) {
+    const updates = stubCompletedBounty();
+    mockValidate.mockResolvedValue({ agent_id: verifier, scopes: [BOUNTY_VERIFY_SCOPE] });
+    const res = await request(buildApp())
+      .post('/bounties/bounty-1/verify')
+      .set('x-api-key', 'ts_live_scoped')
+      .send({ approved: true });
+    return { res, updates };
+  }
+
+  it('refuses a claimant verifying its own bounty: no state change, no payout', async () => {
+    owners({ 'claimant-agent': '0xowner-b' });
+    const { res, updates } = await approveAs('claimant-agent');
+    expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('self_verification');
+    expect(updates).toEqual([]);
+    expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+
+  it('refuses the claimant verifying under an upper-cased copy of its own id', async () => {
+    owners({ 'claimant-agent': '0xowner-b', 'CLAIMANT-AGENT': '0xowner-b' });
+    const { res, updates } = await approveAs('CLAIMANT-AGENT');
+    expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('self_verification');
+    expect(updates).toEqual([]);
+    expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+
+  it('refuses a sibling agent under the same owner (case-insensitive wallet)', async () => {
+    owners({ 'sibling-verifier': '0xOWNER-B', 'claimant-agent': '0xowner-b' });
+    const { res, updates } = await approveAs('sibling-verifier');
+    expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('same_owner');
+    expect(updates).toEqual([]);
+    expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+
+  it('refuses owners recorded in different namespaces: a builder id and an SBT token can be one human', async () => {
+    mockResolveOwner.mockImplementation(async (ref) => {
+      const kind = ref.id === 'real-verifier' ? 'builder_id' : 'human_sbt_token';
+      const claim = { source: 'binding', assurance: 'onchain', ownerKey: 'k-' + ref.id, ownerKeyKind: kind, capUsdcPerTx: null, capUsdcTotal: null } as any;
+      return { status: 'resolved', agentId: ref.id!, owner: claim, claims: [claim], conflicts: [], reason: null, probes: [] };
+    });
+    const { res, updates } = await approveAs('real-verifier');
+    expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('owner_not_established');
+    expect(updates).toEqual([]);
+    expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+
+  it('an opaque claim (a KYA custodian tier) is not an owner identity and cannot show a difference', async () => {
+    mockResolveOwner.mockImplementation(async (ref) => {
+      const claim = { source: 'kya', assurance: 'declared', ownerKey: 'tier-' + ref.id, ownerKeyKind: 'opaque', capUsdcPerTx: null, capUsdcTotal: null } as any;
+      return { status: 'resolved', agentId: ref.id!, owner: claim, claims: [claim], conflicts: [], reason: null, probes: [] };
+    });
+    const { res, updates } = await approveAs('real-verifier');
+    expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('owner_not_established');
+    expect(updates).toEqual([]);
+    expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+
+  it('refuses when either owner cannot be established: unknown is not independent', async () => {
+    owners({ 'real-verifier': '0xowner-a' }); // claimant unresolved
+    const { res, updates } = await approveAs('real-verifier');
+    expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('owner_not_established');
+    expect(updates).toEqual([]);
+    expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+
+  it('a resolver that throws mid-read refuses rather than pays', async () => {
+    mockResolveOwner.mockRejectedValue(new Error('db down'));
+    const { res, updates } = await approveAs('real-verifier');
+    expect(res.status).toBe(403);
+    expect(res.body.reason).toBe('owner_not_established');
+    expect(updates).toEqual([]);
+    expect(mockUpdateRepId).not.toHaveBeenCalled();
+  });
+
+  it('pays once when the owners are positively different', async () => {
+    owners({ 'real-verifier': '0xowner-a', 'claimant-agent': '0xowner-b' });
+    const { res, updates } = await approveAs('real-verifier');
+    expect(res.status).toBe(200);
+    expect(updates).toEqual([expect.objectContaining({ status: 'VERIFIED' })]);
+    expect(mockUpdateRepId).toHaveBeenCalledTimes(1);
   });
 });
