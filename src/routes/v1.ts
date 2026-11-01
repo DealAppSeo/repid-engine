@@ -347,8 +347,11 @@ router.get('/erc8004/validate/:agent_id', async (req: Request, res: Response) =>
       // 'registered_onchain' = a mint tx is recorded for this agent;
       // 'offchain_only' = no ERC-8004 identity recorded. Never "verified"
       // without a chain read — use live_verification_endpoint for that.
-      validation_status: passport.identity_erc8004.registered_onchain
-        ? 'registered_onchain'
+      // registered_onchain is the enum 'MINTED' | 'UNVERIFIED' | 'NOT_MINTED', not a boolean:
+      // a truthiness test called every agent registered, NOT_MINTED included.
+      validation_status:
+        passport.identity_erc8004.registered_onchain === 'MINTED' ? 'registered_onchain'
+        : passport.identity_erc8004.registered_onchain === 'UNVERIFIED' ? 'mint_recorded_unverified'
         : 'offchain_only',
       identity: passport.identity_erc8004,
       passport_url: `/api/v1/passport/${passport.agent.agent_id}`,

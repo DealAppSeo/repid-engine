@@ -69,7 +69,9 @@ function paidStep(r: TrustReceipt): string {
     ? `<p>Recorded payer <code>${esc(r.payer_wallet)}</code> (${esc(r.buyer)}) and payee <code>${esc(r.payee_wallet)}</code> (${esc(r.provider)}).</p>` +
       '<p class="muted">As the settlement record names them. This page does not re-read the transfer on chain: check the transaction below.</p>'
     : '';
-  const title = r.paid_before_delivery === false ? 'Only then was it paid' : 'The payment';
+  // As recorded: this page does not re-read the transfer, and a simulated row moved nothing.
+  const title = r.is_simulated !== false ? 'The payment (simulated: nothing moved)'
+    : r.paid_before_delivery === false ? 'Then the settlement was recorded' : 'The settlement record';
   return step(4, title, `<p><strong>${esc(r.price_usdc)} USDC</strong> on Base Sepolia.</p>${wallets}${tx}${sim}`);
 }
 
@@ -183,7 +185,7 @@ function render(r: TrustReceipt): string {
 
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Trust receipt — ${esc(r.buyer)} paid ${esc(r.provider)} ${esc(r.price_usdc)}</title>
+<title>Trust receipt — ${esc(r.buyer)} and ${esc(r.provider)}, ${esc(r.price_usdc)} USDC${r.is_simulated === false ? '' : ' (simulated)'}</title>
 <style>
  :root{color-scheme:light dark}
  body{font:16px/1.6 system-ui,-apple-system,Segoe UI,sans-serif;max-width:44rem;margin:0 auto;padding:2rem 1.25rem;background:#fbfbfa;color:#1a1a18}
