@@ -144,6 +144,38 @@ describe('a refund in another asset (Strix, second review of #1473)', () => {
   });
 });
 
+describe('the token is pinned, not chosen by the caller (Strix, third review of #1473)', () => {
+  it('a Transfer of a self-deployed token named in the evidence does not ground', async () => {
+    const FAKE = '0x7777777777777777777777777777777777777777';
+    const r = await resolveGrounding({
+      agentId: AGENT_A,
+      eventType: 'CODE_CONTRIBUTION',
+      evidence: { kind: 'payment', txHash: TX, tokenAddress: FAKE },
+      agentWallets: [WALLET_A],
+      store: createMemoryGroundingStore(),
+      chain: {
+        chainId: 84532,
+        getTransaction: async () => ({ hash: TX, from: PAYER, to: FAKE, value: 0n, blockNumber: 1 }),
+        getReceipt: async () => ({ status: 1, blockNumber: 1, logs: [{ ...usdc(PAYER, WALLET_A, ONE_USDC), address: FAKE }] }),
+      },
+    });
+    expect(r.g_verified).toBe(0);
+    expect(r.reason).toBe('token_not_allowed');
+  });
+
+  it('naming the real USDC address explicitly still grounds (control)', async () => {
+    const r = await resolveGrounding({
+      agentId: AGENT_A,
+      eventType: 'CODE_CONTRIBUTION',
+      evidence: { kind: 'payment', txHash: TX, tokenAddress: BASE_SEPOLIA_USDC.toLowerCase() },
+      agentWallets: [WALLET_A],
+      store: createMemoryGroundingStore(),
+      chain: chain([usdc(PAYER, WALLET_A, ONE_USDC)]),
+    });
+    expect(r.g_verified).toBe('high');
+  });
+});
+
 describe('same owner, different wallets', () => {
   it("a transfer between two of the agent's own wallets is not a payment", async () => {
     const r = await resolve(chain([usdc(WALLET_A2, WALLET_A, ONE_USDC)]), [WALLET_A, WALLET_A2]);

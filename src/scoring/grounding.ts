@@ -53,6 +53,7 @@ export interface PaymentEvidence {
   claimedAmountUsd?: number;
   /** Explicit simulated flag. Dust/simulated never ground. */
   isSimulated?: boolean;
+  /** Ignored unless it names BASE_SEPOLIA_USDC; any other token refuses (token_not_allowed). */
   tokenAddress?: string;
 }
 
@@ -374,7 +375,12 @@ async function resolvePayment(
 
   if (input.chain.isSimulatedTx?.(tx)) return zero('simulated');
 
-  const token = evidence.tokenAddress ?? BASE_SEPOLIA_USDC;
+  // The token is pinned. `tokenAddress` arrives with the evidence, so honouring it let a
+  // caller name a token it deployed and minted itself (Strix, third review of #1473).
+  if (evidence.tokenAddress !== undefined && !eqAddr(evidence.tokenAddress, BASE_SEPOLIA_USDC)) {
+    return zero('token_not_allowed');
+  }
+  const token = BASE_SEPOLIA_USDC;
   const transfers = parseTokenTransfers(receipt, token);
   const transfer = transfers[0];
   if (!transfer) return zero('no_usdc_transfer');
