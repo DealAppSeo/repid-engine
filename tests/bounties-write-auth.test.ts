@@ -69,6 +69,15 @@ jest.mock('../src/auth/api-keys', () => ({
         : null),
 }));
 jest.mock('../src/engine/agent-log', () => ({ logAgentEvent: jest.fn().mockResolvedValue(undefined) }));
+// The verifier and the claimant are under different owners, so the independence check
+// (bounty-authorization.ts verifierIndependence) passes and these tests see the state machine.
+jest.mock('../src/services/agent-owner-resolver', () => ({
+  ...jest.requireActual('../src/services/agent-owner-resolver'),
+  resolveOwner: jest.fn(async (ref: { id?: string }) => {
+    const claim = { source: 'binding', assurance: 'onchain', ownerKey: `owner-of-${ref.id}`, ownerKeyKind: 'wallet', capUsdcPerTx: null, capUsdcTotal: null };
+    return { status: 'resolved', agentId: ref.id ?? null, owner: claim, claims: [claim], conflicts: [], reason: null, probes: [] };
+  }),
+}));
 const updateRepId = jest.fn(async () => ({ delta: 100 }));
 jest.mock('../src/engine/repid-update', () => ({ updateRepId: (...a: unknown[]) => (updateRepId as any)(...a) }));
 
