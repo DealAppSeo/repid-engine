@@ -68,13 +68,13 @@ describe('repeated transfers in one transaction', () => {
   it('a refund back to the payer in the same tx is not a payment', async () => {
     const r = await resolve(chain([usdc(PAYER, WALLET_A, ONE_USDC), usdc(WALLET_A, PAYER, ONE_USDC)]));
     expect(r.g_verified).toBe(0);
-    expect(r.reason).toBe('refund_in_tx');
+    expect(r.reason).toBe('multiple_transfers_in_tx');
   });
 
   it('a partial refund that leaves the net under the floor is not a payment', async () => {
     const r = await resolve(chain([usdc(PAYER, WALLET_A, ONE_USDC), usdc(WALLET_A, PAYER, 950_000n)]));
     expect(r.g_verified).toBe(0);
-    expect(r.reason).toBe('refund_in_tx');
+    expect(r.reason).toBe('multiple_transfers_in_tx');
   });
 
   it('the refund is caught even when it is the FIRST log', async () => {
@@ -86,7 +86,38 @@ describe('repeated transfers in one transaction', () => {
     // Related-party cycle inside one tx: in from PAYER, straight back out to a wallet PAYER controls.
     const r = await resolve(chain([usdc(PAYER, WALLET_A, ONE_USDC), usdc(WALLET_A, STRANGER, ONE_USDC)]));
     expect(r.g_verified).toBe(0);
-    expect(r.reason).toBe('refund_in_tx');
+    expect(r.reason).toBe('multiple_transfers_in_tx');
+  });
+});
+
+describe('log order is chosen by the tx author (Strix on #1473)', () => {
+  // The first fix keyed the refund check to log 0. A decoy Transfer placed first moved
+  // the pay-and-refund pair out of that position and grounded high again.
+  it('a decoy transfer first, then pay and refund, is not a payment', async () => {
+    const r = await resolve(
+      chain([
+        usdc(PAYER, WALLET_A, ONE_USDC),
+        usdc(STRANGER, PAYER, 1n),
+        usdc(PAYER, WALLET_A, ONE_USDC),
+        usdc(WALLET_A, PAYER, ONE_USDC),
+      ]),
+    );
+    expect(r.g_verified).toBe(0);
+    expect(r.reason).toBe('multiple_transfers_in_tx');
+  });
+
+  it("a refund sent from the agent's SECOND wallet is not a payment", async () => {
+    const r = await resolve(
+      chain([usdc(PAYER, WALLET_A, ONE_USDC), usdc(WALLET_A2, PAYER, ONE_USDC)]),
+      [WALLET_A, WALLET_A2],
+    );
+    expect(r.g_verified).toBe(0);
+    expect(r.reason).toBe('multiple_transfers_in_tx');
+  });
+
+  it('a decoy to an unrelated pair, with the real payment second, is still refused', async () => {
+    const r = await resolve(chain([usdc(STRANGER, PAYER, 1n), usdc(PAYER, WALLET_A, ONE_USDC)]));
+    expect(r.g_verified).toBe(0);
   });
 });
 

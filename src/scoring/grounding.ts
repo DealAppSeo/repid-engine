@@ -391,11 +391,13 @@ async function resolvePayment(
     return zero('self_transfer', { amount_usd: amountUsd, parties });
   }
 
-  // The recipient sends the token on in the SAME tx (back to the payer, or to anyone):
-  // a refund or a pass-through cycle. Only the first Transfer used to be read, so a
-  // pay-and-refund tx grounded high. Any onward leg refuses; fail closed.
-  if (transfers.some((t, i) => i > 0 && t.from === transfer.to)) {
-    return zero('refund_in_tx', { amount_usd: amountUsd, parties });
+  // More than one Transfer of the token in this tx: a refund, a pass-through cycle, or a
+  // decoy. Only the first Transfer used to be read, so pay-and-refund in one tx grounded
+  // high. A check keyed to any one log POSITION is bypassable, since the tx author orders
+  // the logs (Strix on #1473: a decoy placed first). An x402 settlement is a single
+  // transferWithAuthorization, so it emits exactly one Transfer; anything else refuses.
+  if (transfers.length > 1) {
+    return zero('multiple_transfers_in_tx', { amount_usd: amountUsd, parties });
   }
 
   // E2: floor is EXCLUSIVE of the bound. Looping exactly $0.10 does not ground.
