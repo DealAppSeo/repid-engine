@@ -13,16 +13,28 @@ import request from 'supertest';
 
 const dbCalls: string[] = [];
 const agentsByName: Record<string, string> = { 'agent-a': A_ID(), 'agent-b': B_ID() };
+/** Names someone else has also registered (agent_name is not unique). */
+const duplicateNames = new Set<string>();
 function A_ID() { return '11111111-1111-4111-8111-111111111111'; }
 function B_ID() { return '22222222-2222-4222-8222-222222222222'; }
 
 jest.mock('../src/db', () => {
   const chain = (table: string): any => {
     let name: string | null = null;
+    let id: string | null = null;
     const c: any = {
       select: () => c,
-      eq: (col: string, v: string) => { if (col === 'agent_name') name = v; return c; },
-      maybeSingle: async () => (table === 'repid_agents' && name && agentsByName[name] ? { data: { id: agentsByName[name] }, error: null } : { data: null, error: null }),
+      eq: (col: string, v: string) => { if (col === 'agent_name') name = v; if (col === 'id') id = v; return c; },
+      maybeSingle: async () => {
+        if (table !== 'repid_agents') return { data: null, error: null };
+        if (id) {
+          const n = Object.keys(agentsByName).find((k) => agentsByName[k] === id);
+          return n ? { data: { agent_name: n }, error: null } : { data: null, error: null };
+        }
+        // A global name lookup: ambiguous when two rows share the name, as Postgres would report.
+        if (name && duplicateNames.has(name)) return { data: null, error: { message: 'multiple rows' } };
+        return name && agentsByName[name] ? { data: { id: agentsByName[name] }, error: null } : { data: null, error: null };
+      },
       single: async () => ({ data: null, error: { message: 'nf' } }),
       insert: () => { dbCalls.push(`insert:${table}`); return c; },
       update: () => { dbCalls.push(`update:${table}`); return c; },
@@ -110,6 +122,24 @@ describe('POST /api/v1/substance-gate/events — an agent can only report its ow
       .set('x-test-agent', A_ID()).send(event('nobody'));
     expect(res.status).toBe(403);
     expect(recordGateEvent).not.toHaveBeenCalled();
+  });
+
+  it('refuses a padded copy of its own name: the writer would act on the padded row', async () => {
+    const res = await request(app(substanceGateRouter, '/api/v1')).post('/api/v1/substance-gate/events')
+      .set('x-test-agent', A_ID()).send(event(' agent-a'));
+    expect(res.status).toBe(403);
+    expect(recordGateEvent).not.toHaveBeenCalled();
+  });
+
+  it('a duplicate registration of its name does not lock the real agent out', async () => {
+    duplicateNames.add('agent-a');
+    try {
+      await request(app(substanceGateRouter, '/api/v1')).post('/api/v1/substance-gate/events')
+        .set('x-test-agent', A_ID()).send(event('agent-a'));
+      expect(recordGateEvent).toHaveBeenCalledTimes(1);
+    } finally {
+      duplicateNames.clear();
+    }
   });
 
   it('accepts an agent reporting its own gate', async () => {
