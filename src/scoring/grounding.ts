@@ -18,6 +18,11 @@ export const USDC_FLOOR_UNITS = BigInt(Math.round(GROUNDING_FLOOR_USD * 10 ** US
 
 /** Canonical Base Sepolia USDC. Payment logs from any other address do not ground. */
 export const BASE_SEPOLIA_USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+/**
+ * The only chain a payment grounds on. A reader wired to any other chain refuses with
+ * `wrong_chain`: evidence_id is hash-only, so a matching transfer elsewhere must not count.
+ */
+export const DEFAULT_GROUNDING_CHAIN_ID = 84532;
 
 export type GVerified = 0 | 'low' | 'high';
 export type EvidenceKind = 'payment' | 'validation' | 'protocol';
@@ -48,6 +53,7 @@ export interface PaymentEvidence {
   claimedAmountUsd?: number;
   /** Explicit simulated flag. Dust/simulated never ground. */
   isSimulated?: boolean;
+  /** Ignored unless it names BASE_SEPOLIA_USDC; any other token refuses (token_not_allowed). */
   tokenAddress?: string;
 }
 
@@ -206,11 +212,12 @@ function topicAddr(topic: string | undefined): string | null {
   return `0x${topic.slice(-40).toLowerCase()}`;
 }
 
-function parseUsdcTransfer(
-  receipt: ChainReceipt,
-  tokenAddress: string,
-): { from: string; to: string; units: bigint } | null {
+type TokenTransfer = { from: string; to: string; units: bigint };
+
+/** Every well-formed Transfer of `tokenAddress` in the receipt, in log order. */
+function parseTokenTransfers(receipt: ChainReceipt, tokenAddress: string): TokenTransfer[] {
   const token = tokenAddress.toLowerCase();
+  const out: TokenTransfer[] = [];
   for (const log of receipt.logs) {
     if (log.address.toLowerCase() !== token) continue;
     if ((log.topics[0] || '').toLowerCase() !== TRANSFER_TOPIC) continue;
@@ -218,13 +225,12 @@ function parseUsdcTransfer(
     const to = topicAddr(log.topics[2]);
     if (!from || !to) continue;
     try {
-      const units = BigInt(log.data);
-      return { from, to, units };
+      out.push({ from, to, units: BigInt(log.data) });
     } catch {
       continue;
     }
   }
-  return null;
+  return out;
 }
 
 export function createMemoryGroundingStore(): GroundingStore {
@@ -356,6 +362,7 @@ async function resolvePayment(
 ): Promise<GroundingResult> {
   if (evidence.isSimulated) return zero('simulated');
   if (!input.chain) return zero('chain_not_checked');
+  if (input.chain.chainId !== DEFAULT_GROUNDING_CHAIN_ID) return zero('wrong_chain');
 
   const txHash = normHex(evidence.txHash);
   if (!/^0x[0-9a-f]{64}$/.test(txHash)) return zero('malformed_tx_hash');
@@ -368,8 +375,14 @@ async function resolvePayment(
 
   if (input.chain.isSimulatedTx?.(tx)) return zero('simulated');
 
-  const token = evidence.tokenAddress ?? BASE_SEPOLIA_USDC;
-  const transfer = parseUsdcTransfer(receipt, token);
+  // The token is pinned. `tokenAddress` arrives with the evidence, so honouring it let a
+  // caller name a token it deployed and minted itself (Strix, third review of #1473).
+  if (evidence.tokenAddress !== undefined && !eqAddr(evidence.tokenAddress, BASE_SEPOLIA_USDC)) {
+    return zero('token_not_allowed');
+  }
+  const token = BASE_SEPOLIA_USDC;
+  const transfers = parseTokenTransfers(receipt, token);
+  const transfer = transfers[0];
   if (!transfer) return zero('no_usdc_transfer');
 
   const amountUsd = Number(transfer.units) / 10 ** USDC_DECIMALS;
@@ -378,6 +391,28 @@ async function resolvePayment(
   const wallets = input.agentWallets.map((w) => w.toLowerCase());
   const partyHit = wallets.some((w) => w === transfer.from || w === transfer.to);
   if (!partyHit) return zero('parties_mismatch', { amount_usd: amountUsd, parties });
+
+  // Both sides are this agent's own wallets: money moved between pockets, nobody paid.
+  if (wallets.includes(transfer.from) && wallets.includes(transfer.to)) {
+    return zero('self_transfer', { amount_usd: amountUsd, parties });
+  }
+
+  // More than one Transfer of the token in this tx: a refund, a pass-through cycle, or a
+  // decoy. Only the first Transfer used to be read, so pay-and-refund in one tx grounded
+  // high. A check keyed to any one log POSITION is bypassable, since the tx author orders
+  // the logs (Strix on #1473: a decoy placed first). An x402 settlement is a single
+  // transferWithAuthorization, so it emits exactly one Transfer; anything else refuses.
+  // Counted across EVERY contract, not just this token: a refund in another asset is
+  // still a refund (Strix, second review of #1473).
+  const transferLogs = receipt.logs.filter((l) => (l.topics[0] || '').toLowerCase() === TRANSFER_TOPIC);
+  if (transfers.length > 1 || transferLogs.length > 1) {
+    return zero('multiple_transfers_in_tx', { amount_usd: amountUsd, parties });
+  }
+  // Native ETH moved by an internal call emits no log, so a wrapping contract could refund
+  // invisibly. A transferWithAuthorization settlement calls the token contract itself.
+  if (!eqAddr(tx.to, token)) {
+    return zero('not_direct_token_call', { amount_usd: amountUsd, parties });
+  }
 
   // E2: floor is EXCLUSIVE of the bound. Looping exactly $0.10 does not ground.
   if (transfer.units <= USDC_FLOOR_UNITS) {
