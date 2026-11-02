@@ -96,21 +96,64 @@ describe('stake-at-risk is shown even when it is absent (§11)', () => {
 });
 
 // ===========================================================================
-describe('the badge links back — that is the whole mechanism', () => {
-  it('points at a verify URL', () => {
-    expect(toBadgeData(trust()).verify_url).toContain('/agent/agent-1');
+describe('the badge links back — to a record that actually exists', () => {
+  // Live 2026-11-02: trustmarket.dev/agent/<id> was a 404 and trustmarket.dev/ a
+  // "Coming Soon" page, so every badge's link was dead. The link must point at the
+  // badge's own public record, which we serve and which needs no key.
+  const BASE = 'https://repid-engine-production.up.railway.app';
+  const REC = `${BASE}/api/v1/badge/agent-1.json`;
+
+  it('points at the badge own public record, not a trustmarket.dev page that does not exist', () => {
+    const u = toBadgeData(trust()).verify_url;
+    expect(u).toBe(REC);
+    expect(u).not.toContain('trustmarket.dev');
+    expect(u).not.toContain('/agent/');
   });
 
   it('every embed snippet wraps the image in that link', () => {
     const s = renderEmbedSnippets(toBadgeData(trust()));
-    expect(s.markdown).toContain('/agent/agent-1');
-    expect(s.html).toContain('/agent/agent-1');
-    expect(s.html_compact).toContain('/agent/agent-1');
+    expect(s.markdown).toContain(`](${REC})`);
+    expect(s.html).toContain(`<a href="${REC}">`);
+    expect(s.html_compact).toContain(`<a href="${REC}">`);
+    expect(s.url_json).toBe(REC);
   });
 
   it('offers a compact variant, since a README badge is one line', () => {
     const s = renderEmbedSnippets(toBadgeData(trust()));
     expect(s.markdown).toContain('variant=compact');
+  });
+});
+
+// ===========================================================================
+describe('the footer claims only what the linked record holds', () => {
+  const withReceipt = () =>
+    toBadgeData(
+      trust({
+        track_record: buildTrackRecord(412, 3),
+        sample_receipt: { contract_id: 'r1', settled_at: null, url: 'https://x/api/v1/receipt/r1.json' },
+      }),
+    );
+
+  it('never says "every claim links to a receipt" — the record offers ONE sample receipt', () => {
+    for (const d of [withReceipt(), toBadgeData(trust())]) {
+      const svg = renderBadgeSvg(d);
+      expect(svg).not.toMatch(/every claim/i);
+      expect(svg).not.toMatch(/verify at trustmarket\.dev/i);
+    }
+  });
+
+  it('names a sample receipt only when the record has one', () => {
+    expect(withReceipt().receipt_url).not.toBeNull();
+    expect(renderBadgeSvg(withReceipt())).toContain('record: denominator, caveats, a sample receipt');
+    expect(toBadgeData(trust()).receipt_url).toBeNull();
+    const none = renderBadgeSvg(toBadgeData(trust()));
+    expect(none).toContain('record: denominator, caveats<');
+    expect(none).not.toContain('sample receipt');
+  });
+
+  it('fits the 300px minimum width the footer is drawn in (10px, ~0.58em per char)', () => {
+    const footer = /<text[^>]*font-size="10"[^>]*>([^<]*)<\/text>/.exec(renderBadgeSvg(withReceipt()))![1];
+    expect(Math.ceil(footer.length * 10 * 0.58) + 32).toBeLessThanOrEqual(300);
   });
 });
 
