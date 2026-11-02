@@ -510,3 +510,67 @@ export async function dryDecision(rawRequest: unknown, deps: GateDeps): Promise<
     reasons: a.decision.reasons,
   };
 }
+
+/** Inside a receipt POST /decide reserved: the caller runs the tool, the kernel does not. */
+export const REMOTE_EXECUTION_DOES_NOT_ATTEST =
+  'remote_execution (the kernel reserved this spend for a caller that runs the tool itself; it did not run it and cannot see whether it ran)';
+
+export interface ReservedDecision {
+  verdict: 'ALLOW';
+  blocking: false;
+  /** The reservation is on the ledger: it counts against the caps and consumes its one-use authorization. */
+  persisted: true;
+  /** The kernel ran nothing; the caller does. */
+  runnable: false;
+  decision: DecisionLeg;
+  /** The persisted, chained decision row (executed:false). It never gets an outcome row: see indeterminate(). */
+  receipt: KernelReceipt;
+  reasons: Reason[];
+}
+
+class NotReserved extends Error {}
+
+/**
+ * POST /decide under the durable ledger (RT-4). A dry ALLOW writes nothing, so a remote client that asks N
+ * times and spends each time is never counted and the daily and total caps cannot bind. Here a SPEND the
+ * policy allows is RESERVED instead: decided again under the ledger lock and its decision row (ALLOW,
+ * executed:false) written exactly as runUnderKernel writes one before it runs a tool. Every ALLOW handed out
+ * is on the ledger, so asking again cannot exceed a cap, and the one-use authorization means one payment
+ * effect (args_hash) is reserved once. An ALLOW the client never acts on still spends budget: over-counting
+ * is the safe direction. A refusal writes nothing (the ledger grows only by reservations, which the caps
+ * bound), and a reservation that cannot be written is NOT_CHECKED. Anything other than a spend is the dry
+ * preview, unchanged.
+ */
+export async function reserveDecision(rawRequest: unknown, deps: GateDeps): Promise<ReservedDecision | DryDecision | { malformed: Reason[] }> {
+  const parsed = parseKernelRequest(rawRequest);
+  if (!parsed.ok) return { malformed: parsed.reasons };
+  if (parsed.request.tool.class !== 'spend') return dryDecision(rawRequest, deps);
+  const a = await assess(parsed.request, deps);
+  let decision = a.decision;
+  try {
+    const receipt = await deps.ledger.appendReceipt((tip, view) => {
+      decision = decideUnderLock(a, view);
+      if (decision.verdict !== 'ALLOW') throw new NotReserved();
+      return buildReceipt({
+        receipt_id: (deps.newId ?? randomUUID)(),
+        prev: tip,
+        created_at: new Date(a.now).toISOString(),
+        env: deps.env ?? DEFAULT_ENV,
+        request: a.request,
+        owner: a.owner,
+        decision: { ...decision, does_not_attest: [...decision.does_not_attest, REMOTE_EXECUTION_DOES_NOT_ATTEST] },
+        executed: false,
+        phase: 'decision',
+        hal: a.hal,
+      });
+    });
+    return { verdict: 'ALLOW', blocking: false, persisted: true, runnable: false, decision: receipt.decision, receipt, reasons: receipt.decision.reasons };
+  } catch (e) {
+    const refusedUnderLock = e instanceof NotReserved;
+    const reasons: Reason[] = refusedUnderLock
+      ? decision.reasons
+      : [...decision.reasons, { code: 'receipt_write_failed', detail: 'the reservation could not be written to the ledger, so nothing is authorized' }];
+    const verdict = refusedUnderLock || decision.verdict === 'DENY' ? decision.verdict : 'NOT_CHECKED';
+    return { verdict, blocking: true, persisted: false, runnable: false, decision, receipt_preview: null, reasons };
+  }
+}

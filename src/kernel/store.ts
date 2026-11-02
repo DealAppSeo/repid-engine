@@ -1,15 +1,18 @@
 /**
  * kernel/store.ts — persistence for the kernel. APPEND-ONLY, through an injected sink. NO DDL.
  *
- * The MVP sink is one JSONL file: a line per record, written, never rewritten. A migration would
- * make this a table; that is a database change on a shared project and is not this PR's to make.
+ * The default sink is one JSONL file: a line per record, written, never rewritten. The durable sink
+ * (createSupabaseStore, KERNEL_LEDGER_BACKEND=supabase) holds the same lines in a table that survives a
+ * redeploy; its migration is Sean-applied.
  * Anything with `append` and `readAll` can stand in for the file, which is how the tests run
  * without touching a disk and how a table-backed sink would slot in later.
  *
  * WHAT THE LEDGER ADDS TO A SINK.
  *   - One lock around every receipt append, so two concurrent calls cannot both read the same chain
  *     tip and fork the chain. The lock is IN THIS PROCESS: the API runs one replica. Two replicas
- *     sharing one file would race, and that is a stated limit, not a hidden one.
+ *     sharing one file would race, and that is a stated limit, not a hidden one. The durable sink
+ *     (createSupabaseStore) closes it across replicas: its writes collide on `seq`, and a write that
+ *     fails drops this process's index so the next call re-reads the store.
  *   - Under that lock, the ONE-USE AUTHORIZATION and the SPEND RESERVATION (P0-TK-04/05, P0-I3-16,
  *     RT-5). An ALLOW decision row consumes its authorization (receipt.ts `authorizationKey`) and
  *     reserves its amount. A second ALLOW decision row for a consumed key, or one whose amount no
@@ -28,6 +31,7 @@
 import { constants as fsConstants } from 'node:fs';
 import { mkdir, open, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { CAPABILITY_ENFORCED_CHECK } from './decide';
 import { authorizationKey, validateReceipt, verifyReceiptChain } from './receipt';
 import type {
@@ -101,16 +105,83 @@ export function createJsonlStore(path: string, opts: { create?: boolean } = {}):
         throw e;
       }
       const out: LedgerRecord[] = [];
-      const lines = text.split('\n');
-      lines.forEach((line, i) => {
-        if (line.trim() === '') return;
-        try {
-          out.push(JSON.parse(line) as LedgerRecord);
-        } catch {
-          // Never skip: a skipped line could be the policy that capped spending.
-          throw new LedgerIntegrityError(`ledger line ${i + 1} is not valid JSON`);
-        }
+      text.split('\n').forEach((line, i) => {
+        if (line.trim() !== '') out.push(parseLine(line, i + 1));
       });
+      return out;
+    },
+  };
+}
+
+/** Never skip a bad line: a skipped line could be the policy that capped spending. */
+function parseLine(line: string, n: number): LedgerRecord {
+  try {
+    return JSON.parse(line) as LedgerRecord;
+  } catch {
+    throw new LedgerIntegrityError(`ledger line ${n} is not valid JSON`);
+  }
+}
+
+/** Rows asked for per read. Reading stops only at an EMPTY page, so a server row cap below this cannot truncate the history. */
+const LEDGER_PAGE = 1000;
+const LEDGER_TIMEOUT_MS = 10_000;
+
+/**
+ * THE DURABLE SINK (KERNEL_LEDGER_BACKEND=supabase): public.kernel_ledger, one row per record holding the
+ * exact JSONL line (text, so a receipt and its signature read back byte for byte). It survives a restart and
+ * a redeploy, which the temp-dir file does not: the policy nonce high-water mark (RT-3) and the spend history
+ * the daily/total caps sum (RT-3b) are read back, never reset. Migration: supabase/migrations/
+ * 20261102130000_kernel_ledger.sql (append-only: no UPDATE, DELETE or TRUNCATE; service role only).
+ *
+ * `seq` is assigned HERE, 1 + the last row read, and is the primary key. Two writers that read the same tip
+ * (two replicas) collide on it: the second insert fails, StoreLedger refuses that call and re-reads, so the
+ * chain cannot fork and a stale replica cannot spend a budget another one already spent.
+ *
+ * FAIL CLOSED, LOUDLY. A read or write that fails throws (and is logged with console.error), which the gate
+ * turns into NOT_CHECKED: spends are refused until the store is back. A gap in seq (a deleted row) throws
+ * LedgerIntegrityError, so a lost policy or spend row never reads as "nothing there". A missing table (the
+ * migration not applied) is a failed read: every spend is refused.
+ */
+export function createSupabaseStore(client: SupabaseClient, table = 'kernel_ledger'): KernelSink {
+  let next: number | null = null;
+  async function run<R extends { error: { message?: string } | null }>(what: 'read' | 'append', q: PromiseLike<R>): Promise<R> {
+    let r: R | null = null;
+    let err: { message?: string } | null = null;
+    try {
+      r = await q;
+      err = r.error;
+    } catch (e) {
+      err = { message: e instanceof Error ? e.message : String(e) };
+    }
+    if (err || !r) {
+      const msg = `kernel ledger store (${table}) ${what} failed: ${err?.message ?? 'no response'}; spends are refused until it is back`;
+      console.error(`[kernel] ${msg}`);
+      throw new Error(msg);
+    }
+    return r;
+  }
+  return {
+    async append(record) {
+      if (next === null) throw new LedgerIntegrityError('the durable ledger must be read before it is written');
+      await run('append', client.from(table).insert({ seq: next, line: JSON.stringify(record) }).abortSignal(AbortSignal.timeout(LEDGER_TIMEOUT_MS)));
+      next++;
+    },
+    async readAll() {
+      next = null;
+      const out: LedgerRecord[] = [];
+      for (;;) {
+        const { data } = await run(
+          'read',
+          client.from(table).select('seq,line').order('seq', { ascending: true }).range(out.length, out.length + LEDGER_PAGE - 1).abortSignal(AbortSignal.timeout(LEDGER_TIMEOUT_MS)),
+        );
+        const rows = (data ?? []) as Array<{ seq: number | string; line: string }>;
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          if (Number(row.seq) !== out.length + 1) throw new LedgerIntegrityError(`ledger row ${out.length + 1} is missing (read seq ${row.seq})`);
+          out.push(parseLine(row.line, out.length + 1));
+        }
+      }
+      next = out.length + 1;
       return out;
     },
   };
@@ -235,6 +306,20 @@ export class StoreLedger implements KernelLedger {
     if (!cur || BigInt(p.policy.nonce) > BigInt(cur.policy.nonce)) this.policies.set(p.policy.subject, p);
   }
 
+  /**
+   * A write that failed may have landed anyway (a lost response), or failed because another writer got there
+   * first (the durable sink's seq collision). Either way this process's index may no longer match the store,
+   * so it is dropped and rebuilt from the sink on the next call, never patched up from memory.
+   */
+  private async write(record: LedgerRecord): Promise<void> {
+    try {
+      await this.sink.append(record);
+    } catch (e) {
+      this.loading = null;
+      throw e;
+    }
+  }
+
   async appendReceipt(build: (tip: ChainTip | null, view: LedgerView) => KernelReceipt): Promise<KernelReceipt> {
     return this.locked(async () => {
       await this.ensureLoaded();
@@ -260,7 +345,7 @@ export class StoreLedger implements KernelLedger {
           throw new ReceiptInvalidError(['spend_reservation_exceeded']);
         }
       }
-      await this.sink.append({ kind: 'receipt', receipt });
+      await this.write({ kind: 'receipt', receipt });
       this.indexReceipt(receipt);
       // BEST-EFFORT secondary index. The JSONL record above is authoritative and already durable;
       // this runs after it and can NEVER throw into the decision path. A missing table or any DB
@@ -283,7 +368,7 @@ export class StoreLedger implements KernelLedger {
       await this.ensureLoaded();
       const cur = this.policies.get(signed.policy.subject);
       if (cur && BigInt(signed.policy.nonce) <= BigInt(cur.policy.nonce)) throw new PolicyNonceError();
-      await this.sink.append({ kind: 'policy', recorded_at: recordedAt, policy: signed });
+      await this.write({ kind: 'policy', recorded_at: recordedAt, policy: signed });
       this.indexPolicy(signed);
     });
   }
