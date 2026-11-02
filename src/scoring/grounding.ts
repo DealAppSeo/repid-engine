@@ -456,6 +456,25 @@ async function resolvePayment(
     if (prior) return zero('wash_window', { amount_usd: amountUsd, parties });
   }
 
+  // S18: who is on the OTHER side? A sibling agent of the same owner is not a stranger.
+  // Checked last, so it only costs a lookup for a payment that would otherwise ground.
+  const ownerMode = sameOwnerSettlementMode();
+  let sameOwnerWouldRefuse: Exclude<PartyIndependence, 'independent'> | undefined;
+  if (ownerMode !== 'off') {
+    const other = wallets.includes(transfer.to) ? transfer.from : transfer.to;
+    let ind: PartyIndependence = 'owner_unknown';
+    try {
+      const got = input.counterpartyIndependence ? await input.counterpartyIndependence(other) : undefined;
+      if (got === 'independent' || got === 'same_owner') ind = got; // anything else stays owner_unknown
+    } catch {
+      ind = 'owner_unknown'; // a failed lookup is not independence, and must not become resolver_error
+    }
+    if (ind !== 'independent') {
+      if (ownerMode === 'enforce') return zero(`${ind}_payment`, { amount_usd: amountUsd, parties });
+      sameOwnerWouldRefuse = ind;
+    }
+  }
+
   // High: verified payment, parties join, at/above floor. Low reserved for
   // confirmations-short (not modeled here — a receipt.status===1 is final on
   // the pinned fork).
@@ -466,6 +485,7 @@ async function resolvePayment(
     reused: false,
     amount_usd: amountUsd,
     parties,
+    ...(sameOwnerWouldRefuse ? { same_owner_would_refuse: sameOwnerWouldRefuse } : {}),
   };
 }
 

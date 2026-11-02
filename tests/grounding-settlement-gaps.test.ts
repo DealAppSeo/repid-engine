@@ -210,6 +210,8 @@ describe('same owner, different wallets', () => {
   // tests/kernel/p0-invariants.test.ts). So CI stays green while the gap exists, and goes red the
   // moment a fix lands: then flip this to `it`, give the call its owner input, and delete the
   // CURRENT test above. The fix is HIGH (RepID write path) and is the owner's decision.
+  // Since SAME_OWNER_SETTLEMENT_MODE: the fix exists behind the flag (default off, so both pins
+  // here still hold); the enforce variant is in the next describe. Flip these when enforce is default.
   it.failing('KNOWN GAP (S18): a sibling agent of the same owner paying still grounds (WANT: refused)', async () => {
     const r = await resolve(siblingPays());
     expect(r.g_verified).toBe(0);
@@ -279,7 +281,7 @@ describe('SAME_OWNER_SETTLEMENT_MODE gives the resolver its owner input (S18, Se
 
   it('enforce: no lookup supplied fails closed (owner unknown)', async () => {
     process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
-    const r = await withOwners(chain([usdc(STRANGER, WALLET_A, ONE_USDC)]), undefined);
+    const r = await resolve(chain([usdc(STRANGER, WALLET_A, ONE_USDC)])); // the plain helper passes no lookup
     expect(r.g_verified).toBe(0);
     expect(r.reason).toBe('owner_unknown_payment');
   });

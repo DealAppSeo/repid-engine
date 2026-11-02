@@ -39,6 +39,7 @@ import {
   type SmallGainDeps,
 } from '../scoring/small-gain-cap';
 import { resolveOwner as resolveAgentOwner } from '../services/agent-owner-resolver';
+import { counterpartyIndependenceFor } from '../services/same-owner-settlement';
 import { gateReceiptProblem, type KernelReceiptIndexRow } from '../kernel/receipt-db-index';
 
 export interface RepIdUpdateInput {
@@ -744,6 +745,8 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       chain: input.groundingDeps?.chain,
       validationLookup: input.groundingDeps?.validationLookup,
       protocolLookup: input.groundingDeps?.protocolLookup,
+      // Read only when SAME_OWNER_SETTLEMENT_MODE is not off (scoring/grounding.ts).
+      counterpartyIndependence: counterpartyIndependenceFor(input.agentId),
     });
     // A server-settled WRONG whose receipt was just spent is grounded BY that receipt. Without this,
     // GROUNDING_MODE=enforce would zero it whenever the caller simply omitted groundingEvidence —
@@ -905,6 +908,7 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
             g_verified: groundingMeta.g_verified,
             grounding_reason: groundingMeta.reason,
             grounding_reused: groundingMeta.reused,
+            ...(groundingMeta.same_owner_would_refuse ? { grounding_same_owner_would_refuse: groundingMeta.same_owner_would_refuse } : {}),
             ...scoreLaneFromGrounding(groundingMeta.g_verified),
           }
         : {}),
