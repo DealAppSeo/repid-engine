@@ -1,0 +1,2 @@
+# solc hashes the exact source bytes, so a CRLF checkout changes compiled metadata (repid-engine #1476).
+*.sol text eol=lf
