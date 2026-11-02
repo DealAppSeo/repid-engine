@@ -25,10 +25,10 @@ import { Wallet } from 'ethers';
 import express from 'express';
 import request from 'supertest';
 import { createKernelRouter } from '../../src/routes/kernel';
-import { REQUIRED_CHECKS, CUMULATIVE_TOTAL_NOTE, TOTAL_CAP_SCOPE_NOTE, decide, parseKernelRequest } from '../../src/kernel/decide';
+import { decide, parseKernelRequest } from '../../src/kernel/decide';
 import { dryDecision, runUnderKernel } from '../../src/kernel/gate';
 import { POLICY_DOMAIN, POLICY_TYPES, parsePolicy, policyHash, policyTypedValue } from '../../src/kernel/policy';
-import { DEFAULT_ENV, buildReceipt, hashArgs, receiptHash, validateReceipt, verifyReceiptChain } from '../../src/kernel/receipt';
+import { hashArgs, receiptHash, validateReceipt, verifyReceiptChain } from '../../src/kernel/receipt';
 import { StoreLedger, createMemoryStore } from '../../src/kernel/store';
 import type { GateDeps, HalEvidence, KernelLedger, KernelReceipt } from '../../src/kernel/types';
 import { AGENT_ID, NOW_MS, PAYEE, harness, iso, postRequest, signedPolicy, spendRequest } from '../../src/kernel/__tests__/fixtures';
@@ -59,6 +59,26 @@ const hal = (over: Partial<HalEvidence> = {}): HalEvidence => ({
   same_domain: false,
   ...over,
 });
+
+/**
+ * RT-7's forger: a genuine receipt's exact shape, the forger's own fields, the keccak hash recomputed.
+ * Everything here is public: the receipt format, the canonicalisation and receiptHash.
+ */
+function forgeFrom(genuine: KernelReceipt): KernelReceipt {
+  const f = JSON.parse(JSON.stringify(genuine)) as KernelReceipt;
+  f.header.receipt_id = '00000000-0000-4000-8000-0000000000ff';
+  f.header.prev_receipt_id = null;
+  f.header.prev_hash = null;
+  f.header.created_at = '2027-01-01T00:00:00.000Z';
+  f.subject.agent = { agent_id: '22222222-2222-4222-8222-222222222222', agent_name: 'forger' };
+  f.request.amount_raw = '999999999';
+  f.request.payee = '0x00000000000000000000000000000000000000aa';
+  f.payment.amount_raw = '999999999';
+  f.payment.payee = '0x00000000000000000000000000000000000000aa';
+  f.decision.limits = { ...f.decision.limits, per_tx_raw: '999999999999', daily_raw: '999999999999', total_raw: '999999999999', effective_per_tx_raw: '999999999999' };
+  f.header.receipt_hash = receiptHash(f);
+  return f;
+}
 
 /** A harness with a generous signed policy already on the ledger. */
 async function armed(over: Partial<GateDeps> = {}, policy: Parameters<typeof signedPolicy>[1] = {}) {
@@ -621,35 +641,18 @@ describe('receipts: forged, tampered, replayed', () => {
   // validateReceipt() and verifyReceiptChain() both accept. The only authentication of a receipt is
   // "the engine's own ledger holds this id" (GET /receipt/:id), and that ledger is the ephemeral
   // temp-dir file. The receipt itself says "receipt_signature (unsigned in the MVP)" in does_not_attest.
-  it('RT-7 a receipt fabricated from NOTHING, with no engine and no genuine receipt, must not validate as an authentic ALLOW (BREACHED today: unsigned)', () => {
-    // Everything below is public: the checks table is exported, the amounts are the forger's choice.
-    const checks = REQUIRED_CHECKS.spend.map((name) => ({ name, outcome: 'PASS' as const, source: 'forged' }));
-    const wallet = '0x00000000000000000000000000000000000000aa';
-    const parsed = parseKernelRequest(spendRequest({ amount_raw: '1000000', payee: PAYEE }));
-    if (!parsed.ok) throw new Error('fixture should parse');
-    const forged = buildReceipt({
-      receipt_id: '00000000-0000-4000-8000-0000000000ff',
-      prev: null,
-      created_at: iso,
-      env: DEFAULT_ENV,
-      request: parsed.request,
-      owner: { status: 'resolved', wallet, assurance: 'wallet-proven' },
-      decision: {
-        verdict: 'ALLOW',
-        blocking: false,
-        executed: false,
-        reasons: [],
-        checks,
-        does_not_attest: [CUMULATIVE_TOTAL_NOTE, TOTAL_CAP_SCOPE_NOTE],
-        policy: { policy_hash: '0x' + 'ab'.repeat(32), signer: wallet, signature: 'VERIFIED', expires_at: 4_000_000_000, revocation: 'VERIFIED' },
-        limits: { per_tx_raw: '9999999999', daily_raw: '9999999999', total_raw: '9999999999', effective_per_tx_raw: '9999999999', binding_term: 'per_tx' },
-        laya: { lane: null, mode: 'shadow', consulted: false },
-      },
-      executed: false,
-      phase: 'decision',
-      hal: { state: 'not_needed' },
-    });
-    expect(validateReceipt(forged).ok).toBe(false); // SECURE: an unsigned receipt must not read as authentic
+  //
+  // REWRITTEN 2026-11-02 (Lane D). The earlier RT-7 probe built its forgery from nothing and left out
+  // the caller-asserted tool_class line that every genuine flag-OFF receipt carries, so validateReceipt
+  // refused it with `tool_class_unattested` alone: it was green for a format slip, not because a
+  // forgery can be told apart. This probe copies a GENUINE receipt's exact shape, changes the fields a
+  // forger wants (agent, amount, payee, limits, id, time), and recomputes the keccak hash. No key is
+  // involved anywhere.
+  it('RT-7 a receipt forged from a genuine receipt\'s exact shape (forger-chosen fields, hash recomputed, no key) must not be accepted as authentic', async () => {
+    const h = await armed();
+    const genuine = (await runUnderKernel(spendRequest({ amount_raw: '1' }), jest.fn(async () => 1), h.deps)).decision_receipt!;
+    const forged = forgeFrom(genuine);
+    expect(validateReceipt(forged).ok).toBe(false); // SECURE: a receipt nobody but the engine could make
   });
   it('CHARACTERISE RT-7: the receipt itself says it is unsigned (so the limitation is stated, not hidden)', async () => {
     const h = await armed();
