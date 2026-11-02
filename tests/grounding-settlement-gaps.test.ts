@@ -210,9 +210,121 @@ describe('same owner, different wallets', () => {
   // tests/kernel/p0-invariants.test.ts). So CI stays green while the gap exists, and goes red the
   // moment a fix lands: then flip this to `it`, give the call its owner input, and delete the
   // CURRENT test above. The fix is HIGH (RepID write path) and is the owner's decision.
+  // Since SAME_OWNER_SETTLEMENT_MODE: the fix exists behind the flag (default off, so both pins
+  // here still hold); the enforce variant is in the next describe. Flip these when enforce is default.
   it.failing('KNOWN GAP (S18): a sibling agent of the same owner paying still grounds (WANT: refused)', async () => {
     const r = await resolve(siblingPays());
     expect(r.g_verified).toBe(0);
+  });
+});
+
+describe('SAME_OWNER_SETTLEMENT_MODE gives the resolver its owner input (S18, Sean option M2)', () => {
+  // The CURRENT and KNOWN GAP tests above run with the flag unset and stay exactly as they are.
+  // Here the resolver is told, through `counterpartyIndependence`, whose agent the OTHER wallet is.
+  const WALLET_B = '0x8888888888888888888888888888888888888888'; // sibling, same owner as A
+  const prior = process.env.SAME_OWNER_SETTLEMENT_MODE;
+  afterEach(() => {
+    if (prior === undefined) delete process.env.SAME_OWNER_SETTLEMENT_MODE;
+    else process.env.SAME_OWNER_SETTLEMENT_MODE = prior;
+  });
+
+  type Ind = 'independent' | 'same_owner' | 'owner_unknown';
+  const asked: string[] = [];
+  const owners: Record<string, Ind> = { [WALLET_B]: 'same_owner', [STRANGER]: 'independent', [PAYER]: 'owner_unknown' };
+  const lookup = async (w: string): Promise<Ind> => {
+    asked.push(w);
+    return owners[w];
+  };
+  const withOwners = (c: ChainReader, counterpartyIndependence: ((w: string) => Promise<Ind>) | undefined = lookup) =>
+    resolveGrounding({
+      agentId: AGENT_A,
+      eventType: 'CODE_CONTRIBUTION',
+      evidence: { kind: 'payment', txHash: TX },
+      agentWallets: [WALLET_A],
+      store: createMemoryGroundingStore(),
+      chain: c,
+      counterpartyIndependence,
+    });
+  const boom = async (): Promise<Ind> => {
+    throw new Error('db down');
+  };
+
+  it('enforce: the KNOWN GAP case, a sibling of the same owner paying, is refused', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    const r = await withOwners(chain([usdc(WALLET_B, WALLET_A, ONE_USDC)]));
+    expect(r.g_verified).toBe(0);
+    expect(r.reason).toBe('same_owner_payment');
+  });
+
+  it('enforce: a payer whose owner cannot be established is not independent', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    const r = await withOwners(chain([usdc(PAYER, WALLET_A, ONE_USDC)]));
+    expect(r.g_verified).toBe(0);
+    expect(r.reason).toBe('owner_unknown_payment');
+  });
+
+  it.each(['off', 'shadow', 'enforce', undefined])('a stranger (different owner) still grounds high, mode=%s', async (mode) => {
+    if (mode === undefined) delete process.env.SAME_OWNER_SETTLEMENT_MODE;
+    else process.env.SAME_OWNER_SETTLEMENT_MODE = mode;
+    const r = await withOwners(chain([usdc(STRANGER, WALLET_A, ONE_USDC)]));
+    expect(r.g_verified).toBe('high');
+    expect(r.reason).toBe('payment_verified');
+    expect(r.same_owner_would_refuse).toBeUndefined();
+  });
+
+  it('enforce: the lookup is asked about the OTHER wallet, never the agent', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    asked.length = 0;
+    await withOwners(chain([usdc(STRANGER, WALLET_A, ONE_USDC)]));
+    expect(asked).toEqual([STRANGER.toLowerCase()]);
+  });
+
+  it('enforce: no lookup supplied fails closed (owner unknown)', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    const r = await resolve(chain([usdc(STRANGER, WALLET_A, ONE_USDC)])); // the plain helper passes no lookup
+    expect(r.g_verified).toBe(0);
+    expect(r.reason).toBe('owner_unknown_payment');
+  });
+
+  it('enforce: a lookup that throws fails closed as owner unknown, not resolver_error', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    const r = await withOwners(chain([usdc(STRANGER, WALLET_A, ONE_USDC)]), boom);
+    expect(r.g_verified).toBe(0);
+    expect(r.reason).toBe('owner_unknown_payment');
+  });
+
+  it('shadow: the sibling still grounds high, and the would-refuse is recorded', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'shadow';
+    const r = await withOwners(chain([usdc(WALLET_B, WALLET_A, ONE_USDC)]));
+    expect(r.g_verified).toBe('high');
+    expect(r.reason).toBe('payment_verified');
+    expect(r.same_owner_would_refuse).toBe('same_owner');
+  });
+
+  it('shadow: a throwing lookup changes nothing (records owner_unknown)', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'shadow';
+    const r = await withOwners(chain([usdc(STRANGER, WALLET_A, ONE_USDC)]), boom);
+    expect(r.g_verified).toBe('high');
+    expect(r.same_owner_would_refuse).toBe('owner_unknown');
+  });
+
+  it('a typo in the mode is loud and behaves as shadow: records, refuses nothing', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforced';
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const r = await withOwners(chain([usdc(WALLET_B, WALLET_A, ONE_USDC)]));
+    expect(r.g_verified).toBe('high');
+    expect(r.same_owner_would_refuse).toBe('same_owner');
+    expect(err.mock.calls.some((c) => String(c[0]).includes('SAME_OWNER_SETTLEMENT_MODE'))).toBe(true);
+    err.mockRestore();
+  });
+
+  it('unset: the lookup is never called and the result carries no new field', async () => {
+    delete process.env.SAME_OWNER_SETTLEMENT_MODE;
+    asked.length = 0;
+    const r = await withOwners(chain([usdc(WALLET_B, WALLET_A, ONE_USDC)]));
+    expect(asked).toEqual([]);
+    expect(r).not.toHaveProperty('same_owner_would_refuse');
+    expect(r.g_verified).toBe('high');
   });
 });
 

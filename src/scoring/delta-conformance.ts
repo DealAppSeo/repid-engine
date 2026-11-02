@@ -61,8 +61,8 @@ export interface RowVerdict {
 
 /** The spec table, rendered into the report so the doc and the check are one source. */
 export const DELTA_SPEC: Array<{ check: string; event: string; rule: string; source: string }> = [
-  { check: 'A2A_FULFILLED', event: 'SERVICE_FULFILLED', rule: `provider +${SERVICE_FULFILLED_DELTAS.provider}, buyer +${SERVICE_FULFILLED_DELTAS.buyer}; 0 if simulated`, source: 'services/validation-repid-delta.ts SERVICE_FULFILLED_DELTAS' },
-  { check: 'A2A_SATISFIED', event: 'SERVICE_SATISFIED', rule: `provider round(${SERVICE_SATISFIED_DELTA_BASE.provider}*s), buyer round(${SERVICE_SATISFIED_DELTA_BASE.buyer}*s), s in [0,1]; 0 if simulated`, source: 'validation-repid-delta.ts SERVICE_SATISFIED_DELTA_BASE; s clamped by routes/v1/contracts.ts deriveSatisfyScore' },
+  { check: 'A2A_FULFILLED', event: 'SERVICE_FULFILLED', rule: `provider +${SERVICE_FULFILLED_DELTAS.provider}, buyer +${SERVICE_FULFILLED_DELTAS.buyer}; 0 if simulated or withheld as same-owner (SAME_OWNER_SETTLEMENT_MODE=enforce)`, source: 'services/validation-repid-delta.ts SERVICE_FULFILLED_DELTAS' },
+  { check: 'A2A_SATISFIED', event: 'SERVICE_SATISFIED', rule: `provider round(${SERVICE_SATISFIED_DELTA_BASE.provider}*s), buyer round(${SERVICE_SATISFIED_DELTA_BASE.buyer}*s), s in [0,1]; 0 if simulated or withheld as same-owner (SAME_OWNER_SETTLEMENT_MODE=enforce)`, source: 'validation-repid-delta.ts SERVICE_SATISFIED_DELTA_BASE; s clamped by routes/v1/contracts.ts deriveSatisfyScore' },
   { check: 'A2A_OUTCOME', event: 'SERVICE_OUTCOME', rule: `provider round(base*w), base good ${SERVICE_OUTCOME_BASE.good} / ok 0 / bad ${SERVICE_OUTCOME_BASE.bad}, w = clamp(rater_repid/1000, .25, 2)`, source: 'validation-repid-delta.ts SERVICE_OUTCOME_BASE + RATER_WEIGHT' },
   { check: 'A2A_DISPUTE', event: 'VALIDATION_FAILED / SERVICE_FULFILLED (metadata.verdict)', rule: `provider_at_fault: provider ${SERVICE_DISPUTE_DELTAS.provider_at_fault.provider}, buyer +${SERVICE_DISPUTE_DELTAS.provider_at_fault.buyer}; buyer_at_fault: provider +${SERVICE_DISPUTE_DELTAS.buyer_at_fault.provider}, buyer ${SERVICE_DISPUTE_DELTAS.buyer_at_fault.buyer}; no_fault: none`, source: 'validation-repid-delta.ts SERVICE_DISPUTE_DELTAS (workers/dispute-resolution-worker.ts)' },
   { check: 'NO_REWARD_FOR_UNVERIFIED_WORK', event: 'SERVICE_FULFILLED', rule: 'no positive fulfilled delta when the deliverable verdict is VETO, UNDETERMINED, or a FAIL without confident:true', source: 'services/verdict.ts; sprint 2026-10-16 Lane B invariant' },
@@ -136,6 +136,9 @@ function checkUnverified(row: ScoreEventRow): RowVerdict | null {
   return v(row, 'NO_REWARD_FOR_UNVERIFIED_WORK', 'DEVIATES', `+${row.delta} awarded on a ${verdict}${verdict === 'FAIL' ? ' (not confident)' : ''} deliverable${note}`, 0);
 }
 
+/** SAME_OWNER_SETTLEMENT_MODE=enforce withheld this settlement row (services/same-owner-settlement.ts): it earns 0. */
+const withheldSameOwner = (m: Record<string, any>): boolean => m.same_owner_settlement?.counted === false;
+
 function checkPrimary(row: ScoreEventRow): RowVerdict {
   const m = row.metadata ?? {};
   const role = m.role;
@@ -173,6 +176,7 @@ function checkPrimary(row: ScoreEventRow): RowVerdict {
     case 'SERVICE_FULFILLED': {
       if (role !== 'provider' && role !== 'buyer') return v(row, 'A2A_FULFILLED', 'NOT_CHECKED', 'no role in metadata (pre-#605 or reconciliation row)');
       if (row.delta === 0 && row.contract?.simulated === true) return v(row, 'A2A_FULFILLED', 'CONFORMS', 'simulated contract earns 0', 0);
+      if (withheldSameOwner(m)) return eq(row, 'A2A_FULFILLED', 0, `fulfilled ${role} withheld: ${m.same_owner_settlement.would_not_count}`);
       return eq(row, 'A2A_FULFILLED', SERVICE_FULFILLED_DELTAS[role as 'provider' | 'buyer'], `fulfilled ${role}`);
     }
     case 'SERVICE_SATISFIED': {
@@ -180,6 +184,7 @@ function checkPrimary(row: ScoreEventRow): RowVerdict {
       if (s === null || (role !== 'provider' && role !== 'buyer')) return v(row, 'A2A_SATISFIED', 'NOT_CHECKED', 'no satisfaction_score/role in metadata');
       if (s < 0 || s > 1) return v(row, 'A2A_SATISFIED', 'DEVIATES', `satisfaction ${s} outside [0,1]`);
       if (row.delta === 0 && row.contract?.simulated === true) return v(row, 'A2A_SATISFIED', 'CONFORMS', 'simulated contract earns 0', 0);
+      if (withheldSameOwner(m)) return eq(row, 'A2A_SATISFIED', 0, `satisfied ${role} withheld: ${m.same_owner_settlement.would_not_count}`);
       return eq(row, 'A2A_SATISFIED', Math.round(SERVICE_SATISFIED_DELTA_BASE[role as 'provider' | 'buyer'] * s), `satisfied ${role} s=${s}`);
     }
     case 'SERVICE_OUTCOME': {

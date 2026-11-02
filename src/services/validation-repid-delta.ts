@@ -6,6 +6,7 @@ import type { HALProviderConfig } from '../hal/lib/types';
 import { factCheck, buildFactCheckProviders, factCheckOptsFromEnv } from '../hal/fact-check';
 import { maybeWriteOnChainReputation } from './onchain-reputation-trigger';
 import { ownerDistinctShadowEnabled, logOwnerDistinctShadow } from './owner-distinct-shadow';
+import { gateSettlementDeltas } from './same-owner-settlement';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 /**
@@ -324,8 +325,14 @@ export async function applyServiceFulfilledDeltas(
   const isSimulated = await contractRowIsSimulated(fullContract);
 
   // G1: gate RepID delta on !isSimulated. If simulated, delta applied is 0.
-  const providerDelta = isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.provider;
-  const buyerDelta = isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.buyer;
+  // Then SAME_OWNER_SETTLEMENT_MODE (same-owner-settlement.ts): off = untouched, no reads;
+  // shadow = tagged, untouched; enforce = 0 when the two sides are not positively different owners.
+  const owner = await gateSettlementDeltas(contract, {
+    provider: isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.provider,
+    buyer: isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.buyer,
+  });
+  const providerDelta = owner.provider.delta;
+  const buyerDelta = owner.buyer.delta;
 
   // Owner-distinct counterparty rule, SHADOW ONLY (services/owner-distinct-shadow.ts). Flag OFF:
   // nothing runs. ON: one log line of what the rule would do, not awaited, deltas untouched.
@@ -413,6 +420,7 @@ export async function applyServiceFulfilledDeltas(
       service_id: contract.service_id,
       role: 'provider',
       counterparty_agent_id: contract.buyer_agent_id,
+      ...owner.provider.meta,
       answer_text: deliverable,
       prompt_text: promptText,
       // Default 'service_contract', NOT 'general' — put paid contract work in its
@@ -451,6 +459,7 @@ export async function applyServiceFulfilledDeltas(
       service_id: contract.service_id,
       role: 'buyer',
       counterparty_agent_id: contract.provider_agent_id,
+      ...owner.buyer.meta,
       answer_text: deliverable,
       prompt_text: promptText,
       // Default 'service_contract', NOT 'general' — put paid contract work in its
@@ -561,8 +570,12 @@ export async function applyServiceSatisfiedDeltas(
   // simulated contract's /satisfy writes 0-delta events (audit trail kept,
   // no RepID movement), mirroring T1.
   const isSimulated = await isContractSimulated(contract.id);
-  const providerDelta = isSimulated ? 0 : Math.round(SERVICE_SATISFIED_DELTA_BASE.provider * satisfactionScore);
-  const buyerDelta = isSimulated ? 0 : Math.round(SERVICE_SATISFIED_DELTA_BASE.buyer * satisfactionScore);
+  const owner = await gateSettlementDeltas(contract, {
+    provider: isSimulated ? 0 : Math.round(SERVICE_SATISFIED_DELTA_BASE.provider * satisfactionScore),
+    buyer: isSimulated ? 0 : Math.round(SERVICE_SATISFIED_DELTA_BASE.buyer * satisfactionScore),
+  });
+  const providerDelta = owner.provider.delta;
+  const buyerDelta = owner.buyer.delta;
 
   await applyValidationEvent(
     contract.provider_agent_id,
@@ -572,6 +585,7 @@ export async function applyServiceSatisfiedDeltas(
       contract_id: contract.id,
       satisfaction_score: satisfactionScore,
       role: 'provider',
+      ...owner.provider.meta,
     }
   );
   await applyValidationEvent(
@@ -582,6 +596,7 @@ export async function applyServiceSatisfiedDeltas(
       contract_id: contract.id,
       satisfaction_score: satisfactionScore,
       role: 'buyer',
+      ...owner.buyer.meta,
     }
   );
 }

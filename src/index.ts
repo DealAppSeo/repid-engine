@@ -993,6 +993,8 @@ if (!IS_TEST) {
     announcePagerStatus();
     console.log(`[repid-engine] v${config.version} running on port ${port} (0.0.0.0)`);
     console.log(`[repid-engine] Environment: ${config.nodeEnv}`);
+    // Loud at boot: whether same-owner A2A trades earn RepID (off/shadow = yes, enforce = no).
+    console.log(`[same-owner-settlement] SAME_OWNER_SETTLEMENT_MODE resolved to '${sameOwnerSettlementMode()}'`);
     // B16: the classify voters' daily canary (a known-true and a known-false claim per voter),
     // reported at GET /api/v1/classify/stats. CLASSIFY_CANARY=off disables it. Never blocks boot.
     startClassifyCanary();
@@ -1524,6 +1526,7 @@ import { startHitlExpirationJob } from './services/hitl-expiration-job';
 import { startHitlReconciliationJob } from './services/hitl-reconciliation-job';
 import { startFailedReceiptSettler } from './services/failed-receipt-settler';
 import { DisputeResolutionWorker } from './workers/dispute-resolution-worker';
+import { sameOwnerSettlementMode } from './scoring/grounding';
 
 startValidationWorker();
 startHitlExpirationJob();

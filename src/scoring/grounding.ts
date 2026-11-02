@@ -46,6 +46,29 @@ export function groundingMode(): GroundingMode {
   return parseGroundingMode(process.env.GROUNDING_MODE);
 }
 
+/**
+ * SAME_OWNER_SETTLEMENT_MODE (Sean, option M2, 2026-11-02): a trade between two agents of one
+ * owner is not independent evidence. Read by this resolver (payment evidence) and by the A2A
+ * settlement deltas (services/same-owner-settlement.ts).
+ *   unset / 'off'  no owner lookup at all: today's behaviour exactly.
+ *   'shadow'       look the owners up and record "would not count"; change nothing.
+ *   'enforce'      same owner, or an owner we cannot establish, does not count.
+ * Any other value is a typo: say so loudly and behave as 'shadow', which records and moves nothing.
+ */
+export type SameOwnerSettlementMode = 'off' | 'shadow' | 'enforce';
+/** The answer about the OTHER party: 'owner_unknown' is not independence (fail closed). */
+export type PartyIndependence = 'independent' | 'same_owner' | 'owner_unknown';
+
+export function sameOwnerSettlementMode(raw: string | undefined = process.env.SAME_OWNER_SETTLEMENT_MODE): SameOwnerSettlementMode {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === '' || v === 'off') return 'off';
+  if (v === 'shadow' || v === 'enforce') return v;
+  console.error(
+    `[same-owner-settlement] SAME_OWNER_SETTLEMENT_MODE=${JSON.stringify(raw)} is not off|shadow|enforce; behaving as 'shadow' (records, moves nothing)`,
+  );
+  return 'shadow';
+}
+
 export interface PaymentEvidence {
   kind: 'payment';
   txHash: string;
@@ -161,6 +184,8 @@ export interface GroundingResult {
   reused: boolean;
   amount_usd: number | null;
   parties: { from: string | null; to: string | null } | null;
+  /** SAME_OWNER_SETTLEMENT_MODE=shadow only: this payment would be refused under 'enforce'. */
+  same_owner_would_refuse?: Exclude<PartyIndependence, 'independent'>;
 }
 
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -293,6 +318,11 @@ export interface ResolveGroundingInput {
   chain?: ChainReader;
   validationLookup?: ValidationLookup;
   protocolLookup?: ProtocolLookup;
+  /**
+   * Is the agent behind the payment's OTHER wallet owned by someone other than `agentId`?
+   * Consulted only when SAME_OWNER_SETTLEMENT_MODE is not off. Missing or throwing = owner_unknown.
+   */
+  counterpartyIndependence?: (counterpartyWallet: string) => Promise<PartyIndependence>;
   now?: Date;
 }
 
@@ -426,6 +456,25 @@ async function resolvePayment(
     if (prior) return zero('wash_window', { amount_usd: amountUsd, parties });
   }
 
+  // S18: who is on the OTHER side? A sibling agent of the same owner is not a stranger.
+  // Checked last, so it only costs a lookup for a payment that would otherwise ground.
+  const ownerMode = sameOwnerSettlementMode();
+  let sameOwnerWouldRefuse: Exclude<PartyIndependence, 'independent'> | undefined;
+  if (ownerMode !== 'off') {
+    const other = wallets.includes(transfer.to) ? transfer.from : transfer.to;
+    let ind: PartyIndependence = 'owner_unknown';
+    try {
+      const got = input.counterpartyIndependence ? await input.counterpartyIndependence(other) : undefined;
+      if (got === 'independent' || got === 'same_owner') ind = got; // anything else stays owner_unknown
+    } catch {
+      ind = 'owner_unknown'; // a failed lookup is not independence, and must not become resolver_error
+    }
+    if (ind !== 'independent') {
+      if (ownerMode === 'enforce') return zero(`${ind}_payment`, { amount_usd: amountUsd, parties });
+      sameOwnerWouldRefuse = ind;
+    }
+  }
+
   // High: verified payment, parties join, at/above floor. Low reserved for
   // confirmations-short (not modeled here — a receipt.status===1 is final on
   // the pinned fork).
@@ -436,6 +485,7 @@ async function resolvePayment(
     reused: false,
     amount_usd: amountUsd,
     parties,
+    ...(sameOwnerWouldRefuse ? { same_owner_would_refuse: sameOwnerWouldRefuse } : {}),
   };
 }
 
