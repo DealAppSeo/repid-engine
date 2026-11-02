@@ -413,7 +413,7 @@ export interface FactCheckOpts {
   vetoThreshold?: number; // default 0.5
   flagThreshold?: number; // default 0.35
   perProviderTimeoutMs?: number; // default 12000
-  maxTokens?: number; // default 120
+  maxTokens?: number; // default 512; a floor for qwen/glm/deepseek, which get THINKING_MAX_TOKENS (completionBudget)
   earlyReturnOnAgreement?: boolean; // public path only — return after 2 agreeing families
   // WS1.2a — SLOW-PATH controls (all optional; ignored unless HAL_RETRIEVAL_ENABLED==='true').
   forceRetrieval?: boolean; // explicit "verify this" — always trigger the slow path
@@ -602,6 +602,37 @@ export function providerHeaders(cfg: FactCheckProviderCfg): Record<string, strin
 }
 
 /**
+ * Families whose models think before they answer: qwen (cerebras qwen-3.8-27b), glm (zai glm-4.5-flash)
+ * and deepseek (deepseek-flash). Matched by family so the same model on another host gets the same cap.
+ */
+const THINKING_FAMILIES: ReadonlySet<string> = new Set(['qwen', 'glm', 'deepseek']);
+/** Completion cap for a model that thinks first. 4x the 512 the terse models answer inside. */
+export const THINKING_MAX_TOKENS = 2048;
+
+/**
+ * The completion cap to send THIS provider.
+ *
+ * Read from production (a read-only query of 114 HAL_SCORE_EVENT rows, 2026-11-01 22:00Z to
+ * 2026-11-02 07:53Z), provider_health.failed: "unparseable reply (finish_reason length)" cerebras qwen-3.8-27b x40, zai
+ * glm-4.5-flash x8, deepseek deepseek-flash x14. These models spend the cap thinking, the host cuts
+ * them off before the verdict JSON, `content` is empty, and the family drops out of the quorum.
+ * Every provider was sent the same 512 (the default in factCheck).
+ *
+ * A bigger cap is only paid for when the model uses it (tokens are billed as generated), and the
+ * wait is still bounded by the per-provider timeout. A reply that is STILL cut off is an ERROR in
+ * queryProvider (finish_reason 'length' / stop_reason 'max_tokens' is never parsed, even if the text
+ * holds a complete verdict JSON): the cap makes room to finish, it never reads a verdict out of a
+ * truncated reply.
+ * `base` is the floor, so a caller that asks for more than the thinking cap keeps what it asked for.
+ *
+ * THINKING_MAX_TOKENS IS NOT MEASURED: no provider key is reachable from a dev sandbox. The check is
+ * post-deploy: provider_health.failed should lose the "finish_reason length" lines for these three.
+ */
+export function completionBudget(cfg: FactCheckProviderCfg, base: number): number {
+  return THINKING_FAMILIES.has(cfg.family ?? familyOf(cfg.model)) ? Math.max(base, THINKING_MAX_TOKENS) : base;
+}
+
+/**
  * Build the request body for this provider's dialect.
  *
  * Anthropic takes the system prompt as a TOP-LEVEL `system` field rather than a message with
@@ -701,7 +732,7 @@ async function queryProvider(
     // below → returned as this provider's ERROR verdict (quorum degrades gracefully),
     // never a silent cloud call. Mirrors cross-llm-client.queryProvider's prompt guard.
     assertPromptEgressAllowed(cfg.endpoint, 'prompt');
-    const res = await postWith429Retry(cfg, providerBody(cfg, deliverable, maxTokens), controller.signal);
+    const res = await postWith429Retry(cfg, providerBody(cfg, deliverable, completionBudget(cfg, maxTokens)), controller.signal);
     const latency_ms = Date.now() - start;
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -742,8 +773,12 @@ async function queryProvider(
     }
 
     // A reply with no parseable verdict + confidence did not answer: ERROR, never a default vote.
-    const parsed = parseVerdict(content);
+    // So is a reply CUT OFF at the cap ('length', or Anthropic's stop_reason 'max_tokens'), even when its
+    // text holds a complete verdict JSON: that is a draft mid-thought, not the model's answer. It is not
+    // parsed at all, and it logs and returns as the same "unparseable reply (finish_reason ...)" error.
     const finish = data?.choices?.[0]?.finish_reason ?? data?.stop_reason;
+    const truncated = finish === 'length' || finish === 'max_tokens';
+    const parsed = truncated ? null : parseVerdict(content);
     const unparseable = parsed ? undefined : `unparseable reply${finish ? ` (finish_reason ${finish})` : ''}`;
     logLlmCall({
       call_id,
@@ -903,8 +938,8 @@ export async function factCheck(
   const start = Date.now();
   const vetoThreshold = opts.vetoThreshold ?? 0.5;
   const flagThreshold = opts.flagThreshold ?? 0.35;
-  // Reasoning models (cerebras zai-glm) spend tokens thinking before emitting the verdict JSON;
-  // 120 truncated them mid-reasoning. 512 lets them finish while staying cheap for the terse models.
+  // 512 is the cap for the models that answer directly. Models that think first (qwen, glm, deepseek)
+  // are given more in queryProvider via completionBudget(): 512 cut them off before the verdict.
   const maxTokens = opts.maxTokens ?? 512;
 
   const quorumId = crypto.randomUUID(); // R5 — groups this quorum's provider calls in llm_call_log

@@ -131,9 +131,12 @@ describe('family-registry lookup', () => {
     // the panel's model set now changes without a commit. The third is a near-miss:
     // 'models/gemini-2.5-flash' was seeded, but the caller sends it unprefixed.
     // All three verified unambiguous via matchedFamilies() before seeding.
-    expect(FAMILY_REGISTRY_SEED.length).toBe(29); // seed table; sweep is at load time
+    // 33 as of 2026-11-02: +4 for deepseek-flash, qwen-3.8-27b, gpt-oss-120b and deepseek-v4-pro, the
+    // ids the live HAL quorum logged as hal_family_unmapped on every run. Each family is what familyOf()
+    // already returned, so decisions are unchanged (see tests/hal-registry-family.test.ts).
+    expect(FAMILY_REGISTRY_SEED.length).toBe(33); // seed table; sweep is at load time
     const legit = FAMILY_REGISTRY_SEED.filter((e) => !isAmbiguousFamily(e.model));
-    expect(legit.length).toBe(28); // 29 seeded - 1 ambiguous (hf/deepseek-r1-qwen-32b) swept out at load
+    expect(legit.length).toBe(32); // 33 seeded - 1 ambiguous (hf/deepseek-r1-qwen-32b) swept out at load
     for (const e of legit) {
       expect(resolveFamily(e.model)).toBe(e.family);
     }

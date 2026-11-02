@@ -148,3 +148,23 @@ describe('factCheck — surfaces families_unmapped on the DEFAULT build→score 
     expect(r.families_unmapped).toBeUndefined();
   });
 });
+
+describe('the four models the live quorum logged as hal_family_unmapped (2026-11-02)', () => {
+  // Registered so the family is LOOKED UP (non-spoofable) instead of regex-guessed. The family in each
+  // row is exactly what familyOf() already returned, so no quorum decision changes.
+  const SEEN_UNMAPPED: Array<[model: string, family: string]> = [
+    ['deepseek-flash', 'deepseek'],
+    ['qwen-3.8-27b', 'qwen'],
+    ['gpt-oss-120b', 'openai'],
+    ['deepseek-v4-pro', 'deepseek'],
+  ];
+
+  it.each(SEEN_UNMAPPED)('%s resolves to %s from the registry, the same family familyOf() gave, with no unmapped flag', (model, family) => {
+    expect(isMapped(model)).toBe(true);
+    expect(resolveFamily(model)).toBe(family);
+    expect(familyOf(model)).toBe(family); // decisions identical: the registry only makes it non-spoofable
+    const flagged: string[] = [];
+    expect(familyOfResolved(model, (m) => flagged.push(m))).toBe(family);
+    expect(flagged).toEqual([]);
+  });
+});

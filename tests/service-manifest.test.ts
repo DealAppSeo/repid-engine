@@ -199,7 +199,14 @@ describe('one object, two renderers (§1.2)', () => {
   it('names both renderers on the object so neither can drift unnoticed', async () => {
     const m = (await buildServiceManifest(SERVICE_ID))!;
     expect(m.renderers.machine).toContain(`/api/v1/services/${SERVICE_ID}/manifest.json`);
-    expect(m.renderers.human).toContain(`/service/${SERVICE_ID}`);
+    expect(m.renderers.human).toBeNull();
+  });
+
+  it('advertises no human page that does not exist: no trustmarket.dev link anywhere in the manifest', async () => {
+    // trustmarket.dev/service/<id> 404s live (2026-11-02) and the engine serves no HTML
+    // service page. A null human renderer says so; a dead link claims a page that is not there.
+    const m = (await buildServiceManifest(SERVICE_ID))!;
+    expect(JSON.stringify(m)).not.toContain('trustmarket.dev');
   });
 
   it('carries price in both raw and human units so renderers never re-derive it', async () => {
