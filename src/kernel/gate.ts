@@ -112,6 +112,33 @@ function validHal(ev: unknown): ev is HalEvidence {
   return !!e && typeof e === 'object' && HAL_VERDICTS.includes(String(e.verdict)) && Array.isArray(e.votes);
 }
 
+/**
+ * Distinct model families a HAL PASS must rest on. The same floor as the producer side
+ * (hal-adapter.ts MIN_DISJOINT_FAMILIES, fact-check.ts MIN_QUORUM_FOR_VETO): one family cannot clear.
+ */
+export const MIN_PASS_FAMILIES = 2;
+
+/**
+ * RT-2: the kernel does not take a PASS label on trust. A PASS counts only if its own votes back it:
+ * (a) PASS votes from >= MIN_PASS_FAMILIES distinct families (trimmed, case-insensitive; a vote with
+ * no usable family counts for nothing), and (b) PASS votes strictly outnumber FAIL votes (a tie is not
+ * agreement). ABSTAIN votes count for neither side. Anything else reads as NOT_CHECKED in gatherHal.
+ */
+function passIsBacked(votes: HalEvidence['votes']): boolean {
+  const families = new Set<string>();
+  let pass = 0;
+  let fail = 0;
+  for (const v of votes) {
+    if (!v || typeof v !== 'object') continue;
+    if (v.verdict === 'FAIL') fail++;
+    else if (v.verdict === 'PASS' && typeof v.family === 'string' && v.family.trim() !== '') {
+      pass++;
+      families.add(v.family.trim().toLowerCase());
+    }
+  }
+  return families.size >= MIN_PASS_FAMILIES && pass > fail;
+}
+
 async function gatherHal(deps: GateDeps, req: KernelRequest, worthAsking: boolean): Promise<HalState> {
   // Flag OFF (no registry) a `read` or `other` is caller-asserted: an `other` needs HAL like a post, a
   // `read` is screened when HAL is wired (decide.ts UNVERIFIED_CLASS_CHECKS, P0-I3-02).
@@ -125,6 +152,9 @@ async function gatherHal(deps: GateDeps, req: KernelRequest, worthAsking: boolea
     const ev = await deps.halCheck(req);
     if (!validHal(ev)) return { state: 'not_checked', detail: 'HAL returned an unreadable answer' };
     if (!KNOWN_HAL_METHODS.has(String(ev.method))) return { state: 'not_checked', detail: 'HAL answered through a verifier the kernel does not know' };
+    if (ev.verdict === 'PASS' && !passIsBacked(ev.votes)) {
+      return { state: 'not_checked', detail: `HAL said PASS without ${MIN_PASS_FAMILIES} distinct families of agreeing PASS votes` };
+    }
     return { state: 'consulted', evidence: ev };
   } catch {
     return { state: 'not_checked', detail: 'HAL could not be reached' };

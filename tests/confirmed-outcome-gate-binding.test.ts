@@ -81,7 +81,7 @@ describe('gateReceiptProblem — only a sealed gate-run receipt, unedited, passe
     const h = harness({
       env: { ...DEFAULT_ENV, is_simulated: false },
       newId: () => 'g-norun',
-      halCheck: async () => ({ verdict: 'PASS', method: 'fact-check', votes: [{ family: 'a', verdict: 'PASS' }], settled_by: 'holdout', grounded: true, same_domain: true }),
+      halCheck: async () => ({ verdict: 'PASS', method: 'fact-check', votes: [{ family: 'a', verdict: 'PASS' }, { family: 'b', verdict: 'PASS' }], settled_by: 'holdout', grounded: true, same_domain: true }),
     });
     await h.ledger.appendPolicy(await signedPolicy(h.owner, { subject: AGENT }), iso);
     const out = await runUnderKernel(postRequest({ agent: { agent_id: AGENT, agent_name: 't' } }), async () => 1, h.deps);

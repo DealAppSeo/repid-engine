@@ -140,37 +140,58 @@ describe('INV-1 NOT_CHECKED blocks a spend and a post', () => {
     expect(h.deps.halCheck).toHaveBeenCalledTimes(0);
   });
 
-  // ── RT-2 ── HAL "two families" is not enforced by the kernel. ─────────────────────────────────
-  // The kernel trusts halCheck's evidence completely: validHal() only needs a known verdict word and
-  // an ARRAY for votes. It does not count families, does not require the votes to agree with the
-  // verdict, and does not require any vote at all. Over HTTP this is unreachable TODAY because
-  // halCheck is not wired anywhere in production (a post can never be ALLOWed remotely). The moment
-  // a halCheck is wired in-process, a single-family or zero-vote PASS clears a post.
-  it.failing('RT-2a a HAL PASS with ZERO votes must not ALLOW a post (secure expectation; BREACHED today)', async () => {
+  // ── RT-2 ── HAL "two families" IS enforced by the kernel (N3-A2). ──────────────────────────────
+  // gate.ts gatherHal() no longer takes a PASS label on trust. A PASS counts only if its own votes
+  // back it: PASS votes from >= MIN_PASS_FAMILIES (2) distinct families (trimmed, case-insensitive)
+  // AND PASS votes strictly outnumber FAIL votes (a tie is not agreement). Otherwise the answer takes
+  // the existing bad-evidence path: NOT_CHECKED(hal_not_checked), tool called 0 times. Before this,
+  // validHal() only needed a known verdict word and an ARRAY for votes, so a zero-vote or one-family
+  // PASS cleared a post. These four were it.failing (BREACHED) and are now ordinary tests.
+  it('RT-2a a HAL PASS with ZERO votes must not ALLOW a post', async () => {
     const h = await armed({ halCheck: async () => hal({ votes: [] }) });
     const tool = jest.fn(async () => 'posted');
     const out = await runUnderKernel(postRequest(), tool, h.deps);
-    expect(out.verdict).not.toBe('ALLOW');
+    expect(out.verdict).toBe('NOT_CHECKED');
+    expect(codes(out)).toContain('hal_not_checked');
     expect(tool).toHaveBeenCalledTimes(0);
   });
-  it.failing('RT-2b a HAL PASS backed by ONE family must not ALLOW a post (secure expectation; BREACHED today)', async () => {
+  it('RT-2b a HAL PASS backed by ONE family must not ALLOW a post', async () => {
     const h = await armed({ halCheck: async () => hal({ votes: [{ family: 'gpt-oss', verdict: 'PASS' }] }) });
     const tool = jest.fn(async () => 'posted');
     const out = await runUnderKernel(postRequest(), tool, h.deps);
-    expect(out.verdict).not.toBe('ALLOW');
+    expect(out.verdict).toBe('NOT_CHECKED');
     expect(tool).toHaveBeenCalledTimes(0);
   });
-  it.failing('RT-2c a HAL PASS whose votes are ALL FAIL must not ALLOW a post (verdict contradicts its own votes)', async () => {
+  it('RT-2c a HAL PASS whose votes are ALL FAIL must not ALLOW a post (verdict contradicts its own votes)', async () => {
     const h = await armed({ halCheck: async () => hal({ votes: [{ family: 'a', verdict: 'FAIL' }, { family: 'b', verdict: 'FAIL' }] }) });
     const tool = jest.fn(async () => 'posted');
     const out = await runUnderKernel(postRequest(), tool, h.deps);
-    expect(out.verdict).not.toBe('ALLOW');
+    expect(out.verdict).toBe('NOT_CHECKED');
     expect(tool).toHaveBeenCalledTimes(0);
   });
-  it.failing('RT-2d a HAL PASS from two votes of the SAME family must not ALLOW a post', async () => {
-    const h = await armed({ halCheck: async () => hal({ votes: [{ family: 'qwen', verdict: 'PASS' }, { family: 'qwen', verdict: 'PASS' }] }) });
-    const out = await runUnderKernel(postRequest(), jest.fn(), h.deps);
-    expect(out.verdict).not.toBe('ALLOW');
+  it('RT-2d a HAL PASS from two votes of the SAME family must not ALLOW a post (case and spacing do not make a new family)', async () => {
+    const h = await armed({ halCheck: async () => hal({ votes: [{ family: 'qwen', verdict: 'PASS' }, { family: ' Qwen ', verdict: 'PASS' }] }) });
+    const tool = jest.fn(async () => 'posted');
+    const out = await runUnderKernel(postRequest(), tool, h.deps);
+    expect(out.verdict).toBe('NOT_CHECKED');
+    expect(tool).toHaveBeenCalledTimes(0);
+  });
+  it('RT-2 positive control: a PASS with 2 PASS votes from 2 distinct families still ALLOWs a post', async () => {
+    const h = await armed({ halCheck: async () => hal({ votes: [{ family: 'gpt-oss', verdict: 'PASS' }, { family: 'qwen', verdict: 'PASS' }] }) });
+    const tool = jest.fn(async () => 'posted');
+    const out = await runUnderKernel(postRequest(), tool, h.deps);
+    expect(out.verdict).toBe('ALLOW');
+    expect(tool).toHaveBeenCalledTimes(1);
+  });
+  it('RT-2e a PASS the votes do not carry (2 PASS vs 2 FAIL, a tie; or FAIL ahead) must not ALLOW a post', async () => {
+    for (const fails of [2, 3]) {
+      const votes: HalEvidence['votes'] = [{ family: 'a', verdict: 'PASS' }, { family: 'b', verdict: 'PASS' }];
+      for (let i = 0; i < fails; i++) votes.push({ family: `f${i}`, verdict: 'FAIL' });
+      const h = await armed({ halCheck: async () => hal({ votes }) });
+      const tool = jest.fn(async () => 'posted');
+      expect((await runUnderKernel(postRequest(), tool, h.deps)).verdict).toBe('NOT_CHECKED');
+      expect(tool).toHaveBeenCalledTimes(0);
+    }
   });
 });
 
