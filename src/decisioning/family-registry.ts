@@ -124,6 +124,16 @@ export const FAMILY_REGISTRY_SEED: readonly FamilyRegistryEntry[] = Object.freez
   { provider: 'groq',              model: 'openai/gpt-oss-20b',                  family: 'openai',    source: 'hal-config-default', evidence_n: 0 },
   { provider: 'deepseek',          model: 'deepseek-v4-flash',                   family: 'deepseek',  source: 'hal-config-default', evidence_n: 0 },
   { provider: 'gemini',            model: 'gemini-2.5-flash',                    family: 'gemini',    source: 'hal-config-default', evidence_n: 0 },
+  // 2026-11-02 — the four ids the live quorum logged as hal_family_unmapped on every run (production
+  // runtime log), so each vote's family was regex-guessed. Each family below is EXACTLY what familyOf()
+  // already returned for the id, so no decision changes; the family is now looked up, not guessed.
+  // The registry is keyed by model, so the provider is a label: qwen-3.8-27b is served by Cerebras,
+  // gpt-oss-120b is the bare Cerebras id (Groq's is 'openai/gpt-oss-120b'), and the two deepseek ids
+  // are DeepSeek's. Each was checked single-family with matchedFamilies().
+  { provider: 'deepseek',          model: 'deepseek-flash',                      family: 'deepseek',  source: 'hal-config-default', evidence_n: 0 },
+  { provider: 'cerebras',          model: 'qwen-3.8-27b',                        family: 'qwen',      source: 'hal-config-default', evidence_n: 0 },
+  { provider: 'cerebras',          model: 'gpt-oss-120b',                        family: 'openai',    source: 'hal-config-default', evidence_n: 0 },
+  { provider: 'deepseek',          model: 'deepseek-v4-pro',                     family: 'deepseek',  source: 'hal-config-default', evidence_n: 0 },
 ]);
 
 /**
