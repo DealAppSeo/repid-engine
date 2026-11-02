@@ -151,6 +151,14 @@ export interface ScoreEventInput {
   contract_id?: string;
   /** P2 proof-carrying answer (optional) — enables the HAL grounding / abstain signal (shadow-first). */
   proof_carrying_answer?: ProofCarryingAnswer;
+  /**
+   * Record-only. HAL still runs and the HAL_SCORE_EVENT row is still written, but as `is_shadow`: the
+   * row moves no RepID (repid_delta_applied 0, repid_after = repid_before, `delta` 0 so a plain
+   * sum(delta) reader such as repid-sync-aggregator cannot apply it), repid_agents is not updated, no
+   * proof is queued, and the delta decay/clamp would have produced is kept in
+   * `repid_delta_calculated` + metadata.shadow. Absent = today's behaviour exactly.
+   */
+  shadow?: { reason: string };
 }
 
 export interface ScoreEventResult {
@@ -324,6 +332,10 @@ export async function runScoreEvent(
   if (!agent) {
     throw new NotFoundError(`Agent not found: ${input.agent_id}`);
   }
+
+  // Record-only call (input.shadow): see ScoreEventInput.shadow. Everything below that would MOVE or
+  // QUEUE something is gated on this; HAL itself runs unchanged.
+  const shadow = input.shadow ?? null;
 
   // 3. HAL evaluation. DEFAULT (HAL_STRICTNESS unset → 1): extractor-only path,
   //    synchronous, no LLM fan-out — byte-identical to the prior behavior. But
@@ -542,7 +554,10 @@ export async function runScoreEvent(
   // changes nothing; only 'enforce' moves the score. The base is the decayed
   // score, so the delta lands on top of decay exactly as updateRepId did it — once per
   // period, never on a zero delta (assessEventDecay).
-  const decay = await assessEventDecay(agent, effectiveDeltaApplied);
+  // A shadow row lands nothing, so decay must not be assessed (or written into its metadata) as if it did.
+  const decay = shadow
+    ? assessDecay({ currentRepid: agent.current_repid, activity30d: agent.activity_30d, mode: 'off' })
+    : await assessEventDecay(agent, effectiveDeltaApplied);
   // Decompose the movement so the row can reconcile. See decay-bridge.ts::applyToScore
   // for why the base is rounded before the delta lands, and for the two ways the score
   // could move without appearing in repid_delta_applied (decay, and the #314 clamp).
@@ -577,10 +592,9 @@ export async function runScoreEvent(
   // the trigger keeps the score-event row, zk_proof_id, and the enqueue all
   // consistent — no "triggered but never queued" row. Economic events flow
   // through applyValidationEvent (below) and are untouched by this filter.
-  const rawTriggerProof = await shouldTriggerProof(
-    input.agent_id,
-    Math.abs(delta.delta_applied)
-  );
+  // A shadow row has nothing to prove: no proof id, no queue row, no prover request.
+  const rawTriggerProof =
+    !shadow && (await shouldTriggerProof(input.agent_id, Math.abs(delta.delta_applied)));
   const proofFilter = evaluateProofEnqueue(
     'HAL_SCORE_EVENT',
     parseProofEnqueueMode(process.env.PROOF_ENQUEUE_HAL_MODE)
@@ -640,9 +654,11 @@ export async function runScoreEvent(
     // `repid_delta_applied` is what actually MOVED the score — the two diverge
     // exactly when decay or the clamp took a bite, and that divergence is the
     // audit signal, not a bug (repid-delta.ts header: calculated vs applied).
-    delta: applied.delta_points,
+    // Shadow: `delta` is 0 (repid-sync-aggregator sums it with no is_shadow filter) and the score does
+    // not move; the earned delta stays in repid_delta_calculated + metadata.shadow.
+    delta: shadow ? 0 : applied.delta_points,
     repid_before: applied.before,
-    repid_after: applied.after,
+    repid_after: shadow ? applied.before : applied.after,
     certainty_at_claim:
       typeof input.certainty === 'number' ? input.certainty : 0.85,
     contract_id: input.contract_id ?? null,
@@ -652,7 +668,7 @@ export async function runScoreEvent(
     hal_decision: scoringDecision,
     hallucination_caught,
     repid_delta_calculated: Math.round(delta.delta_calculated),
-    repid_delta_applied: applied.total_applied,
+    repid_delta_applied: shadow ? 0 : applied.total_applied,
     tier_used: input.tier_used ?? null,
     prompt_text: input.prompt,
     answer_text: input.answer,
@@ -668,7 +684,17 @@ export async function runScoreEvent(
       ...decayMetadata(decay),
       // The decomposition behind repid_delta_applied. Without it a reader can see
       // that the delta and the movement differ but not which component did it.
-      ...appliedScoreMetadata(applied),
+      // A shadow row applied nothing, so it carries no "applied" block claiming a movement.
+      ...(shadow
+        ? {
+            shadow: {
+              reason: shadow.reason,
+              counterfactual_delta: applied.delta_points,
+              counterfactual_applied: applied.total_applied,
+              counterfactual_after: applied.after,
+            },
+          }
+        : appliedScoreMetadata(applied)),
       hal_signals: signals,
       grounding: grounding ?? undefined,
       grounding_abstained: groundingAbstained,
@@ -713,6 +739,9 @@ export async function runScoreEvent(
     // would break every insert — the flag and the migration are coupled in that
     // direction and only that direction.
     ...(issuer.recorded ? issuer.fields : {}),
+    // Real column, never an overloaded one (shadow-scoring.ts note 1). The DB trigger
+    // apply_repid_score_event enforces SHADOW_INERT on it again (delta-conformance.ts).
+    ...(shadow ? { is_shadow: true } : {}),
   };
 
   const { data: eventRow, error: evErr } = await db
@@ -730,7 +759,8 @@ export async function runScoreEvent(
   // REPID_DELTA_STATEMENT_MODE (default `off`, so this is a single early return today).
   // Placed AFTER the event insert so the nullifier can be scoped to a real event id,
   // and detached so an audit artefact can never delay or fail a score write.
-  recordDeltaStatementDetached({
+  // A shadow row attests no movement, so it gets no statement.
+  if (!shadow) recordDeltaStatementDetached({
     agentId: String(input.agent_id),
     eventLabel: `score_event:${score_event_id}`,
     // The STORED integers — matching what went into the row above, not the
@@ -801,7 +831,8 @@ export async function runScoreEvent(
   // 7. Update agent state (gated by WRITER_DIRECT_APPLY for single-applier cutover).
   // When false: insert event only (with full audit fields + idempotency_key); aggregator becomes sole applier.
   const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
-  if (WRITER_DIRECT_APPLY) {
+  // Shadow: repid_agents is not touched at all (not even last_active_at).
+  if (WRITER_DIRECT_APPLY && !shadow) {
     const { error: applyErr } = await db
       .from('repid_agents')
       .update({
@@ -863,9 +894,9 @@ export async function runScoreEvent(
     // The STORED applied delta, not the pre-decay/pre-clamp float. Callers surface
     // this as `repid_delta` on the API (routes/route.ts, agents-external-score.ts);
     // returning the earned delta there would report a movement the score never made.
-    repid_delta_applied: applied.total_applied,
+    repid_delta_applied: shadow ? 0 : applied.total_applied,
     old_repid,
-    new_repid: Math.round(new_repid),
+    new_repid: shadow ? old_repid : Math.round(new_repid),
     zk_proof_triggered: triggerProof,
     zk_proof_id,
     reason: penaltySuppressed
