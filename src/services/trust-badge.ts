@@ -2,7 +2,7 @@
  * trust-badge.ts — reputation portability AS distribution.
  *
  * Spec: TRUSTMARKET_UX_MERGED_SPEC_v1 §10. A provider embeds this on their own
- * site; every badge links back to receipts on ours. The precedent named in the
+ * site; every badge links back to its public record on ours. The precedent named in the
  * spec is the SSL seal and the PayPal button — trust marks that spread because
  * the people displaying them wanted to, and that carried the issuer with them.
  *
@@ -61,10 +61,6 @@ function publicBase(): string {
   return process.env.PUBLIC_BASE_URL || 'https://repid-engine-production.up.railway.app';
 }
 
-function marketBase(): string {
-  return process.env.PUBLIC_MARKET_URL || 'https://trustmarket.dev';
-}
-
 export function toBadgeData(trust: ProviderTrust): BadgeData {
   const t = trust.track_record;
   const name = trust.agent_name ?? trust.agent_id.slice(0, 8);
@@ -83,7 +79,9 @@ export function toBadgeData(trust: ProviderTrust): BadgeData {
       trust.stake_at_risk_usdc != null
         ? `$${trust.stake_at_risk_usdc.toFixed(2)} at risk`
         : 'no stake at risk',
-    verify_url: `${marketBase()}/agent/${trust.agent_id}`,
+    // The badge's own public record (denominator, caveats, one sample receipt). The
+    // trustmarket.dev/agent/<id> page this used to point at does not exist (404, 2026-11-02).
+    verify_url: `${publicBase()}/api/v1/badge/${trust.agent_id}.json`,
     receipt_url: trust.sample_receipt?.url ?? null,
     caveats: trust.caveats,
   };
@@ -149,6 +147,8 @@ export function renderBadgeSvg(d: BadgeData, variant: BadgeVariant = 'full'): st
   const line1 = d.agent_name + (d.tier ? ` · ${d.tier}` : '');
   const line2 = d.track_record;
   const line3 = d.stake_label;
+  // Say only what the linked record holds: ONE sample receipt, and only if there is one.
+  const footer = d.receipt_url ? 'record: denominator, caveats, a sample receipt' : 'record: denominator, caveats';
   const w = Math.max(300, textWidth(line2, 12) + 32, textWidth(line1, 14) + 32);
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="96" role="img" aria-label="TrustMarket badge for ${esc(d.agent_name)}">
@@ -159,7 +159,7 @@ export function renderBadgeSvg(d: BadgeData, variant: BadgeVariant = 'full'): st
     <text x="16" y="26" fill="${fg}" font-size="14" font-weight="600">${esc(line1)}</text>
     <text x="16" y="48" fill="${dim}" font-size="12">${esc(line2)}</text>
     <text x="16" y="68" fill="${accent}" font-size="12" font-weight="600">${esc(line3)}</text>
-    <text x="16" y="86" fill="#64748b" font-size="10">verify at trustmarket.dev — every claim links to a receipt</text>
+    <text x="16" y="86" fill="#64748b" font-size="10">${footer}</text>
   </g>
 </svg>`;
 }
