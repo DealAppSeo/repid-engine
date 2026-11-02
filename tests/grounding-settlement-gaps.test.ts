@@ -187,6 +187,33 @@ describe('same owner, different wallets', () => {
     const r = await resolve(chain([usdc(WALLET_A2, WALLET_A, ONE_USDC)]), [WALLET_A]);
     expect(r.g_verified).toBe('high');
   });
+
+  // S18 gap, named in #1473's own text: "A sibling agent of the same owner paying is NOT_CHECKED:
+  // the resolver has no owner input." `ResolveGroundingInput` carries only `agentWallets` (this
+  // agent's own wallets, src/scoring/grounding.ts:286-297), and `resolvePayment` can only compare
+  // the transfer's parties with that list (:391-398). Agent B's wallet is not in agent A's list, so
+  // the resolver cannot tell B from a stranger. Synthetic setup: A and B share one owner; WALLET_B
+  // is B's. The resolver is not (and cannot be) told that, which is the gap.
+  const WALLET_B = '0x8888888888888888888888888888888888888888'; // agent B, same owner as agent A
+  const siblingPays = () => chain([usdc(WALLET_B, WALLET_A, ONE_USDC)]);
+
+  it('CURRENT (pinned): a sibling agent of the same owner paying grounds high, same as a stranger', async () => {
+    const sibling = await resolve(siblingPays());
+    const stranger = await resolve(chain([usdc(STRANGER, WALLET_A, ONE_USDC)]));
+    expect(sibling.g_verified).toBe('high');
+    expect(sibling.reason).toBe('payment_verified');
+    // Indistinguishable from an unrelated payer: nothing in the input says WALLET_B is the same owner's.
+    expect({ g: sibling.g_verified, reason: sibling.reason }).toEqual({ g: stranger.g_verified, reason: stranger.reason });
+  });
+
+  // `it.failing` passes while the body throws and FAILS once the body passes (see
+  // tests/kernel/p0-invariants.test.ts). So CI stays green while the gap exists, and goes red the
+  // moment a fix lands: then flip this to `it`, give the call its owner input, and delete the
+  // CURRENT test above. The fix is HIGH (RepID write path) and is the owner's decision.
+  it.failing('KNOWN GAP (S18): a sibling agent of the same owner paying still grounds (WANT: refused)', async () => {
+    const r = await resolve(siblingPays());
+    expect(r.g_verified).toBe(0);
+  });
 });
 
 describe('reused event across chains', () => {
