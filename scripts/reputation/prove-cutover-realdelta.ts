@@ -79,7 +79,7 @@ async function main() {
     for (let from = 0; ; from += 1000) {
       const { data } = await db.from('repid_score_events')
         .select('created_at, delta, repid_before, repid_after')
-        .eq('agent_id', a.id).gte('created_at', sinceIso)
+        .eq('agent_id', a.id).eq('is_shadow', false).gte('created_at', sinceIso)
         .order('created_at', { ascending: true }).range(from, from + 999);
       if (!data?.length) break;
       for (const r of data as any[]) if (r.repid_before != null && r.repid_after != null && r.delta != null)

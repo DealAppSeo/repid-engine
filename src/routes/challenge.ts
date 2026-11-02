@@ -100,6 +100,7 @@ router.post('/challenge', async (req: Request, res: Response) => {
     const { count } = await db.from('repid_score_events')
       .select('*', { count: 'exact', head: true })
       .in('event_type', ['peer_verify', 'challenge_won', 'challenge_lost'])
+      .eq('is_shadow', false)
       .gte('created_at', since)
       .or(`agent_name.eq.${challenger?.agent_name},agent_name.eq.${defender?.agent_name}`);
     if ((count || 0) > 3) {
@@ -457,6 +458,7 @@ router.get('/challenge/:id', async (req: Request, res: Response) => {
     .from('repid_score_events')
     .select('*')
     .contains('metadata', { challengeId: id })
+    .eq('is_shadow', false)
     .order('created_at', { ascending: true });
 
   if (error || !data || data.length === 0) {

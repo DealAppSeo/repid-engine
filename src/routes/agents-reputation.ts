@@ -258,7 +258,7 @@ export function createAgentsReputationRouter(
           }>(
             `SELECT event_type, hal_score, hal_decision, created_at
              FROM repid_score_events
-             WHERE agent_id = $1
+             WHERE agent_id = $1 AND is_shadow = false
              ORDER BY created_at DESC
              LIMIT 20`,
             [String(req.params.id)],

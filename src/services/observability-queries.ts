@@ -167,6 +167,7 @@ export async function getRepidEventStats(): Promise<RepidEventStats> {
   const oneDayAgo = new Date(Date.now() - 86400000).toISOString();
   const { data } = await db.from('repid_score_events')
     .select('event_type, delta')
+    .eq('is_shadow', false)
     .gte('created_at', oneDayAgo)
     .limit(10000);
     
@@ -206,6 +207,7 @@ export async function getPeerVerificationStats(): Promise<PeerVerificationStats>
   const { count: totalEvents } = await db
     .from('repid_score_events')
     .select('id', { count: 'exact', head: true })
+    .eq('is_shadow', false)
     .gte('created_at', oneDayAgo);
 
   // 2. Fetch queue stats in last 24h
