@@ -233,13 +233,15 @@ export const TOTAL_CAP_SCOPE_NOTE =
  * receipt that neither disclaims the class nor carries the marker has had its rows stripped (P0-RS-02/03).
  */
 export const CALLER_ASSERTED_CLASS_NOTE = 'tool_class (caller-asserted; there is no tool registry in the MVP)';
+/** kernel-receipt/1 says it is unsigned. A signed kernel-receipt/2 swaps it for SIGNER_TRUST_NOTE (receipt.ts). */
+export const RECEIPT_UNSIGNED_NOTE = 'receipt_signature (unsigned in the MVP; integrity is the hash and the chain)';
 const STANDING_DOES_NOT_ATTEST = [
   CUMULATIVE_TOTAL_NOTE,
   TOTAL_CAP_SCOPE_NOTE,
   CALLER_ASSERTED_CLASS_NOTE,
   'explicit_revocation (revocation is supersession by a higher nonce inside this ledger only)',
   'laya (shadow mode; not consulted)',
-  'receipt_signature (unsigned in the MVP; integrity is the hash and the chain)',
+  RECEIPT_UNSIGNED_NOTE,
 ] as const;
 
 function isToolClass(v: unknown): v is ToolClass {
