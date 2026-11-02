@@ -417,8 +417,10 @@ function structureErrors(r: unknown): string[] {
   need(isStr(H['receipt_hash']) && HEX32.test(H['receipt_hash']), 'header.receipt_hash');
   need(isObj(H['env']) && isStr(H['env']['network']) && Number.isSafeInteger(H['env']['chain_id']) && isBool(H['env']['is_simulated']), 'header.env');
   if (signed) {
+    // The signature is lower-case only: it sits outside the signed bytes, so an upper-cased copy would
+    // verify too and one signed receipt would have two encodings (two receipt_hashes).
     const g = H['signer'];
-    need(isObj(g) && g['alg'] === 'ed25519' && isStr(g['public_key']) && HEX32.test(g['public_key']) && isStr(g['fingerprint']) && HEX32.test(g['fingerprint']) && isStr(H['signature']) && /^0x[0-9a-fA-F]{128}$/.test(H['signature']), 'header.signer/signature: kernel-receipt/2 carries an ed25519 signer and a signature');
+    need(isObj(g) && g['alg'] === 'ed25519' && isStr(g['public_key']) && HEX32.test(g['public_key']) && isStr(g['fingerprint']) && HEX32.test(g['fingerprint']) && isStr(H['signature']) && /^0x[0-9a-f]{128}$/.test(H['signature']), 'header.signer/signature: kernel-receipt/2 carries an ed25519 signer and a signature');
   } else need(H['signer'] === null, 'header.signer must be null in kernel-receipt/1');
 
   need(isObj(S['agent']) && isStr(S['agent']['agent_id']) && isStr(S['agent']['agent_name']), 'subject.agent');

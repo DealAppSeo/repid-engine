@@ -122,6 +122,10 @@ describe('signing key configured: kernel-receipt/2', () => {
     sig.header.receipt_hash = receiptHash(sig); // even resealed, the signature is wrong
     expect(validateReceipt(sig).ok).toBe(false);
     expect(verifyReceiptAuthenticity(sig).status).toBe('NOT_AUTHENTIC');
+    const upper = clone(r); // the same signature, re-encoded: not a second valid receipt
+    upper.header.signature = '0x' + r.header.signature!.slice(2).toUpperCase();
+    upper.header.receipt_hash = receiptHash(upper);
+    expect(validateReceipt(upper).ok).toBe(false);
   });
 
   it('a receipt properly signed by a key that is NOT trusted is well-formed but NOT authentic (the forger\'s own key)', async () => {
