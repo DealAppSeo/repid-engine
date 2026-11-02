@@ -114,6 +114,7 @@ async function fetchCandidateEvents(since: Date, agentId?: string, limit = 2000)
   let q = db
     .from('repid_score_events')
     .select('id, agent_id, event_type, delta, idempotency_key, created_at, hal_decision, hal_score, veto_class, repid_before, repid_after')
+    .eq('is_shadow', false) // shadow rows are observations: never summed into current_repid
     .gte('created_at', since.toISOString())
     .order('created_at', { ascending: true })
     .limit(limit);

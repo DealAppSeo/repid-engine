@@ -84,6 +84,7 @@ async function replayClientSide(agentId, realWorkOnly) {
       .from('repid_score_events')
       .select('id, created_at, delta, event_type, metadata')
       .eq('agent_id', agentId)
+      .eq('is_shadow', false) // shadow rows never moved a score: the replay must not count them
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
       .limit(PAGE);

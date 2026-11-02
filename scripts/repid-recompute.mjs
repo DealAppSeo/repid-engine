@@ -129,6 +129,7 @@ async function fetchAllEvents() {
     const { data, error } = await db
       .from('repid_score_events')
       .select('id, agent_id, event_type, delta, repid_delta_calculated, repid_before, repid_after, hal_decision, hallucination_caught, created_at')
+      .eq('is_shadow', false) // shadow rows never moved a score: a replay must not count them
       .order('agent_id', { ascending: true })
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })

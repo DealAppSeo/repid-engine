@@ -110,7 +110,8 @@ export async function checkAndAwardBadges(
   const { data: events } = await db
     .from('repid_score_events')
     .select('event_type, delta, created_at')
-    .eq('agent_id', agentId);
+    .eq('agent_id', agentId)
+    .eq('is_shadow', false);
 
   const counts: Record<string, number> = {};
   for (const e of events ?? []) {
@@ -203,7 +204,8 @@ export async function computeEthics(agentId: string): Promise<EthicsBreakdown> {
   const { data: events } = await db
     .from('repid_score_events')
     .select('event_type, delta, mirror_test_triggered')
-    .eq('agent_id', agentId);
+    .eq('agent_id', agentId)
+    .eq('is_shadow', false);
 
   const list = events ?? [];
   const total = list.length;

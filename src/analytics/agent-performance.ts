@@ -102,6 +102,7 @@ export async function getAgentPerformance(
       .from('repid_score_events')
       .select('task_domain, hal_decision')
       .eq('agent_id', agentId)
+      .eq('is_shadow', false)
       .not('task_domain', 'is', null)
       .gt('created_at', new Date(Date.now() - getPeriodMs(periodKey)).toISOString());
 

@@ -39,7 +39,7 @@ jest.mock('../src/db', () => ({
         return {
           select: (_cols?: string, opts?: any) => {
             const isHead = !!(opts && opts.head);
-            return { eq: () => ({
+            return { eq: () => ({ get eq() { return () => this; }, /* shouldTriggerProof also chains .eq("is_shadow", false) */
               limit: () => ({ maybeSingle: async () => ({ data: null, error: null }) }),
               then: (resolve: any) => resolve({ data: null, error: null, count: isHead ? 0 : null }),
             }) };

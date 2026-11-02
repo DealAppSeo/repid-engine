@@ -430,6 +430,7 @@ export function supabaseCapDataSource(client: typeof db = db): CapDataSource {
           .from('repid_score_events')
           .select('repid_after, created_at')
           .eq('agent_id', resolved.id)
+          .eq('is_shadow', false)
           .eq('task_domain', domain)
           .order('created_at', { ascending: false })
           .limit(1)

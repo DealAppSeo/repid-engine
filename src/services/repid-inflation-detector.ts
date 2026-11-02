@@ -68,7 +68,7 @@ export async function detectInflationOutliers(
              SUM(COALESCE(e.repid_delta_applied, e.delta, 0))::numeric AS repid_delta
       FROM repid_score_events e
       JOIN repid_agents ra ON ra.id = e.agent_id AND ra.lifecycle_status = 'active'
-      WHERE e.created_at >= NOW() - ${interval}
+      WHERE e.is_shadow = false AND e.created_at >= NOW() - ${interval}
       GROUP BY e.agent_id
     )
     SELECT agent_id,

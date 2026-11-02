@@ -151,6 +151,7 @@ create table if not exists public.repid_score_events (
   zk_proof_triggered     boolean default false,
   zk_proof_id            uuid,
   idempotency_key        text,
+  is_shadow              boolean not null default false, -- prod: NOT NULL DEFAULT false; readers filter is_shadow = false
   metadata               jsonb default '{}'::jsonb,
   created_at             timestamptz default now()
 );

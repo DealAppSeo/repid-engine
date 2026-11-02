@@ -39,6 +39,7 @@ export async function countRecentFlags(db: DbLike, agentId: string, windowHours:
       .from('repid_score_events')
       .select('id', { count: 'exact', head: false })
       .eq('agent_id', agentId)
+      .eq('is_shadow', false)
       .eq('hal_decision', 'flagged')
       .gte('created_at', since);
     if (error) return 0;
