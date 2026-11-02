@@ -1,0 +1,92 @@
+# ADVISORY — prints a PR's merge weight (LOW / MEDIUM / MAJOR) from the paths it changes.
+# Owner policy r31 (task N3-B1): the weight comes from repository rules, not from an agent
+# declaring its own PR "LOW". It writes a job summary and ALWAYS exits 0: it never blocks,
+# approves, labels, comments on or merges anything. It is not a required check.
+#
+# Self-protection: the rules and the script are read from the BASE branch (git show
+# origin/<base>:path), never from the PR checkout, so a PR cannot lower its own class by
+# editing them. Changing the rules, the script or this file is itself MAJOR (rule 1 in
+# scripts/ci/risk-class-rules.json). The one exception is the first PR that adds them: the
+# base has no copy yet, so the PR's own copy is used and the summary says so.
+#
+# Limit: on `pull_request` GitHub runs the PR's copy of THIS workflow file, so a PR could
+# edit it to print something else. The summary is for the human reviewer, who reads the diff;
+# a binding gate would need the base's copy of the workflow to run (a required workflow
+# or pull_request_target), which is deliberately not done here.
+#
+# No secrets, no write permissions. The base branch name goes in through env, never
+# interpolated into the script, because a branch name can contain shell syntax.
+name: risk-class
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  risk-class:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Classify the PR by its changed paths
+        continue-on-error: true
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set +e
+          BASE_REF="origin/$BASE"
+          SCRIPT="$RUNNER_TEMP/risk-class.cjs"
+          RULES="$RUNNER_TEMP/risk-class-rules.json"
+          CHANGED="$RUNNER_TEMP/changed.z"
+          OUT="$RUNNER_TEMP/risk-class.out"
+
+          if git show "$BASE_REF:scripts/ci/risk-class.cjs" > "$SCRIPT" 2>/dev/null \
+             && git show "$BASE_REF:scripts/ci/risk-class-rules.json" > "$RULES" 2>/dev/null; then
+            SOURCE="Rules and script read from base branch \`$BASE\`: this PR cannot change them."
+          else
+            cp scripts/ci/risk-class.cjs "$SCRIPT" 2>/dev/null
+            cp scripts/ci/risk-class-rules.json "$RULES" 2>/dev/null
+            SOURCE="Base branch \`$BASE\` has no risk-class rules yet, so this PR's OWN copy was used. Treat the class as provisional until the rules are on the base branch."
+          fi
+
+          {
+            echo "## Risk class (advisory)"
+            echo
+            echo "Advisory only: nothing here blocks, approves or merges."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # --no-renames: a file moved out of a MAJOR path lists BOTH the old and the new path.
+          # -z: paths with spaces or odd characters arrive intact.
+          if ! git diff --name-only -z --no-renames "$BASE_REF...HEAD" > "$CHANGED"; then
+            echo "Could not compute the diff against \`$BASE_REF\`. Treat this PR as MAJOR until a person has read it." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if node "$SCRIPT" --rules "$RULES" --base-ref "$BASE_REF" < "$CHANGED" > "$OUT" 2> "$OUT.err"; then
+            {
+              echo '```'
+              cat "$OUT"
+              echo '```'
+              echo
+              echo "$SOURCE"
+            } >> "$GITHUB_STEP_SUMMARY"
+            cat "$OUT"
+          else
+            {
+              echo "The classifier failed, so no class was computed. Treat this PR as MAJOR until a person has read it."
+              echo '```'
+              cat "$OUT.err"
+              echo '```'
+              echo
+              echo "$SOURCE"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
