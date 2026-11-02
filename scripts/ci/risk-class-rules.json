@@ -1,0 +1,167 @@
+{
+  "_readme": [
+    "Path rules for scripts/ci/risk-class.cjs (task N3-B1, owner policy r31). ADVISORY: the risk-class workflow only prints a class.",
+    "Per file the FIRST rule that matches, top to bottom, decides; the PR class is the HIGHEST class among its files. Order is therefore load-bearing: self-protection first, then the tests carve-out, then the MAJOR structure, then docs, then keywords.",
+    "Matchers: globs (** crosses directories, * does not, case-insensitive, anchored at the repo root); substrings (lowercased path contains it); tokens (a whole word of the path after splitting on non-alphanumerics and camelCase).",
+    "Anything no rule matches gets defaultClass (never LOW): unknown means one level up from what it looks like.",
+    "This file, the script and the workflow are MAJOR (rule 1). The workflow reads the BASE branch copy of all three, so a PR cannot lower its own class by editing them."
+  ],
+  "defaultClass": "MEDIUM",
+  "defaultReason": "no rule matched: unknown paths go one level up from LOW, never LOW",
+  "packageJson": {
+    "path": "package.json",
+    "majorFields": ["version", "private", "publishConfig", "scripts.prepublishOnly"],
+    "majorReason": "package.json release fields changed (version/private/publishConfig/prepublishOnly): npm publish and release tags",
+    "unknownReason": "package.json changed and the release fields could not be compared: unsure goes up",
+    "otherClass": "MEDIUM",
+    "otherReason": "package.json changed, release fields untouched (dependency or script change)"
+  },
+  "rules": [
+    {
+      "class": "MAJOR",
+      "reason": "self-protection: the classifier's own rules, script or workflow; a PR must not lower its own class",
+      "globs": ["scripts/ci/risk-class*", ".github/workflows/risk-class.yml"]
+    },
+    {
+      "class": "MAJOR",
+      "reason": "CI authority: code owners, deploy and release/publish workflows",
+      "globs": [
+        ".github/CODEOWNERS",
+        ".github/workflows/deploy.yml",
+        ".github/workflows/release*.yml",
+        ".github/workflows/*publish*.yml"
+      ]
+    },
+    {
+      "class": "MAJOR",
+      "reason": "agent permission model: Claude settings and hooks",
+      "globs": [".claude/settings*.json", ".claude/hooks/**"]
+    },
+    {
+      "class": "LOW",
+      "reason": "tests only",
+      "globs": ["tests/**", "**/__tests__/**", "**/*.test.ts", "**/*.test.js", "**/*.spec.ts"]
+    },
+    {
+      "class": "MAJOR",
+      "reason": "prod schema, DDL, grants and contracts",
+      "globs": [
+        "migrations/**",
+        "supabase/**",
+        "temp_mig/**",
+        "contracts/**",
+        "src/contracts/**",
+        "**/*.sql",
+        "**/*.sol"
+      ]
+    },
+    {
+      "class": "MAJOR",
+      "reason": "Railway/Vercel/Fly/Docker/env/deploy topology and package registry config",
+      "globs": [
+        "deploy/**",
+        "Dockerfile*",
+        "railway*.json",
+        "railway.toml",
+        "fly.toml",
+        "nixpacks.toml",
+        "vercel.json",
+        ".env",
+        ".env.*",
+        ".npmrc"
+      ]
+    },
+    {
+      "class": "MAJOR",
+      "reason": "license text: legal and irreversible once public",
+      "globs": ["LICENSE*"]
+    },
+    {
+      "class": "MAJOR",
+      "reason": "RepID scoring, weights, rewards, billing, kernel, auth, identity, chain config and proof code (whole directories)",
+      "globs": [
+        "src/scoring/**",
+        "src/repid/**",
+        "src/repid-staking/**",
+        "src/layers/**",
+        "src/engine/**",
+        "src/incentives/**",
+        "src/reward-formula.ts",
+        "src/billing/**",
+        "src/ledger/**",
+        "src/kernel/**",
+        "src/auth/**",
+        "src/identity/**",
+        "src/config/**",
+        "src/config.ts",
+        "src/zkp/**",
+        "src/zk-proof/**",
+        "src/zkrepid/**",
+        "zkp-vault/**"
+      ]
+    },
+    {
+      "class": "MAJOR",
+      "reason": "publishable package manifest: npm publish and release tags",
+      "globs": ["packages/**/package.json"]
+    },
+    {
+      "class": "MEDIUM",
+      "reason": "answer-key is an eval answer key, not a credential: ordinary code, not a key/secret path",
+      "globs": ["**/answer-key/**", ".github/workflows/answer-key.yml"]
+    },
+    {
+      "class": "MEDIUM",
+      "reason": "public-claim surface: narrowing a claim is LOW, a new claim is MAJOR, a path cannot tell, so one level up from docs",
+      "globs": ["README.md", "CLAIM_LEDGER.md", "SUBMISSIONS/**"]
+    },
+    {
+      "class": "MEDIUM",
+      "reason": "agent instructions (CLAUDE.md, .claude/): they steer agents, so one level up from docs",
+      "globs": ["CLAUDE.md", ".claude/**"]
+    },
+    {
+      "class": "LOW",
+      "reason": "docs, markdown and reports",
+      "globs": ["docs/**", "reports/**", "lessons/**", "**/*.md"]
+    },
+    {
+      "class": "MEDIUM",
+      "reason": "CI config: workflows can read secrets and switch gates off, so one level up from tooling",
+      "globs": [".github/**"]
+    },
+    {
+      "class": "MAJOR",
+      "reason": "path names money, value, RepID/scoring, keys/secrets, custody, auth, kill switch, chain/anchor, attestation, grounding or settlement",
+      "substrings": [
+        "x402", "erc8004", "erc-8004", "attest", "ground", "settle", "credential", "secret",
+        "wallet", "payout", "escrow", "treasur", "onchain", "on-chain", "staking", "stake",
+        "bount", "payment", "pricing", "kernel", "privatekey", "private-key", "api-key",
+        "apikey", "signature", "authoriz", "authent", "authority", "spend", "slash",
+        "repid", "scor", "decay", "halt", "anchor", "plonky3", "nullifier", "custody", "creds"
+      ],
+      "tokens": [
+        "key", "keys", "auth", "authz", "eas", "sign", "signed", "signer", "signing", "signup",
+        "jwt", "password", "passwd", "rls", "grant", "grants", "faucet", "pay", "mint",
+        "trade", "trader", "trading"
+      ]
+    },
+    {
+      "class": "LOW",
+      "reason": "tooling config that ships nothing: ignore files and jest/test tsconfig",
+      "globs": [
+        ".gitignore",
+        ".gitattributes",
+        ".zvec-grep-ignore",
+        "jest.config.js",
+        "jest.integration.config.js",
+        "tsconfig.test.json"
+      ]
+    },
+    {
+      "class": "MEDIUM",
+      "reason": "live behaviour: ordinary src/, scripts/, packages/ code or lockfile",
+      "globs": ["src/**", "scripts/**", "packages/**", "package-lock.json"]
+    }
+  ]
+}
