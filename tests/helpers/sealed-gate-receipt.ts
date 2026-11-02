@@ -46,7 +46,7 @@ export async function sealGateReceipt(o: SealOptions): Promise<KernelReceipt> {
     halCheck: async () => ({
       verdict: pass ? 'PASS' : 'FLAG',
       method: 'fact-check',
-      votes: [{ family: 'a', verdict: pass ? 'PASS' : 'FAIL' }],
+      votes: [{ family: 'a', verdict: pass ? 'PASS' : 'FAIL' }, { family: 'b', verdict: pass ? 'PASS' : 'FAIL' }], // a PASS needs 2 distinct families (N3-A2)
       settled_by: o.settledBy === undefined ? 'holdout' : o.settledBy,
       grounded: true,
       same_domain: true,

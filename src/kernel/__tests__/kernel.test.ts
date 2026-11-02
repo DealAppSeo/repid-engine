@@ -391,7 +391,7 @@ describe('(e) the payee allow-list: default deny, like the limits', () => {
   });
 
   it('is a spend gate only: a post or a read is not asked for a payee', async () => {
-    const h = harness({ halCheck: async () => ({ verdict: 'PASS', method: 'fact-check', votes: [], settled_by: null, grounded: true, same_domain: true }) });
+    const h = harness({ halCheck: async () => ({ verdict: 'PASS', method: 'fact-check', votes: [{ family: 'a', verdict: 'PASS' }, { family: 'b', verdict: 'PASS' }], settled_by: null, grounded: true, same_domain: true }) });
     await h.ledger.appendPolicy(await signedPolicy(h.owner, { payees: [] }), iso);
     expect((await runUnderKernel(postRequest(), jest.fn(async () => 'ok'), h.deps)).verdict).toBe('ALLOW');
     // CC1 2026-10-21 (P0-I3-01): flag OFF a read is caller-asserted, so it IS held to the owner's spend
@@ -408,7 +408,7 @@ describe('(e) the payee allow-list: default deny, like the limits', () => {
 
 describe('(f) the receipt does not let a resetting cap read as a lifetime one', () => {
   it('every kind of call says the total cap is per policy version and resets on supersession', async () => {
-    const h = harness({ halCheck: async () => ({ verdict: 'PASS', method: 'fact-check', votes: [], settled_by: null, grounded: true, same_domain: true }) });
+    const h = harness({ halCheck: async () => ({ verdict: 'PASS', method: 'fact-check', votes: [{ family: 'a', verdict: 'PASS' }, { family: 'b', verdict: 'PASS' }], settled_by: null, grounded: true, same_domain: true }) });
     await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
     const receipts: KernelReceipt[] = [];
     for (const [req, tool] of [
