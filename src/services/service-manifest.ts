@@ -89,10 +89,14 @@ export interface ServiceManifest {
     url: string;
   } | null;
 
-  /** The two renderers, named on the object itself so neither can drift silently. */
+  /**
+   * The two renderers, named on the object itself so neither can drift silently.
+   * `human` is null until a real human page exists: the engine serves no HTML service page
+   * and trustmarket.dev/service/<id> 404s (2026-11-02). Null says so; a dead link claims it.
+   */
   renderers: {
     machine: string;
-    human: string;
+    human: string | null;
   };
 
   /** Anything a consumer should know before trusting a field above. */
@@ -352,7 +356,7 @@ async function assembleManifest(svc: {
 
     renderers: {
       machine: `${base}/api/v1/services/${svc.id}/manifest.json`,
-      human: `https://trustmarket.dev/service/${svc.id}`,
+      human: null,
     },
 
     caveats,
