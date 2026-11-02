@@ -498,6 +498,14 @@ export async function applyServiceFulfilledDeltas(
       if (taskType !== null) {
         const verdict = fullContract.result?.verdict || null;
 
+        // SAME_OWNER_SETTLEMENT_MODE also covers the public ERC-8004 feedback this row leads to. Under
+        // enforce a same/unknown-owner trade gets no inline write below AND this row is born processed,
+        // because FeedbackLoopWorker (which polls processed_at IS NULL) is what writes it once the payment
+        // confirms. shadow: recorded, written as today. off: no new keys.
+        const ownerTag = owner.provider.meta.same_owner_settlement;
+        const notCounted = ownerTag?.would_not_count ?? null;
+        const skipOnChain = ownerTag?.counted === false;
+
         const { data: insertedEvent, error: insertErr } = await db.from('repid_events').insert({
           subject_id: contract.provider_agent_id,
           subject_type: 'agent',
@@ -513,7 +521,9 @@ export async function applyServiceFulfilledDeltas(
               task_type: taskType,
               verdict: verdict,
             },
+            ...(notCounted ? { [skipOnChain ? 'onchain_skipped' : 'onchain_would_skip']: notCounted } : {}),
           },
+          ...(skipOnChain ? { processed_at: new Date().toISOString() } : {}),
         }).select('id').maybeSingle();
 
         if (insertErr) {
@@ -521,6 +531,10 @@ export async function applyServiceFulfilledDeltas(
             `[applyServiceFulfilledDeltas] repid_events bridge insert FAILED:`,
             insertErr.message ?? insertErr,
             (insertErr as any).stack ?? new Error().stack
+          );
+        } else if (skipOnChain) {
+          console.log(
+            `[applyServiceFulfilledDeltas] onchain_skipped: ${notCounted} for contract ${contract.id} (SAME_OWNER_SETTLEMENT_MODE=enforce); bridge row written closed`,
           );
         } else {
           console.log(`[applyServiceFulfilledDeltas] repid_events bridge insert SUCCEEDED for contract ${contract.id}`);
@@ -674,11 +688,15 @@ export async function applyServiceOutcomeDeltas(
   const baseDelta =
     rating === 'ok' ? SERVICE_OUTCOME_OK_NUDGE : SERVICE_OUTCOME_BASE[rating];
   const raterWeight = computeRaterWeight(raterRepid);
-  const providerDelta = isSimulated ? 0 : Math.round(baseDelta * raterWeight);
+  const ungatedDelta = isSimulated ? 0 : Math.round(baseDelta * raterWeight);
+  // SAME_OWNER_SETTLEMENT_MODE, same rule as T1/T2. Only the provider is scored here. A withheld delta
+  // still writes its (0, tagged) row so the reason is on the ledger; off/shadow write exactly as before.
+  const owner = (await gateSettlementDeltas(contract, { provider: ungatedDelta, buyer: 0 })).provider;
+  const providerDelta = owner.delta;
   const disputeEligible = rating === 'bad';
 
   let scoreEventApplied = false;
-  if (providerDelta !== 0) {
+  if (ungatedDelta !== 0) {
     await applyValidationEvent(
       contract.provider_agent_id,
       'SERVICE_OUTCOME',
@@ -694,6 +712,7 @@ export async function applyServiceOutcomeDeltas(
         // Consensus-divergence hook: a later pass can set/read this to discount
         // a rating that diverges from the T1/T2 signals. Not computed in T3 v1.
         divergence_discounted: false,
+        ...owner.meta,
       },
     );
     scoreEventApplied = true;
@@ -717,29 +736,35 @@ export async function applyServiceDisputeResolution(
   }
 
   const deltas = SERVICE_DISPUTE_DELTAS[verdict];
+  // SAME_OWNER_SETTLEMENT_MODE, same rule as T1/T2: a dispute between two agents of one owner is not
+  // independent evidence either way, so under enforce neither side moves (penalty and award alike);
+  // the row is still written (0, tagged). off/shadow: the deltas below are unchanged.
+  const owner = await gateSettlementDeltas(contract, deltas);
 
   if (deltas.provider !== 0) {
     await applyValidationEvent(
       contract.provider_agent_id,
       deltas.provider > 0 ? 'SERVICE_FULFILLED' : 'VALIDATION_FAILED',
-      deltas.provider,
+      owner.provider.delta,
       {
         contract_id: contract.id,
         verdict,
         role: 'provider',
+        ...owner.provider.meta,
       }
     );
   }
-  
+
   if (deltas.buyer !== 0) {
     await applyValidationEvent(
       contract.buyer_agent_id,
       deltas.buyer > 0 ? 'SERVICE_FULFILLED' : 'VALIDATION_FAILED',
-      deltas.buyer,
+      owner.buyer.delta,
       {
         contract_id: contract.id,
         verdict,
         role: 'buyer',
+        ...owner.buyer.meta,
       }
     );
   }

@@ -12,6 +12,11 @@
  *                  (would_not_count: same_owner | owner_unknown | null); no number changes.
  *   'enforce'      same owner, or an owner that cannot be established, earns 0 canonical RepID.
  *
+ * WHERE IT APPLIES (validation-repid-delta.ts): T1 SERVICE_FULFILLED, T2 SERVICE_SATISFIED, T3
+ * SERVICE_OUTCOME, dispute deltas (both sides, penalty and award), and the ERC-8004 on-chain write
+ * the T1 bridge row leads to (inline call skipped + bridge row born processed so FeedbackLoopWorker
+ * never drains it). Payment grounding uses counterpartyIndependenceFor below.
+ *
  * OWNERS. One rule, not a second: #1470's verifier check (bounty-authorization.ts
  * verifierIndependence) over agent-owner-resolver. Self and any shared identity claim = same owner;
  * anything not POSITIVELY a different owner in a comparable namespace = owner_unknown. Fail closed.
