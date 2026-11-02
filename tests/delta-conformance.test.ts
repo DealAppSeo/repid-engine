@@ -56,6 +56,18 @@ describe('SAME_OWNER_SETTLEMENT_MODE=enforce: a withheld same-owner settlement r
     expect(statuses(row({ delta: 0, metadata: { role: 'provider', same_owner_settlement: tag(true, 10) } }))).toContain('A2A_FULFILLED:DEVIATES');
     expect(statuses(row({ delta: 10, metadata: { role: 'provider', same_owner_settlement: tag(false, 10) } }))).toContain('A2A_FULFILLED:DEVIATES');
   });
+  it('withheld T3 outcome and dispute rows conform; withheld rows that still moved deviate', () => {
+    const outcome = (delta: number, counted: boolean) => row({ event_type: 'SERVICE_OUTCOME', delta,
+      metadata: { role: 'provider', outcome_rating: 'good', rater_repid_at_rating: 1000, same_owner_settlement: tag(counted, 60) } });
+    expect(statuses(outcome(0, false))).toContain('A2A_OUTCOME:CONFORMS');
+    expect(statuses(outcome(60, false))).toContain('A2A_OUTCOME:DEVIATES');
+    expect(statuses(outcome(0, true))).toContain('A2A_OUTCOME:DEVIATES');
+    const dispute = (delta: number, counted: boolean) => row({ event_type: 'VALIDATION_FAILED', delta,
+      metadata: { role: 'provider', verdict: 'provider_at_fault', same_owner_settlement: tag(counted, -100) } });
+    expect(statuses(dispute(0, false))).toContain('A2A_DISPUTE:CONFORMS');
+    expect(statuses(dispute(-100, false))).toContain('A2A_DISPUTE:DEVIATES');
+    expect(statuses(dispute(0, true))).toContain('A2A_DISPUTE:DEVIATES');
+  });
 });
 
 describe('each defect class is caught (break the property, watch it go red)', () => {

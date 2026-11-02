@@ -150,6 +150,7 @@ function checkPrimary(row: ScoreEventRow): RowVerdict {
 
   // --- A2A dispute (metadata.verdict from the dispute worker) -------------------------------
   if ((m.verdict === 'provider_at_fault' || m.verdict === 'buyer_at_fault') && (role === 'provider' || role === 'buyer')) {
+    if (withheldSameOwner(m)) return eq(row, 'A2A_DISPUTE', 0, `dispute ${m.verdict}, ${role} withheld: ${m.same_owner_settlement.would_not_count}`);
     return eq(row, 'A2A_DISPUTE', SERVICE_DISPUTE_DELTAS[m.verdict as 'provider_at_fault' | 'buyer_at_fault'][role as 'provider' | 'buyer'], `dispute ${m.verdict}, ${role}`);
   }
   // --- signed writers that reuse the generic validator vocabulary --------------------------
@@ -190,6 +191,7 @@ function checkPrimary(row: ScoreEventRow): RowVerdict {
     case 'SERVICE_OUTCOME': {
       const rating = m.outcome_rating as 'good' | 'ok' | 'bad';
       if (!(rating in SERVICE_OUTCOME_BASE)) return v(row, 'A2A_OUTCOME', 'DEVIATES', `unknown outcome_rating ${String(rating)}`);
+      if (withheldSameOwner(m)) return eq(row, 'A2A_OUTCOME', 0, `outcome ${rating} withheld: ${m.same_owner_settlement.would_not_count}`);
       const w = computeRaterWeight(num(m.rater_repid_at_rating));
       return eq(row, 'A2A_OUTCOME', Math.round((rating === 'ok' ? 0 : SERVICE_OUTCOME_BASE[rating]) * w), `outcome ${rating} w=${w}`);
     }
