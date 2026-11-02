@@ -20,6 +20,7 @@ jest.mock('../src/hal/ground-truth-gate', () => ({
 }));
 
 import { completionBudget, factCheck, type FactCheckProviderCfg } from '../src/hal/fact-check';
+import { logLlmCall } from '../src/billing/log-call';
 
 const cfg = (name: string, model: string, family: string, tier: 'free' | 'cheap' = 'free'): FactCheckProviderCfg =>
   ({ name, endpoint: `http://${name}.test/v1`, apiKey: 'k', model, family, tier });
@@ -111,5 +112,56 @@ describe('completionBudget', () => {
       expect(completionBudget(c, 512)).toBe(512);
     }
     expect(completionBudget(ZAI_GLM, 100_000)).toBe(100_000);
+  });
+});
+
+describe('a reply cut off at the cap is never a vote, even when its text holds a complete verdict JSON', () => {
+  // A model that drafts a provisional verdict mid-thought and is then cut off has not answered.
+  const DRAFT = 'First pass: {"verdict":"FALSE","confidence":80,"note":"draft"} but let me double check the date before I commit';
+  const FALSE_AT_STOP = { content: '{"verdict":"FALSE","confidence":90,"note":"wrong"}' };
+  const callsTo = (provider: string) => (logLlmCall as jest.Mock).mock.calls.map((c) => c[0]).filter((e) => e.provider === provider);
+
+  beforeEach(() => (logLlmCall as jest.Mock).mockClear());
+
+  it.each([
+    ['in content', { content: DRAFT }],
+    ['in the reasoning field when content is empty', { content: '', reasoning: DRAFT }],
+  ])('finish_reason length with the draft %s is an ERROR, logged as failed, and cannot complete a veto', async (_where, message) => {
+    (global as any).fetch = jest.fn(async (url: string) => (String(url).includes('groq') ? reply(FALSE_AT_STOP, 'stop') : reply(message, 'length')));
+    const r = await factCheck('Some claim.', [GROQ_OSS, ZAI_GLM]);
+    expect(vote(r, 'zai')).toMatchObject({ verdict: 'ERROR', confidence: 0, error: 'unparseable reply (finish_reason length)' });
+    expect(callsTo('zai')[0]).toMatchObject({ status: 'failed', error_message: 'unparseable reply (finish_reason length)' });
+    // One real FALSE alone is held below a veto; the draft FALSE must not be the second family.
+    expect(r.families_used).toBe(1);
+    expect(r.decision).not.toBe('vetoed');
+  });
+
+  it('the same reply that finished (finish_reason stop) is counted, so only truncation changes', async () => {
+    (global as any).fetch = jest.fn(async (url: string) => (String(url).includes('groq') ? reply(FALSE_AT_STOP, 'stop') : reply({ content: DRAFT }, 'stop')));
+    const r = await factCheck('Some claim.', [GROQ_OSS, ZAI_GLM]);
+    expect(vote(r, 'zai')).toMatchObject({ verdict: 'FALSE', confidence: 80 });
+    expect(r.decision).toBe('vetoed');
+  });
+
+  describe('anthropic dialect: stop_reason "max_tokens" is the cap, "end_turn" is a finished answer', () => {
+    const CLAUDE: FactCheckProviderCfg = { ...cfg('anthropic', 'claude-haiku-4-5', 'anthropic'), dialect: 'anthropic' };
+    const claude = (stop_reason: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ content: [{ type: 'text', text: '{"verdict":"FALSE","confidence":80}' }], stop_reason, usage: { input_tokens: 40, output_tokens: 20 } }),
+    });
+
+    it('max_tokens is an ERROR', async () => {
+      (global as any).fetch = jest.fn(async () => claude('max_tokens'));
+      const r = await factCheck('Some claim.', [CLAUDE]);
+      expect(vote(r, 'anthropic')).toMatchObject({ verdict: 'ERROR', error: 'unparseable reply (finish_reason max_tokens)' });
+      expect(callsTo('anthropic')[0]).toMatchObject({ status: 'failed' });
+    });
+
+    it('end_turn is counted', async () => {
+      (global as any).fetch = jest.fn(async () => claude('end_turn'));
+      const r = await factCheck('Some claim.', [CLAUDE]);
+      expect(vote(r, 'anthropic')).toMatchObject({ verdict: 'FALSE', confidence: 80 });
+    });
   });
 });

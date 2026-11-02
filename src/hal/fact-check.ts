@@ -619,8 +619,10 @@ export const THINKING_MAX_TOKENS = 2048;
  * Every provider was sent the same 512 (the default in factCheck).
  *
  * A bigger cap is only paid for when the model uses it (tokens are billed as generated), and the
- * wait is still bounded by the per-provider timeout. A reply that is STILL cut off stays an ERROR in
- * queryProvider: the cap makes room to finish, it never reads a verdict out of a truncated reply.
+ * wait is still bounded by the per-provider timeout. A reply that is STILL cut off is an ERROR in
+ * queryProvider (finish_reason 'length' / stop_reason 'max_tokens' is never parsed, even if the text
+ * holds a complete verdict JSON): the cap makes room to finish, it never reads a verdict out of a
+ * truncated reply.
  * `base` is the floor, so a caller that asks for more than the thinking cap keeps what it asked for.
  *
  * THINKING_MAX_TOKENS IS NOT MEASURED: no provider key is reachable from a dev sandbox. The check is
@@ -771,8 +773,12 @@ async function queryProvider(
     }
 
     // A reply with no parseable verdict + confidence did not answer: ERROR, never a default vote.
-    const parsed = parseVerdict(content);
+    // So is a reply CUT OFF at the cap ('length', or Anthropic's stop_reason 'max_tokens'), even when its
+    // text holds a complete verdict JSON: that is a draft mid-thought, not the model's answer. It is not
+    // parsed at all, and it logs and returns as the same "unparseable reply (finish_reason ...)" error.
     const finish = data?.choices?.[0]?.finish_reason ?? data?.stop_reason;
+    const truncated = finish === 'length' || finish === 'max_tokens';
+    const parsed = truncated ? null : parseVerdict(content);
     const unparseable = parsed ? undefined : `unparseable reply${finish ? ` (finish_reason ${finish})` : ''}`;
     logLlmCall({
       call_id,
