@@ -21,7 +21,7 @@
  * keccak256 `receipt_hash` (algorithm named honestly as `keccak256`, not mislabeled `sha256`).
  */
 import type { KernelReceipt } from './types';
-import { KERNEL_RECEIPT_SCHEMA } from './types';
+import { KERNEL_RECEIPT_SCHEMA, KERNEL_RECEIPT_SCHEMA_SIGNED } from './types';
 import { receiptHash } from './receipt';
 
 export type ClaimStatus = 'VERIFIED' | 'NOT_CHECKED' | 'FAILED' | 'NOT_APPLICABLE';
@@ -66,7 +66,7 @@ const HEX32 = /^0x[0-9a-f]{64}$/;
 
 function integrity(r: KernelReceipt): Claim {
   const shapeOk = typeof r.header.receipt_hash === 'string' && HEX32.test(r.header.receipt_hash);
-  const schemaOk = r.header.schema === KERNEL_RECEIPT_SCHEMA;
+  const schemaOk = r.header.schema === KERNEL_RECEIPT_SCHEMA || r.header.schema === KERNEL_RECEIPT_SCHEMA_SIGNED;
   // Recompute, never trust the stored value: a well-formed hash over different contents is exactly
   // the tampering this claim exists to catch. It used to check only the hash's shape, and said
   // "chained" from a single receipt that cannot see its predecessor.
@@ -91,7 +91,9 @@ function integrity(r: KernelReceipt): Claim {
     statement: 'The record is whole: its hash matches its contents.',
     supports,
     gaps: [
-      'unsigned — integrity rests on the keccak256 hash, not a signature (header.signer is null)',
+      r.header.signer === null
+        ? 'unsigned — integrity rests on the keccak256 hash, not a signature (header.signer is null)'
+        : 'the Ed25519 signature is not checked here: verifyReceiptAuthenticity checks it against a trusted signer list',
       'the chain is not checked here: prev_hash is reported, not compared with the previous receipt (verifyReceiptChain does that)',
     ],
   };

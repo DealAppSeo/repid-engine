@@ -8,6 +8,8 @@
  *                       agent's ACCOUNTABLE ROOT (accountable-root.ts); a signature from anyone
  *                       else — however valid — is refused.
  *   GET  /receipt/:id   the ledger entries for one call.
+ *   GET  /receipt-signers  the public keys that sign kernel-receipt/2 (receiptSignersHandler; public,
+ *                       mounted ahead of authMiddleware in index.ts). 404 when signing is not configured.
  *
  * A KEY BOUND TO ONE AGENT (req.agent_id, set by authMiddleware for a DB-issued agent key) may act
  * only on that agent: /decide, /policy and /receipt refuse with 403 when the agent they name is
@@ -32,7 +34,8 @@ import { makeKernelHalCheck } from '../kernel/hal-adapter';
 import { ownerEvidenceFromRoot, parseSignedPolicy, policyHash, verifyOwnerPolicy } from '../kernel/policy';
 import { PolicyNonceError, StoreLedger, createJsonlStore } from '../kernel/store';
 import { indexKernelReceiptToDb } from '../kernel/receipt-db-index';
-import type { GateDeps, KernelReceipt, OwnerResolver } from '../kernel/types';
+import type { GateDeps, KernelReceipt, OwnerResolver, ReceiptSigner } from '../kernel/types';
+import { KERNEL_RECEIPT_SIGNATURE_DOMAIN, kernelReceiptSigningKey, trustedKernelReceiptSigners } from '../kernel/receipt-signing';
 import { createCapabilityRegistry, logCapabilityRegistryEmpty, type CapabilityRegistry } from '../kernel/capability-registry';
 import { toSixClaimStatement, type InTotoStatement } from '../kernel/six-claims';
 
@@ -120,6 +123,33 @@ export function defaultDeps(): KernelRouteDeps {
     // Flag ON ⇒ the kernel capability registry governs every class (fail-closed). Empty ⇒ registry_empty.
     ...(kernelCapabilityRegistryEnabled() ? { capabilityRegistry: kernelCapabilityRegistry() } : {}),
   };
+}
+
+/**
+ * GET /api/v1/kernel/receipt-signers — the Ed25519 PUBLIC keys behind kernel-receipt/2, so a third
+ * party can verify a receipt without trusting this server's ledger. PUBLIC (mounted before
+ * authMiddleware in index.ts): it returns public keys and fingerprints only, never key material.
+ * 404 when nothing is configured, so an unsigned deployment never looks like a signing one.
+ * A signing key that is set but unusable is not published (receipts then fail closed at the ledger).
+ */
+export function receiptSignersHandler(_req: Request, res: Response): void {
+  let current: ReceiptSigner | null = null;
+  try {
+    current = kernelReceiptSigningKey()?.signer ?? null;
+  } catch {
+    current = null;
+  }
+  const trusted = trustedKernelReceiptSigners();
+  if (current === null && trusted.length === 0) {
+    res.status(404).json({ error: 'not_configured', detail: 'kernel receipts are unsigned (kernel-receipt/1) on this deployment' });
+    return;
+  }
+  res.status(200).json({
+    alg: 'ed25519',
+    current,
+    trusted,
+    signed_bytes: `utf8(${JSON.stringify(KERNEL_RECEIPT_SIGNATURE_DOMAIN)} + canonical JSON of the receipt without header.receipt_hash and header.signature)`,
+  });
 }
 
 const CALL_ID = /^[0-9a-zA-Z-]{8,64}$/;

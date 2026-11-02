@@ -11,6 +11,14 @@
  * field removed; `prev_hash` names the entry before it. Edit any entry and its hash stops matching;
  * remove one and the next entry's `prev_hash` points at nothing.
  *
+ * SIGNED RECEIPTS (kernel-receipt/2, RT-7). A hash needs no key, so a well-formed v1 receipt proves
+ * nothing about WHO made it. When KERNEL_RECEIPT_SIGNING_KEY is set (receipt-signing.ts) the kernel
+ * emits kernel-receipt/2: header.signer names an Ed25519 key and header.signature signs the canonical
+ * receipt without receipt_hash and signature. receipt_hash then covers the signature too, so receiptHash
+ * and the chain are unchanged. validateReceipt says WELL-FORMED (and, for v2, that the signature
+ * verifies under the key it names); verifyReceiptAuthenticity says AUTHENTIC, which also needs that key
+ * in the verifier's trusted list. An unsigned v1 receipt can be well-formed; it is never authentic.
+ *
  * validateReceipt() is code, not JSON Schema, because the rules that matter are CROSS-FIELD: an
  * ALLOW that cleared fewer checks than its class requires, a payment on a refused call, a band
  * restore counted from a simulated run. A schema can say a field is a boolean; it cannot say the
@@ -19,7 +27,8 @@
  */
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { canonicalJson } from '../services/owner-authorization';
-import { CALLER_ASSERTED_CLASS_NOTE, CAPABILITY_ENFORCED_CHECK, CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, UNVERIFIED_CLASS_CHECKS, parseAmountRaw } from './decide';
+import { CALLER_ASSERTED_CLASS_NOTE, CAPABILITY_ENFORCED_CHECK, CUMULATIVE_TOTAL_NOTE, RECEIPT_UNSIGNED_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, UNVERIFIED_CLASS_CHECKS, parseAmountRaw } from './decide';
+import { KERNEL_RECEIPT_SIGNATURE_DOMAIN, kernelReceiptSigningKey, signerFromPublicKey, trustedKernelReceiptSigners, verifyEd25519 } from './receipt-signing';
 import type {
   ChainTip,
   DecisionLeg,
@@ -35,7 +44,7 @@ import type {
   ValidateContext,
   VerificationLeg,
 } from './types';
-import { KERNEL_RECEIPT_SCHEMA, KERNEL_RECEIPT_VERSION, TOOL_CLASSES } from './types';
+import { KERNEL_RECEIPT_SCHEMA, KERNEL_RECEIPT_SCHEMA_SIGNED, KERNEL_RECEIPT_VERSION, KERNEL_RECEIPT_VERSION_SIGNED, TOOL_CLASSES } from './types';
 
 /**
  * The MVP runs SIMULATED: no real value moves. That is the safe default — a simulated record can
@@ -55,6 +64,19 @@ export function receiptHash(r: KernelReceipt): string {
   const { receipt_hash: _omit, ...header } = r.header;
   return keccak256(toUtf8Bytes(canonicalJson({ ...r, header })));
 }
+
+/**
+ * The bytes a kernel-receipt/2 signature signs: the domain tag, then the canonical JSON of the receipt
+ * without `header.receipt_hash` and `header.signature` (the same canonicalisation as receiptHash).
+ */
+export function receiptSigningMessage(r: KernelReceipt): string {
+  const { receipt_hash: _h, signature: _s, ...header } = r.header;
+  return KERNEL_RECEIPT_SIGNATURE_DOMAIN + canonicalJson({ ...r, header });
+}
+
+/** What a signed receipt says instead of "unsigned": the signature names a key, the verifier decides trust. */
+export const SIGNER_TRUST_NOTE =
+  'signer_trust (the signature proves which key sealed this receipt, not that the key is the engine\'s: a verifier checks header.signer against its own trusted list)';
 
 // ── the legs ────────────────────────────────────────────────────────────────────────────────────
 
@@ -262,6 +284,18 @@ export function buildReceipt(input: BuildReceiptInput): KernelReceipt {
     }),
     verification: buildVerificationLeg(request.tool.class, input.hal, input.env.is_simulated),
   };
+  // No key: kernel-receipt/1, exactly as before. A key that is set but unusable throws here, so the
+  // ledger write fails and the tool does not run.
+  const key = kernelReceiptSigningKey();
+  if (key) {
+    draft.header.schema = KERNEL_RECEIPT_SCHEMA_SIGNED;
+    draft.header.version = KERNEL_RECEIPT_VERSION_SIGNED;
+    draft.header.signer = key.signer;
+    draft.decision.does_not_attest = draft.decision.does_not_attest.map((s) => (s === RECEIPT_UNSIGNED_NOTE ? SIGNER_TRUST_NOTE : s));
+    const message = receiptSigningMessage(draft);
+    if (key.leaks(message)) throw new Error('[kernel] refusing to seal a receipt that contains the signing key');
+    draft.header.signature = key.sign(message);
+  }
   draft.header.receipt_hash = receiptHash(draft);
   return draft;
 }
@@ -288,7 +322,8 @@ export type InvariantCode =
   | 'does_not_attest_missing_total_scope'
   | 'simulation_mismatch'
   | 'settlement_unmeasured'
-  | 'tool_class_unattested';
+  | 'tool_class_unattested'
+  | 'signature_invalid';
 
 export interface ReceiptViolation {
   code: InvariantCode;
@@ -310,6 +345,11 @@ const HASH_PATHS = new Set([
   'decision.policy.policy_hash',
   'payment.tx_hash',
   'payment.authorization_nonce',
+  // kernel-receipt/2: public material, each bound by the signature check (a key that is not this
+  // receipt's public key fails it), so none of them can carry a secret and still validate.
+  'header.signer.public_key',
+  'header.signer.fingerprint',
+  'header.signature',
 ]);
 
 /** Keys that must never appear anywhere in a receipt: the receipt carries hashes, not content. */
@@ -318,6 +358,7 @@ const SECRET_KEY_NAME = /(private[_-]?key|secret|mnemonic|seed[_-]?phrase|api[_-
 const SECRET_VALUES: RegExp[] = [
   /eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\./, // JWT
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /MC4CAQAwBQYDK2VwBCIEI/, // an Ed25519 PKCS8 private key in base64: the format KERNEL_RECEIPT_SIGNING_KEY takes
   /\b(?:sk-[A-Za-z0-9]{16,}|gsk_[A-Za-z0-9]{16,}|xai-[A-Za-z0-9]{16,}|AIza[0-9A-Za-z_-]{20,}|sb_secret_[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{20,})/,
   /(?<![0-9a-zA-Z])[0-9a-fA-F]{64}(?![0-9a-zA-Z])/, // 32 bytes of hex with no 0x: the shape of a private key
 ];
@@ -367,14 +408,18 @@ function structureErrors(r: unknown): string[] {
   const P = p as Record<string, any>;
   const V = v as Record<string, any>;
 
-  need(H['schema'] === KERNEL_RECEIPT_SCHEMA && H['version'] === KERNEL_RECEIPT_VERSION, 'header.schema/version');
+  const signed = H['schema'] === KERNEL_RECEIPT_SCHEMA_SIGNED && H['version'] === KERNEL_RECEIPT_VERSION_SIGNED;
+  need((H['schema'] === KERNEL_RECEIPT_SCHEMA && H['version'] === KERNEL_RECEIPT_VERSION) || signed, 'header.schema/version');
   need(isStr(H['receipt_id']) && H['receipt_id'].length > 0, 'header.receipt_id');
   need(isStrOrNull(H['prev_receipt_id']) && (H['prev_receipt_id'] === null) === (H['prev_hash'] === null), 'header.prev_receipt_id/prev_hash must both be set or both null');
   need(H['prev_hash'] === null || (isStr(H['prev_hash']) && HEX32.test(H['prev_hash'])), 'header.prev_hash');
   need(isStr(H['created_at']) && !Number.isNaN(Date.parse(H['created_at'])), 'header.created_at');
   need(isStr(H['receipt_hash']) && HEX32.test(H['receipt_hash']), 'header.receipt_hash');
   need(isObj(H['env']) && isStr(H['env']['network']) && Number.isSafeInteger(H['env']['chain_id']) && isBool(H['env']['is_simulated']), 'header.env');
-  need(H['signer'] === null, 'header.signer must be null in kernel-receipt/1');
+  if (signed) {
+    const g = H['signer'];
+    need(isObj(g) && g['alg'] === 'ed25519' && isStr(g['public_key']) && HEX32.test(g['public_key']) && isStr(g['fingerprint']) && HEX32.test(g['fingerprint']) && isStr(H['signature']) && /^0x[0-9a-fA-F]{128}$/.test(H['signature']), 'header.signer/signature: kernel-receipt/2 carries an ed25519 signer and a signature');
+  } else need(H['signer'] === null, 'header.signer must be null in kernel-receipt/1');
 
   need(isObj(S['agent']) && isStr(S['agent']['agent_id']) && isStr(S['agent']['agent_name']), 'subject.agent');
   need(isObj(S['owner']) && isStrOrNull(S['owner']['wallet']) && isStrOrNull(S['owner']['assurance']) && oneOf(S['owner']['status'], ['resolved', 'none', 'unknown']), 'subject.owner');
@@ -438,6 +483,14 @@ export function validateReceipt(receipt: unknown, ctx: ValidateContext = {}): Re
   const allow = d.verdict === 'ALLOW';
 
   if (receiptHash(r) !== r.header.receipt_hash) add('hash_mismatch', 'header.receipt_hash', 'the hash does not match the receipt body');
+  // kernel-receipt/2: the signature verifies under the key the receipt names. WHETHER that key is
+  // trusted is not a format question; verifyReceiptAuthenticity answers it.
+  if (r.header.signer !== null) {
+    const s = r.header.signer;
+    if (signerFromPublicKey(s.public_key)?.fingerprint !== s.fingerprint.toLowerCase() || !verifyEd25519(s.public_key, receiptSigningMessage(r), r.header.signature ?? '')) {
+      add('signature_invalid', 'header.signature', 'the signature does not verify under header.signer, or the fingerprint is not that key\'s');
+    }
+  }
   if (d.blocking !== !allow) add('blocking_mismatch', 'decision.blocking', 'blocking must equal verdict !== ALLOW');
 
   // (1) payment only on an ALLOW
@@ -528,6 +581,35 @@ export function validateReceipt(receipt: unknown, ctx: ValidateContext = {}): Re
   }
 
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
+}
+
+// ── authenticity ────────────────────────────────────────────────────────────────────────────────
+
+export type ReceiptAuthenticity =
+  | { status: 'AUTHENTIC'; fingerprint: string }
+  | { status: 'NOT_AUTHENTIC'; reason: 'invalid' | 'unsigned' | 'untrusted_signer'; detail: string }
+  | { status: 'NOT_CHECKED'; reason: 'no_trusted_signers'; detail: string };
+
+/**
+ * WHO made this receipt, separate from whether it is well-formed. AUTHENTIC only when the receipt
+ * validates (which, for kernel-receipt/2, includes the signature verifying under header.signer) AND
+ * header.signer is one of `trusted` (default: KERNEL_RECEIPT_TRUSTED_SIGNERS). An unsigned
+ * kernel-receipt/1 is NOT_AUTHENTIC whatever is configured: anyone can mint one. With no trusted key
+ * a signed receipt is NOT_CHECKED, which is never a pass.
+ *
+ * Format is checked with the receipt's own id counted as persisted (as gateReceiptProblem does): an
+ * outcome row is signed with executed:true, and ledger order is verifyReceiptChain's job, not this one's.
+ */
+export function verifyReceiptAuthenticity(receipt: unknown, trusted: readonly { fingerprint: string }[] = trustedKernelReceiptSigners()): ReceiptAuthenticity {
+  const id = isObj(receipt) && isObj(receipt['header']) ? receipt['header']['receipt_id'] : undefined;
+  const v = validateReceipt(receipt, { persisted_decision_ids: new Set(isStr(id) ? [id] : []) });
+  if (!v.ok) return { status: 'NOT_AUTHENTIC', reason: 'invalid', detail: [...new Set(v.errors.map((e) => e.code))].join(',') };
+  const signer = (receipt as KernelReceipt).header.signer;
+  if (signer === null) return { status: 'NOT_AUTHENTIC', reason: 'unsigned', detail: 'kernel-receipt/1 is unsigned: well-formed, but anyone can mint one' };
+  if (trusted.length === 0) return { status: 'NOT_CHECKED', reason: 'no_trusted_signers', detail: 'no trusted signer is configured, so the signing key cannot be checked' };
+  const fp = signer.fingerprint.toLowerCase();
+  if (!trusted.some((t) => t.fingerprint.toLowerCase() === fp)) return { status: 'NOT_AUTHENTIC', reason: 'untrusted_signer', detail: `signed by ${fp}, which is not a trusted signer` };
+  return { status: 'AUTHENTIC', fingerprint: fp };
 }
 
 // ── the chain ───────────────────────────────────────────────────────────────────────────────────

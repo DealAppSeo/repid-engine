@@ -28,7 +28,7 @@ import { createKernelRouter } from '../../src/routes/kernel';
 import { decide, parseKernelRequest } from '../../src/kernel/decide';
 import { dryDecision, runUnderKernel } from '../../src/kernel/gate';
 import { POLICY_DOMAIN, POLICY_TYPES, parsePolicy, policyHash, policyTypedValue } from '../../src/kernel/policy';
-import { hashArgs, receiptHash, validateReceipt, verifyReceiptChain } from '../../src/kernel/receipt';
+import { hashArgs, receiptHash, validateReceipt, verifyReceiptAuthenticity, verifyReceiptChain } from '../../src/kernel/receipt';
 import { StoreLedger, createMemoryStore } from '../../src/kernel/store';
 import type { GateDeps, HalEvidence, KernelLedger, KernelReceipt } from '../../src/kernel/types';
 import { AGENT_ID, NOW_MS, PAYEE, harness, iso, postRequest, signedPolicy, spendRequest } from '../../src/kernel/__tests__/fixtures';
@@ -648,11 +648,17 @@ describe('receipts: forged, tampered, replayed', () => {
   // forgery can be told apart. This probe copies a GENUINE receipt's exact shape, changes the fields a
   // forger wants (agent, amount, payee, limits, id, time), and recomputes the keccak hash. No key is
   // involved anywhere.
+  //
+  // HELD since kernel-receipt/2 (Lane D): authenticity is a separate answer from format. The forgery
+  // stays WELL-FORMED (a hash needs no key, so it must), and verifyReceiptAuthenticity says it is NOT
+  // AUTHENTIC: unsigned here; with signing on, an edited signed receipt fails its signature and one
+  // signed by the forger's own key is untrusted (tests/kernel/signed-receipts.test.ts).
   it('RT-7 a receipt forged from a genuine receipt\'s exact shape (forger-chosen fields, hash recomputed, no key) must not be accepted as authentic', async () => {
     const h = await armed();
     const genuine = (await runUnderKernel(spendRequest({ amount_raw: '1' }), jest.fn(async () => 1), h.deps)).decision_receipt!;
     const forged = forgeFrom(genuine);
-    expect(validateReceipt(forged).ok).toBe(false); // SECURE: a receipt nobody but the engine could make
+    expect(validateReceipt(forged).ok).toBe(true); // CHARACTERISE: well-formed, by design
+    expect(verifyReceiptAuthenticity(forged).status).toBe('NOT_AUTHENTIC'); // SECURE: not a receipt the engine made
   });
   it('CHARACTERISE RT-7: the receipt itself says it is unsigned (so the limitation is stated, not hidden)', async () => {
     const h = await armed();

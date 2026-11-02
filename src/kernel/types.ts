@@ -33,6 +33,13 @@ import type { CapabilityReasonCode, ReadonlyCapabilityRegistry } from './capabil
 
 export const KERNEL_RECEIPT_SCHEMA = 'kernel-receipt/1' as const;
 export const KERNEL_RECEIPT_VERSION = 1 as const;
+/**
+ * The SIGNED receipt (RT-7). Emitted only when KERNEL_RECEIPT_SIGNING_KEY is set; without it the
+ * kernel emits kernel-receipt/1 exactly as before. Same body, plus header.signer (an Ed25519 public
+ * key) and header.signature. See receipt-signing.ts.
+ */
+export const KERNEL_RECEIPT_SCHEMA_SIGNED = 'kernel-receipt/2' as const;
+export const KERNEL_RECEIPT_VERSION_SIGNED = 2 as const;
 
 /** The classes a tool call can be filed under. Anything else is `unknown_tool_class` → DENY. */
 export type ToolClass = 'read' | 'spend' | 'post' | 'other';
@@ -301,9 +308,18 @@ export interface ReceiptEnv {
   is_simulated: boolean;
 }
 
+/** Who sealed a kernel-receipt/2. Public material only: the key and its sha256 fingerprint, 0x hex. */
+export interface ReceiptSigner {
+  alg: 'ed25519';
+  /** The raw 32-byte Ed25519 public key, 0x + 64 hex. */
+  public_key: string;
+  /** sha256 of the raw public key, 0x + 64 hex. */
+  fingerprint: string;
+}
+
 export interface ReceiptHeader {
-  schema: typeof KERNEL_RECEIPT_SCHEMA;
-  version: typeof KERNEL_RECEIPT_VERSION;
+  schema: typeof KERNEL_RECEIPT_SCHEMA | typeof KERNEL_RECEIPT_SCHEMA_SIGNED;
+  version: typeof KERNEL_RECEIPT_VERSION | typeof KERNEL_RECEIPT_VERSION_SIGNED;
   /**
    * The CALL's id, minted BEFORE the tool runs. An executed call has two ledger entries with the
    * same id: the decision row (executed:false) written first, then the outcome row (executed:true).
@@ -317,8 +333,13 @@ export interface ReceiptHeader {
   /** keccak256 of the canonical JSON of this receipt with this field removed. */
   receipt_hash: string;
   env: ReceiptEnv;
-  /** Unsigned in the MVP: integrity is the hash plus the chain, not an attestation. */
-  signer: null;
+  /** null in kernel-receipt/1 (integrity is the hash plus the chain); the sealing key in kernel-receipt/2. */
+  signer: ReceiptSigner | null;
+  /**
+   * kernel-receipt/2 only: Ed25519 over the canonical receipt without receipt_hash and signature,
+   * 0x + 128 hex. Inside receipt_hash, so the chain commits to it.
+   */
+  signature?: string;
 }
 
 export interface ReceiptSubject {

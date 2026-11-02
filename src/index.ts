@@ -94,7 +94,7 @@ import memoryHeatStatusRouter from './routes/memory-heat-status';
 import memoryHeatEvictRouter from './routes/memory-heat-evict-route';
 import { runMemoryRootAnchorSweep } from './memory/memory-root-anchor-sweep';
 import proofCarryingEmitRouter from './routes/proof-carrying-emit';
-import kernelRouter from './routes/kernel';
+import kernelRouter, { receiptSignersHandler } from './routes/kernel';
 import subscribeRouter from './routes/subscribe';
 import { publicRouter as referralTrackRouter, statsRouter as referralStatsRouter } from './routes/referrals';
 import securityStatusRouter from './routes/security-status';
@@ -548,6 +548,10 @@ app.use('/api/v1', policiesRouter);
 // The engine attestation is the ENGINE's own key, like the EAS/BASE_SEPOLIA attestor keys — never a
 // user/custody key. See routes/v1/receipts.ts + services/receipt-attestation.ts.
 app.use('/api/v1', receiptLookupRouter);
+// Kernel receipt signers (RT-7): the Ed25519 PUBLIC keys behind kernel-receipt/2, for third-party
+// verification. Public like /receipts/signer above; 404 until KERNEL_RECEIPT_SIGNING_KEY or
+// KERNEL_RECEIPT_TRUSTED_SIGNERS is set. The rest of /api/v1/kernel stays behind authMiddleware.
+app.get('/api/v1/kernel/receipt-signers', receiptSignersHandler);
 // Practice lane, slice P1 (2026-10-07): public and read-only, like the owner route above. One chain
 // read per request (the allowance), so it has its own limiter, mounted immediately before it.
 app.use('/api/v1/lane', laneLimiter);
