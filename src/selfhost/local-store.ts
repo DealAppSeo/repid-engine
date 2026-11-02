@@ -289,7 +289,14 @@ export class QueryBuilder implements PromiseLike<Result> {
   // --- execution ---
 
   private match(rows: Row[]): Row[] {
-    return rows.filter((r) => this.predicates.every((p) => p(r)));
+    // repid_score_events.is_shadow is NOT NULL DEFAULT false in prod. Local rows written without the key
+    // (every non-shadow row, and every row from before the column was read) must still satisfy
+    // .eq('is_shadow', false), or the canonical-only readers would see an empty ledger in LOCAL_MODE.
+    const shadowDefault = this.table === 'repid_score_events';
+    return rows.filter((r) => {
+      const probe = shadowDefault && r.is_shadow == null ? { ...r, is_shadow: false } : r;
+      return this.predicates.every((p) => p(probe));
+    });
   }
 
   private run(): Result {

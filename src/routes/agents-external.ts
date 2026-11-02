@@ -364,7 +364,8 @@ router.get('/:id/card', async (req: Request, res: Response) => {
   const { count: decisionCountRaw, error: decisionCountError } = await db
     .from('repid_score_events')
     .select('id', { count: 'exact', head: true })
-    .eq('agent_id', agentId);
+    .eq('agent_id', agentId)
+    .eq('is_shadow', false);
   const decisionCount = decisionCountError ? null : (decisionCountRaw ?? 0);
   const countOrNull = (r: { count: number | null; error: unknown }) => (r.error ? null : (r.count ?? 0));
 
@@ -377,16 +378,16 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     lastEventRes,
   ] = await Promise.all([
     db.from('repid_score_events').select('id', { count: 'exact', head: true })
-      .eq('agent_id', agentId).eq('hal_decision', 'clean'),
+      .eq('agent_id', agentId).eq('is_shadow', false).eq('hal_decision', 'clean'),
     db.from('repid_score_events').select('id', { count: 'exact', head: true })
-      .eq('agent_id', agentId).eq('hal_decision', 'flagged'),
+      .eq('agent_id', agentId).eq('is_shadow', false).eq('hal_decision', 'flagged'),
     db.from('repid_score_events').select('id', { count: 'exact', head: true })
-      .eq('agent_id', agentId).eq('hal_decision', 'vetoed'),
+      .eq('agent_id', agentId).eq('is_shadow', false).eq('hal_decision', 'vetoed'),
     db.from('repid_score_events').select('hal_score')
-      .eq('agent_id', agentId).not('hal_score', 'is', null)
+      .eq('agent_id', agentId).eq('is_shadow', false).not('hal_score', 'is', null)
       .order('created_at', { ascending: false }).limit(100),
     db.from('repid_score_events').select('created_at')
-      .eq('agent_id', agentId).order('created_at', { ascending: false }).limit(1),
+      .eq('agent_id', agentId).eq('is_shadow', false).order('created_at', { ascending: false }).limit(1),
   ]);
 
   // PROVENANCE — what actually backs this agent's score.
@@ -404,6 +405,7 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     .from('repid_score_events')
     .select('event_type, delta, contract_id, eas_attestation_id, zk_proof_id, economic_impact_usdc, metadata')
     .eq('agent_id', agentId)
+    .eq('is_shadow', false)
     .order('created_at', { ascending: false })
     .limit(PROVENANCE_SAMPLE);
 
@@ -1025,6 +1027,7 @@ router.get('/:id/repid', async (req: Request, res: Response) => {
     db.from('repid_score_events')
       .select('llm_provider,llm_model,hallucination_caught,delta')
       .eq('agent_id', agentId)
+      .eq('is_shadow', false)
       .not('llm_provider', 'is', null),
   ]);
 

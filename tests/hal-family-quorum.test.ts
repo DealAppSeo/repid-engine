@@ -30,7 +30,7 @@ jest.mock('../src/db', () => ({
   db: {
     from: (t: string) => {
       if (t === 'repid_agents') return { select: () => ({ eq: () => ({ single: async () => ({ data: (global as any).__pipAgentRow, error: (global as any).__pipAgentRow ? null : { message: 'nf' } }) }) }), update: (p: any) => ({ eq: () => { (global as any).__pipUpdateCalls.push(p); return Promise.resolve({ data: null, error: null }); } }) };
-      if (t === 'repid_score_events') return { select: (_c?: string, o?: any) => ({ eq: () => ({ limit: () => ({ maybeSingle: async () => ({ data: null, error: null }) }), then: (r: any) => r({ data: null, error: null, count: o?.head ? 0 : null }) }) }), insert: (p: any) => ({ select: () => ({ single: async () => { (global as any).__pipInsertCalls.push(p); return { data: { id: 1 }, error: null }; } }) }) };
+      if (t === 'repid_score_events') return { select: (_c?: string, o?: any) => ({ eq: () => ({ get eq() { return () => this; }, limit: () => ({ maybeSingle: async () => ({ data: null, error: null }) }), then: (r: any) => r({ data: null, error: null, count: o?.head ? 0 : null }) }) }), insert: (p: any) => ({ select: () => ({ single: async () => { (global as any).__pipInsertCalls.push(p); return { data: { id: 1 }, error: null }; } }) }) };
       return { select: () => ({ eq: () => ({ single: async () => ({ data: null, error: null }) }) }), insert: () => Promise.resolve({ data: null, error: null }), update: () => ({ eq: () => Promise.resolve({ data: null, error: null }) }) };
     }, rpc: async () => ({ data: null, error: null }),
   },

@@ -46,6 +46,7 @@ async function fetchRecentEvents(agentId: string, since: Date, limit = 50): Prom
     .from('repid_score_events')
     .select('id, created_at, delta, idempotency_key, event_type')
     .eq('agent_id', agentId)
+    .eq('is_shadow', false)
     .gte('created_at', since.toISOString())
     .order('created_at', { ascending: true })
     .limit(limit);

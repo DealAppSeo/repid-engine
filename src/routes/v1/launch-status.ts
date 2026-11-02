@@ -152,7 +152,7 @@ router.get('/status', async (_req: Request, res: Response) => {
   const [attestations, realSettlements, scoreEvents] = await Promise.all([
     safeCount('erc8004_reputation_writes', q => q.gte('created_at', since)),
     safeCount('x402_settlements', q => q.gte('created_at', since).eq('is_simulated', false)),
-    safeCount('repid_score_events', q => q.gte('created_at', since)),
+    safeCount('repid_score_events', q => q.eq('is_shadow', false).gte('created_at', since)),
   ]);
   if (attestations === null && realSettlements === null && scoreEvents === null) supabaseOk = false;
   const [heartbeat, audit, firecrawl] = await Promise.all([

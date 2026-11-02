@@ -37,7 +37,7 @@ export async function updateSupplyRate(signalType: string): Promise<void> {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { count } = await db
       .from('repid_score_events').select('id', { count: 'exact', head: true })
-      .eq('event_type', signalType).gte('created_at', sevenDaysAgo);
+      .eq('event_type', signalType).eq('is_shadow', false).gte('created_at', sevenDaysAgo);
     await db.from('repid_ecosystem_supply').upsert({
       signal_type: signalType,
       supply_rate_7d: (count ?? 0) / 7.0,

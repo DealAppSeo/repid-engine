@@ -69,7 +69,7 @@ if (award) {
 // RepID movement caused by this contract.
 const { data: events } = await sb.from('repid_score_events')
   .select('agent_id, event_type, delta, repid_before, repid_after')
-  .eq('contract_id', contract.id).order('created_at');
+  .eq('contract_id', contract.id).eq('is_shadow', false).order('created_at');
 
 // The on-chain reputation write CAUSED BY this contract.
 //

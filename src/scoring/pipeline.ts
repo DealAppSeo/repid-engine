@@ -280,12 +280,15 @@ async function loadExistingByKey(key: string): Promise<ScoreEventResult | null> 
   };
 }
 
-async function shouldTriggerProof(agentId: string, deltaMagnitude: number): Promise<boolean> {
+export async function shouldTriggerProof(agentId: string, deltaMagnitude: number): Promise<boolean> {
   if (deltaMagnitude >= 5) return true;
   const { count } = await db
     .from('repid_score_events')
     .select('id', { count: 'exact', head: true })
-    .eq('agent_id', agentId);
+    .eq('agent_id', agentId)
+    // Canonical events only: a shadow row is an observation, not an event that could be proven, so it
+    // must not move the every-10th cadence (it does not move the count of real events).
+    .eq('is_shadow', false);
   // Trigger every 10th event (count is the count BEFORE this insert).
   return typeof count === 'number' && count > 0 && (count + 1) % 10 === 0;
 }
@@ -654,7 +657,7 @@ export async function runScoreEvent(
     // `repid_delta_applied` is what actually MOVED the score — the two diverge
     // exactly when decay or the clamp took a bite, and that divergence is the
     // audit signal, not a bug (repid-delta.ts header: calculated vs applied).
-    // Shadow: `delta` is 0 (repid-sync-aggregator sums it with no is_shadow filter) and the score does
+    // Shadow: `delta` is 0 (readers also filter is_shadow = false) and the score does
     // not move; the earned delta stays in repid_delta_calculated + metadata.shadow.
     delta: shadow ? 0 : applied.delta_points,
     repid_before: applied.before,

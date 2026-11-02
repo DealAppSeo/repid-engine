@@ -253,7 +253,7 @@ router.get('/agents/:id', async (req: Request, res: Response) => {
 router.get('/agents/:id/history', async (req: Request, res: Response) => {
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
   const { data, error } = await db.from('repid_score_events').select('*')
-    .eq('agent_id', req.params.id)
+    .eq('agent_id', req.params.id).eq('is_shadow', false)
     .order('created_at', { ascending: false }).limit(limit);
   if (error) return res.status(500).json({ error: error.message });
   const enriched = (data ?? []).map((e: any) => ({
@@ -308,13 +308,13 @@ router.get('/agents/:id/zkp/:proofType', async (req: Request, res: Response) => 
 
   if (pt === 'ENVELOPE') {
     const { count: decisions } = await db.from('repid_score_events')
-      .select('id', { count:'exact', head:true }).eq('agent_id', id);
+      .select('id', { count:'exact', head:true }).eq('agent_id', id).eq('is_shadow', false);
     const { count: wins } = await db.from('repid_score_events')
       .select('id', { count:'exact', head:true })
-      .eq('agent_id', id).eq('event_type', 'CHALLENGE_WIN');
+      .eq('agent_id', id).eq('is_shadow', false).eq('event_type', 'CHALLENGE_WIN');
     const { count: constPasses } = await db.from('repid_score_events')
       .select('id', { count:'exact', head:true })
-      .eq('agent_id', id).eq('event_type', 'CONSTITUTIONAL_PASS');
+      .eq('agent_id', id).eq('is_shadow', false).eq('event_type', 'CONSTITUTIONAL_PASS');
     return res.json({
       proofType: 'ENVELOPE',
       agentName: agent.agent_name, tier: agent.tier,
@@ -453,6 +453,7 @@ router.get('/events/recent', async (req: Request, res: Response) => {
     .from('repid_score_events')
     .select('id, event_type, delta, repid_before, repid_after, created_at, eas_attestation_id, agent_id, metadata')
     .neq('event_type', 'GENESIS')
+    .eq('is_shadow', false)
     .order('created_at', { ascending: false })
     .limit(limit);
   if (error) return res.status(500).json({ error: error.message });

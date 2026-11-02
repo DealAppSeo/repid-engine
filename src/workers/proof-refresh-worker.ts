@@ -111,7 +111,7 @@ SELECT a.id AS agent_id, a.agent_name, a.current_repid,
   LEFT JOIN LATERAL (
     SELECT s.id, s.repid_after
       FROM repid_score_events s
-     WHERE s.agent_id = a.id
+     WHERE s.agent_id = a.id AND s.is_shadow = false
      ORDER BY s.created_at DESC
      LIMIT 1
   ) e ON true

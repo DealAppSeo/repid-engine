@@ -210,12 +210,13 @@ async function computeSnapshot(db: any): Promise<MetricsSnapshot> {
     // agents — exact count, no rows transferred.
     exactCount(() => db.from('repid_agents').select('*', { count: 'exact', head: true })),
     // total score events — denominator for the hallucination catch rate.
-    exactCount(() => db.from('repid_score_events').select('*', { count: 'exact', head: true })),
+    exactCount(() => db.from('repid_score_events').select('*', { count: 'exact', head: true }).eq('is_shadow', false)),
     // decisions — score events that recorded which LLM produced them.
     exactCount(() =>
       db
         .from('repid_score_events')
         .select('*', { count: 'exact', head: true })
+        .eq('is_shadow', false)
         .not('llm_provider', 'is', null),
     ),
     // hallucinations — served by the partial index on (hallucination_caught) WHERE true.
@@ -223,6 +224,7 @@ async function computeSnapshot(db: any): Promise<MetricsSnapshot> {
       db
         .from('repid_score_events')
         .select('*', { count: 'exact', head: true })
+        .eq('is_shadow', false)
         .eq('hallucination_caught', true),
     ),
     // vdr — PostgREST cannot SUM, so the column is fetched and summed here, capped.
@@ -231,7 +233,7 @@ async function computeSnapshot(db: any): Promise<MetricsSnapshot> {
     // window) rather than from repid_agents.last_active_at, a column something must
     // remember to write. Measured 2026-08-17: only 32 of 176 agents had it set at all.
     cappedRows(() =>
-      db.from('repid_score_events').select('agent_id').gt('created_at', since24h).limit(SAMPLE_CAP),
+      db.from('repid_score_events').select('agent_id').eq('is_shadow', false).gt('created_at', since24h).limit(SAMPLE_CAP),
     ),
     // latency + provider count, one pass over the 24h call log.
     cappedRows(() =>
@@ -246,6 +248,7 @@ async function computeSnapshot(db: any): Promise<MetricsSnapshot> {
       db
         .from('repid_score_events')
         .select('hal_decision')
+        .eq('is_shadow', false)
         .gt('created_at', since24h)
         .not('hal_decision', 'is', null)
         .limit(SAMPLE_CAP),

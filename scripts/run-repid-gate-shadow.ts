@@ -20,7 +20,7 @@ async function main() {
   for (const a of agents as any[]) {
     // recent_delta from the last few score events (best-effort, advisory).
     const { data: ev } = await db.from('repid_score_events')
-      .select('delta_applied').eq('agent_id', a.id).order('created_at', { ascending: false }).limit(5);
+      .select('delta_applied').eq('agent_id', a.id).eq('is_shadow', false).order('created_at', { ascending: false }).limit(5);
     const recent_delta = (ev as any[] | null)?.reduce((s, e) => s + (Number(e.delta_applied) || 0), 0) ?? 0;
     const e = evaluateGate({ id: a.id, agent_name: a.agent_name, current_repid: a.current_repid, recent_delta });
     if (e.quarantine_candidate) quarantine++;

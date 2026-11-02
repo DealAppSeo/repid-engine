@@ -132,6 +132,7 @@ export async function getRepIDHistory(
     .from('repid_score_events')
     .select('repid_after, repid_before, created_at, event_type')
     .eq('agent_id', agentId)
+    .eq('is_shadow', false)
     .order('created_at', { ascending: false });
 
   if (sinceISO && /^\d{4}-\d{2}-\d{2}/.test(sinceISO)) {

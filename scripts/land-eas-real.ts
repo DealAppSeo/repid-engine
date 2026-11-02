@@ -44,7 +44,7 @@ async function main() {
   for (const r of toDo) {
     let repidSnap: number | null = null;
     try {
-      const { data: ev } = await db.from('repid_score_events').select('repid_after').eq('agent_id', r.agent_id).order('created_at', { ascending: false }).limit(1).maybeSingle();
+      const { data: ev } = await db.from('repid_score_events').select('repid_after').eq('agent_id', r.agent_id).eq('is_shadow', false).order('created_at', { ascending: false }).limit(1).maybeSingle();
       repidSnap = (ev as any)?.repid_after || null;
     } catch {}
 

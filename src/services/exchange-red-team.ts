@@ -1712,7 +1712,8 @@ export async function loadExchangeContext(
     const { data } = await db
       .from('repid_score_events')
       .select('agent_id, delta, hal_decision, hal_score')
-      .eq('contract_id', contract.id);
+      .eq('contract_id', contract.id)
+      .eq('is_shadow', false); // a shadow row's delta was never applied: not a RepID movement
     const rows = (data ?? []) as Array<Record<string, any>>;
     for (const r of rows) {
       const aid = r.agent_id ? String(r.agent_id) : '';
