@@ -10,6 +10,43 @@ import { shouldParkForHalt } from './emergency-halt';
 const POLL_INTERVAL_MS = parseInt(process.env.TRINITY_BRIDGE_POLL_MS || '30000', 10);
 const ENABLED = () => process.env.TRINITY_BRIDGE_ENABLED !== 'false';
 
+export type KnownAnswerMode = 'canonical' | 'shadow';
+
+/**
+ * TRINITY_BRIDGE_KNOWN_ANSWER_MODE. Unset, empty or `canonical` is today's behaviour (D-124).
+ * `shadow` scores known-answer tasks (metadata.case_id) as is_shadow rows: HAL runs and the
+ * HAL_SCORE_EVENT row is written, but nothing is applied. Anything else is `shadow` with
+ * recognised=false: a typo fails toward NOT moving RepID, and the caller says so loudly.
+ */
+export function resolveKnownAnswerMode(
+  raw = process.env.TRINITY_BRIDGE_KNOWN_ANSWER_MODE,
+): { mode: KnownAnswerMode; recognised: boolean } {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (v === '' || v === 'canonical') return { mode: 'canonical', recognised: true };
+  if (v === 'shadow') return { mode: 'shadow', recognised: true };
+  return { mode: 'shadow', recognised: false };
+}
+
+/** A known-answer (T12) child task carries metadata.case_id. */
+export function isKnownAnswerTask(metadata: Record<string, unknown>): boolean {
+  const caseId = metadata?.case_id;
+  return caseId != null && String(caseId).trim() !== '';
+}
+
+const warnedBadModes = new Set<string>();
+function knownAnswerMode(): KnownAnswerMode {
+  const raw = process.env.TRINITY_BRIDGE_KNOWN_ANSWER_MODE;
+  const { mode, recognised } = resolveKnownAnswerMode(raw);
+  if (!recognised && !warnedBadModes.has(String(raw))) {
+    warnedBadModes.add(String(raw));
+    console.error(
+      `[TrinityTaskBridge] TRINITY_BRIDGE_KNOWN_ANSWER_MODE='${raw}' is not recognised ` +
+        `(expected 'canonical' or 'shadow') - behaving as 'shadow': known-answer tasks will NOT move RepID`
+    );
+  }
+  return mode;
+}
+
 let isRunning = false;
 let startTimestamp: string;
 
@@ -94,13 +131,14 @@ export async function startTrinityTaskBridge() {
   // Print the resolved verify-leg mode loudly: the failure this guards against is
   // someone deploying with TASK_VERIFY_LEG_MODE set and nobody knowing it is on.
   console.log(`[TrinityTaskBridge] verify-leg mode: ${resolveVerifyLegMode()} (TASK_VERIFY_LEG_MODE)`);
+  console.log(`[TrinityTaskBridge] known-answer mode: ${knownAnswerMode()} (TRINITY_BRIDGE_KNOWN_ANSWER_MODE)`);
   
   setInterval(pollCompletedTasks, POLL_INTERVAL_MS);
   // Run once immediately on startup
   pollCompletedTasks();
 }
 
-async function pollCompletedTasks() {
+export async function pollCompletedTasks() {
   if (isRunning) return;
   isRunning = true;
 
@@ -216,7 +254,10 @@ async function pollCompletedTasks() {
           certainty = 0.85;
         }
 
-        console.log(`[TrinityTaskBridge] Bridging task ${task.id} (status: ${task.status}, agent: ${agentName}, certainty: ${certainty})`);
+        // Known-answer tasks in shadow mode are recorded, not scored: see ScoreEventInput.shadow.
+        const shadowKnownAnswer = isKnownAnswerTask(metadataObj) && knownAnswerMode() === 'shadow';
+
+        console.log(`[TrinityTaskBridge] Bridging task ${task.id} (status: ${task.status}, agent: ${agentName}, certainty: ${certainty}${shadowKnownAnswer ? ', known-answer: SHADOW, no RepID movement' : ''})`);
 
         // Run score event
         const scoreResult = await runScoreEvent({
@@ -228,6 +269,7 @@ async function pollCompletedTasks() {
           idempotency_key: `trinity_task_bridge_${task.id}`,
           llm_call_id: generateDeterministicUuid(task.id),
           provider_used: metadataObj.provider_used || metadataObj.provider || null,
+          ...(shadowKnownAnswer ? { shadow: { reason: 'known_answer_task' } } : {}),
         });
 
         console.log(`[TrinityTaskBridge] Score event successfully created: id=${scoreResult.score_event_id}, hal_score=${scoreResult.hal_score}, delta=${scoreResult.repid_delta_applied}`);
@@ -263,6 +305,9 @@ async function pollCompletedTasks() {
           wantsPeer &&
           !isPeerVerificationTask(task) &&
           !peerVerifyHalted &&
+          // A shadow row is not a claim anyone should verify for credit; the DB peer-verify trigger
+          // skips is_shadow rows for the same reason, so the bridge's own enqueue must too.
+          !shadowKnownAnswer &&
           !isIndependentlyVerified(task) &&
           classifyPeerVerifyClaim(answer, certainty).verifiable
         ) {
