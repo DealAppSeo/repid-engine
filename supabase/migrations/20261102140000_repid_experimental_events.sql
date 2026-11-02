@@ -18,7 +18,7 @@
 --   dimension         producer | validator | redteam | calibration | reliability | safety: never summed.
 --   evidence_*        kind, id ('trinity_tasks:<id>'), ref (where to re-read it), hash (sha256 of exactly
 --                     what was scored). One evidence is consumed once per (domain, dimension, mode).
---   oracle_id         who graded it ('answer-key:hal_test_cases' for known answers). Never the subject.
+--   oracle_id         who graded it ('answer_key:hal_test_cases.expected_decision' for known answers). Never the subject.
 --   eligibility       same_controller_measured, or independent_counterparty only with a DIFFERENT
 --                     counterparty agent (DB check below; the writer also needs a positive different-owner
 --                     answer from partyIndependence). A known answer has no counterparty, so never.

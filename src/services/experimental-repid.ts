@@ -35,7 +35,7 @@ import type { PartyIndependence } from '../scoring/grounding';
 export const EXPERIMENTAL_DOMAIN = 't12-exp-v1';
 export const EXPERIMENTAL_TABLE = 'repid_experimental_events';
 export const EXPERIMENTAL_SCORES_VIEW = 'repid_experimental_scores';
-export const KNOWN_ANSWER_ORACLE = 'answer-key:hal_test_cases';
+export const KNOWN_ANSWER_ORACLE = 'answer_key:hal_test_cases.expected_decision';
 export const KNOWN_ANSWER_SPRINT_TAG = 't12-known-answer-v2';
 export const EXPERIMENTAL_LABEL =
   'EXPERIMENTAL: same-controller measured evidence (domain t12-exp-v1). Not independent-counterparty reputation and not canonical RepID.';
