@@ -45,6 +45,19 @@ describe('conforming live rows (the shapes seen in the ledger) produce no deviat
   });
 });
 
+describe('SAME_OWNER_SETTLEMENT_MODE=enforce: a withheld same-owner settlement row conforms', () => {
+  const tag = (counted: boolean, ungated: number) => ({ mode: 'enforce', would_not_count: 'same_owner', counted, ungated_delta: ungated });
+  it('withheld (counted:false, delta 0) conforms for fulfilled and satisfied', () => {
+    expect(statuses(row({ delta: 0, metadata: { role: 'provider', same_owner_settlement: tag(false, 10) } }))).toContain('A2A_FULFILLED:CONFORMS');
+    expect(statuses(row({ event_type: 'SERVICE_SATISFIED', delta: 0, metadata: { role: 'buyer', satisfaction_score: 1, same_owner_settlement: tag(false, 15) } })))
+      .toContain('A2A_SATISFIED:CONFORMS');
+  });
+  it('a 0 that claims to be counted, or a withheld row that still paid, deviates', () => {
+    expect(statuses(row({ delta: 0, metadata: { role: 'provider', same_owner_settlement: tag(true, 10) } }))).toContain('A2A_FULFILLED:DEVIATES');
+    expect(statuses(row({ delta: 10, metadata: { role: 'provider', same_owner_settlement: tag(false, 10) } }))).toContain('A2A_FULFILLED:DEVIATES');
+  });
+});
+
 describe('each defect class is caught (break the property, watch it go red)', () => {
   it('a satisfied delta paid flat instead of weighted by satisfaction', () => {
     expect(statuses(row({ event_type: 'SERVICE_SATISFIED', delta: 30, metadata: { role: 'provider', satisfaction_score: 0.5 } })))
