@@ -37,8 +37,11 @@ jest.mock('../agent-owner-resolver', () => ({
 }));
 
 import { applyValidationEvent } from '../../scoring/pipeline';
+import { maybeWriteOnChainReputation } from '../onchain-reputation-trigger';
 import { resolveOwner, type OwnerClaim, type OwnerResolution } from '../agent-owner-resolver';
-import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas } from '../validation-repid-delta';
+import {
+  applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas, applyServiceOutcomeDeltas, applyServiceDisputeResolution,
+} from '../validation-repid-delta';
 
 const claim = (ownerKey: string): OwnerClaim =>
   ({ source: 'repid_agents.builder_id', assurance: 'administrative', ownerKey, ownerKeyKind: 'builder_id', capUsdcPerTx: null, capUsdcTotal: null });
@@ -51,6 +54,9 @@ const contract = { id: 'c-1', service_id: 's-1', provider_agent_id: 'prov', buye
 
 const resolve = resolveOwner as jest.MockedFunction<typeof resolveOwner>;
 const apply = applyValidationEvent as jest.MockedFunction<typeof applyValidationEvent>;
+const onchain = maybeWriteOnChainReputation as jest.MockedFunction<typeof maybeWriteOnChainReputation>;
+/** The repid_events bridge (outbox) row that FeedbackLoopWorker drains into the on-chain write. */
+const bridge = () => mockOps.find((o) => o.table === 'repid_events')?.payload;
 const owners = (buyer: OwnerResolution, provider: OwnerResolution) =>
   resolve.mockImplementation(async (ref) => (ref.id === 'buy' ? buyer : provider));
 const SAME = () => owners(res('buy', claim(FLEET)), res('prov', claim(FLEET)));
@@ -68,6 +74,7 @@ const prior = process.env.SAME_OWNER_SETTLEMENT_MODE;
 let log: jest.SpyInstance;
 beforeEach(() => {
   apply.mockClear();
+  onchain.mockClear();
   resolve.mockReset();
   mockOps.length = 0;
   log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -166,5 +173,144 @@ describe('enforce: same owner or unknown owner earns no canonical RepID', () => 
     owners(res('x', claim(FLEET)), res('x', claim(FLEET)));
     await applyServiceSatisfiedDeltas({ id: 'c-1', provider_agent_id: 'x', buyer_agent_id: 'x' }, 1);
     expect(rows().map((r) => [r[2], r[3]?.would_not_count])).toEqual([[0, 'same_owner'], [0, 'same_owner']]);
+  });
+});
+
+// ── On-chain: the ERC-8004 reputation write a settlement triggers ────────────────────────────────
+// Two paths write it, both from the repid_events `service_fulfilled_settled` bridge row: the inline
+// maybeWriteOnChainReputation call, and FeedbackLoopWorker, which polls rows with processed_at NULL
+// (and is the one that actually writes under pay-on-verified-delivery). Skipping means: no inline
+// call AND the bridge row is born processed, so the worker never picks it up.
+describe('on-chain reputation write', () => {
+  test.each([undefined, 'off'])('mode=%p: called as today, bridge row byte-identical, no owner lookup', async (mode) => {
+    if (mode === undefined) delete process.env.SAME_OWNER_SETTLEMENT_MODE;
+    else process.env.SAME_OWNER_SETTLEMENT_MODE = mode;
+    SAME();
+    await applyServiceFulfilledDeltas(contract);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(onchain).toHaveBeenCalledTimes(1);
+    expect(bridge()).toEqual({
+      subject_id: 'prov', subject_type: 'agent', event_type: 'service_fulfilled_settled', reputation_delta: 10,
+      event_data: {
+        is_simulated: false, tx_hash: null, contract_id: 'c-1',
+        metadata: { contract_id: 'c-1', x402_payment_id: 'pay-1', task_type: 'research', verdict: 'PASS' },
+      },
+    });
+  });
+
+  test.each(['same_owner', 'owner_unknown'] as const)('enforce + %s: no on-chain call, reason recorded, bridge row closed', async (why) => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    (why === 'same_owner' ? SAME : PROVIDER_UNKNOWN)();
+    await applyServiceFulfilledDeltas(contract);
+    expect(onchain).not.toHaveBeenCalled();
+    expect(bridge().event_data.onchain_skipped).toBe(why);
+    expect(typeof bridge().processed_at).toBe('string'); // FeedbackLoopWorker polls processed_at IS NULL only
+    expect(log.mock.calls.flat().join('\n')).toContain(`onchain_skipped: ${why}`);
+  });
+
+  test('enforce + different owners: on-chain write still called, bridge row as today', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    STRANGERS();
+    await applyServiceFulfilledDeltas(contract);
+    expect(onchain).toHaveBeenCalledTimes(1);
+    expect(bridge()).not.toHaveProperty('processed_at');
+    expect(bridge().event_data).not.toHaveProperty('onchain_skipped');
+    expect(bridge().event_data).not.toHaveProperty('onchain_would_skip');
+  });
+
+  test('shadow + same owner: still written, would-skip recorded, bridge row left open', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'shadow';
+    SAME();
+    await applyServiceFulfilledDeltas(contract);
+    expect(onchain).toHaveBeenCalledTimes(1);
+    expect(bridge()).not.toHaveProperty('processed_at');
+    expect(bridge().event_data.onchain_would_skip).toBe('same_owner');
+    expect(bridge().event_data).not.toHaveProperty('onchain_skipped');
+  });
+});
+
+// ── T3 SERVICE_OUTCOME (provider only, rater-weighted) ───────────────────────────────────────────
+describe('T3 SERVICE_OUTCOME', () => {
+  const outcome = (rating: 'good' | 'bad' = 'good') => applyServiceOutcomeDeltas(contract, rating, 1000);
+
+  test.each([undefined, 'off'])('mode=%p: today exactly, no owner lookup', async (mode) => {
+    if (mode === undefined) delete process.env.SAME_OWNER_SETTLEMENT_MODE;
+    else process.env.SAME_OWNER_SETTLEMENT_MODE = mode;
+    SAME();
+    const r = await outcome();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(rows()).toEqual([['prov', 'SERVICE_OUTCOME', 60, undefined]]);
+    expect(r.providerDelta).toBe(60);
+  });
+
+  test('shadow + same owner: 60 unchanged, recorded', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'shadow';
+    SAME();
+    await outcome();
+    expect(rows()).toEqual([['prov', 'SERVICE_OUTCOME', 60, { mode: 'shadow', would_not_count: 'same_owner', counted: true, ungated_delta: 60 }]]);
+  });
+
+  test.each(['same_owner', 'owner_unknown'] as const)('enforce + %s: withheld (0), recorded, good and bad alike', async (why) => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    (why === 'same_owner' ? SAME : PROVIDER_UNKNOWN)();
+    const good = await outcome('good');
+    const bad = await outcome('bad');
+    expect(rows()).toEqual([
+      ['prov', 'SERVICE_OUTCOME', 0, { mode: 'enforce', would_not_count: why, counted: false, ungated_delta: 60 }],
+      ['prov', 'SERVICE_OUTCOME', 0, { mode: 'enforce', would_not_count: why, counted: false, ungated_delta: -80 }],
+    ]);
+    expect([good.providerDelta, bad.providerDelta]).toEqual([0, 0]);
+    expect(bad.disputeEligible).toBe(true); // a flag, not a score move
+  });
+
+  test('enforce + different owners: full 60', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    STRANGERS();
+    await outcome();
+    expect(rows()).toEqual([['prov', 'SERVICE_OUTCOME', 60, { mode: 'enforce', would_not_count: null, counted: true, ungated_delta: 60 }]]);
+  });
+});
+
+// ── Dispute deltas (BFT verdict from dispute-resolution-worker) ──────────────────────────────────
+describe('dispute deltas', () => {
+  const dispute = () => applyServiceDisputeResolution(contract, 'provider_at_fault');
+
+  test.each([undefined, 'off'])('mode=%p: today exactly, no owner lookup', async (mode) => {
+    if (mode === undefined) delete process.env.SAME_OWNER_SETTLEMENT_MODE;
+    else process.env.SAME_OWNER_SETTLEMENT_MODE = mode;
+    SAME();
+    await dispute();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(rows()).toEqual([['prov', 'VALIDATION_FAILED', -100, undefined], ['buy', 'SERVICE_FULFILLED', 20, undefined]]);
+  });
+
+  test('shadow + same owner: unchanged, recorded', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'shadow';
+    SAME();
+    await dispute();
+    const tag = (d: number) => ({ mode: 'shadow', would_not_count: 'same_owner', counted: true, ungated_delta: d });
+    expect(rows()).toEqual([['prov', 'VALIDATION_FAILED', -100, tag(-100)], ['buy', 'SERVICE_FULFILLED', 20, tag(20)]]);
+  });
+
+  test.each(['same_owner', 'owner_unknown'] as const)('enforce + %s: no canonical movement either side, recorded', async (why) => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    (why === 'same_owner' ? SAME : PROVIDER_UNKNOWN)();
+    await dispute();
+    const tag = (d: number) => ({ mode: 'enforce', would_not_count: why, counted: false, ungated_delta: d });
+    expect(rows()).toEqual([['prov', 'VALIDATION_FAILED', 0, tag(-100)], ['buy', 'SERVICE_FULFILLED', 0, tag(20)]]);
+  });
+
+  test('enforce + different owners: full -100 / +20', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    STRANGERS();
+    await dispute();
+    expect(rows().map((r) => r[2])).toEqual([-100, 20]);
+  });
+
+  test('no_fault writes nothing', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    SAME();
+    await applyServiceDisputeResolution(contract, 'no_fault');
+    expect(rows()).toEqual([]);
   });
 });
