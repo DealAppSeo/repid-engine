@@ -4,6 +4,8 @@
  *   POST /decide        a DRY decision: weighs the request against the owner's signed policy and
  *                       returns the verdict. Writes nothing, runs nothing. 200 carries ALLOW, DENY
  *                       or NOT_CHECKED in the body; 400 is a request the kernel will not read.
+ *                       Under KERNEL_LEDGER_BACKEND=supabase a SPEND it allows is RESERVED instead:
+ *                       written to the ledger so it counts against the caps (RT-4, reserveDecision).
  *   POST /policy        the owner's signed policy, verified and recorded. The signer must be the
  *                       agent's ACCOUNTABLE ROOT (accountable-root.ts); a signature from anyone
  *                       else — however valid — is refused.
@@ -29,17 +31,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trustedClientIp } from '../middleware/client-ip';
 import { resolveAccountableRoot } from '../services/accountable-root';
-import { dryDecision } from '../kernel/gate';
+import { db } from '../db';
+import { dryDecision, reserveDecision } from '../kernel/gate';
 import { makeKernelHalCheck } from '../kernel/hal-adapter';
 import { ownerEvidenceFromRoot, parseSignedPolicy, policyHash, verifyOwnerPolicy } from '../kernel/policy';
-import { PolicyNonceError, StoreLedger, createJsonlStore } from '../kernel/store';
+import { PolicyNonceError, StoreLedger, createJsonlStore, createSupabaseStore } from '../kernel/store';
 import { indexKernelReceiptToDb } from '../kernel/receipt-db-index';
-import type { GateDeps, KernelReceipt, OwnerResolver, ReceiptSigner } from '../kernel/types';
+import type { GateDeps, KernelReceipt, KernelSink, OwnerResolver, ReceiptSigner } from '../kernel/types';
 import { KERNEL_RECEIPT_SIGNATURE_DOMAIN, kernelReceiptSigningKey, trustedKernelReceiptSigners } from '../kernel/receipt-signing';
 import { createCapabilityRegistry, logCapabilityRegistryEmpty, type CapabilityRegistry } from '../kernel/capability-registry';
 import { toSixClaimStatement, type InTotoStatement } from '../kernel/six-claims';
 
-export type KernelRouteDeps = Pick<GateDeps, 'ledger' | 'resolveOwner'> & Partial<Omit<GateDeps, 'ledger' | 'resolveOwner'>>;
+export type KernelRouteDeps = Pick<GateDeps, 'ledger' | 'resolveOwner'> &
+  Partial<Omit<GateDeps, 'ledger' | 'resolveOwner'>> & {
+    /** POST /decide RESERVES a spend it allows (reserveDecision, RT-4) instead of previewing it. Set by KERNEL_LEDGER_BACKEND=supabase. */
+    decideReserves?: boolean;
+  };
 
 const accountableRootOwner: OwnerResolver = async (agent) => ownerEvidenceFromRoot(await resolveAccountableRoot(agent.agent_id));
 
@@ -97,18 +104,57 @@ function kernelCapabilityRegistry(): CapabilityRegistry {
 }
 
 /**
- * The MVP ledger lives in the OS temp directory: outside the repository (nothing to commit by
- * accident) and, on Railway, EPHEMERAL — it does not survive a redeploy. That is the cost of "no
- * DDL"; a durable sink is the follow-up. Built on first use, never at import.
+ * KERNEL_LEDGER_BACKEND — where the kernel ledger lives, and so whether the owner's limits survive a restart.
+ *
+ *   unset | 'file'  TODAY, unchanged: JSONL in the OS temp directory, which on Railway is EPHEMERAL. A redeploy
+ *                   empties it, so an older signed policy can be replayed over the owner's limit-to-zero (RT-3)
+ *                   and the daily/total spend history reads as zero (RT-3b); /decide is a dry preview (RT-4).
+ *   'supabase'      public.kernel_ledger (supabase/migrations/20261102130000_kernel_ledger.sql — APPLY IT FIRST:
+ *                   with the table absent every spend is refused). Survives restarts and redeploys, and a /decide
+ *                   spend ALLOW is a reservation that counts against the caps (reserveDecision).
+ *   anything else   fails CLOSED: every ledger read and write throws, so every spend is NOT_CHECKED. A typo must
+ *                   not quietly mean "ephemeral".
+ *
+ * Flipping it is a decision for whoever owns production (Sean). Read as a literal `process.env['NAME']` so the
+ * env-registry scan (known-env-vars.generated.ts) picks it up.
+ */
+function kernelLedgerBackend(): 'file' | 'supabase' | 'invalid' {
+  const v = (process.env['KERNEL_LEDGER_BACKEND'] ?? '').trim().toLowerCase();
+  return v === '' || v === 'file' ? 'file' : v === 'supabase' ? 'supabase' : 'invalid';
+}
+
+/** The sink for an unrecognised KERNEL_LEDGER_BACKEND: nothing reads, nothing writes, every spend is refused. */
+function refusingSink(): KernelSink {
+  const fail = async (): Promise<never> => {
+    throw new Error('KERNEL_LEDGER_BACKEND is not "file" or "supabase"; the kernel ledger is refused');
+  };
+  return { append: fail, readAll: fail };
+}
+
+function ledgerSink(backend: ReturnType<typeof kernelLedgerBackend>): KernelSink {
+  if (backend === 'file') return createJsonlStore(join(tmpdir(), 'hyperdag-kernel', 'ledger.jsonl'));
+  if (backend === 'supabase') {
+    console.warn('[kernel] ledger backend: supabase (public.kernel_ledger). Limits survive restarts; a /decide spend ALLOW reserves budget.');
+    return createSupabaseStore(db);
+  }
+  console.error(`[kernel] KERNEL_LEDGER_BACKEND=${JSON.stringify(process.env['KERNEL_LEDGER_BACKEND'])} is not "file" or "supabase": the ledger is refused and EVERY spend is NOT_CHECKED.`);
+  return refusingSink();
+}
+
+/**
+ * The ledger is built on first use, never at import. With the default (file) backend it lives in the OS temp
+ * directory: outside the repository (nothing to commit by accident) and, on Railway, EPHEMERAL. See
+ * kernelLedgerBackend for the durable one.
  */
 export function defaultDeps(): KernelRouteDeps {
+  const backend = kernelLedgerBackend();
   let built: KernelRouteDeps | null = null;
   const get = (): KernelRouteDeps =>
-    // The JSONL ledger is authoritative; indexKernelReceiptToDb is a BEST-EFFORT mirror into
+    // The ledger is authoritative; indexKernelReceiptToDb is a BEST-EFFORT mirror into
     // public.kernel_receipts for the confirmed-outcome verifier to look receipts up by id. Its
     // errors never reach the decision path (StoreLedger guards + the indexer swallows), so a prod
     // deployment where the table is absent behaves exactly as before.
-    (built ??= { ledger: new StoreLedger(createJsonlStore(join(tmpdir(), 'hyperdag-kernel', 'ledger.jsonl')), indexKernelReceiptToDb), resolveOwner: accountableRootOwner });
+    (built ??= { ledger: new StoreLedger(ledgerSink(backend), indexKernelReceiptToDb), resolveOwner: accountableRootOwner });
   return {
     get ledger() {
       return get().ledger;
@@ -122,6 +168,8 @@ export function defaultDeps(): KernelRouteDeps {
     // Flag OFF ⇒ key absent ⇒ no `capability` check, receipt byte-unchanged.
     // Flag ON ⇒ the kernel capability registry governs every class (fail-closed). Empty ⇒ registry_empty.
     ...(kernelCapabilityRegistryEnabled() ? { capabilityRegistry: kernelCapabilityRegistry() } : {}),
+    // file ⇒ key absent ⇒ /decide is the dry preview (today). supabase ⇒ a spend ALLOW is a reservation.
+    ...(backend === 'supabase' ? { decideReserves: true } : {}),
   };
 }
 
@@ -225,7 +273,7 @@ export function createKernelRouter(deps: KernelRouteDeps = defaultDeps()): Route
       return;
     }
     try {
-      const out = await dryDecision(req.body, deps);
+      const out = deps.decideReserves ? await reserveDecision(req.body, deps) : await dryDecision(req.body, deps);
       if ('malformed' in out) {
         res.status(400).json({ verdict: 'DENY', blocking: true, persisted: false, reasons: out.malformed });
         return;

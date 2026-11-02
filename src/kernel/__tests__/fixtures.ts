@@ -63,6 +63,37 @@ export function spendRequest(over: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * A stand-in for the Supabase client, holding the one table the durable ledger sink uses
+ * (`seq`, `line`) in memory. A "restart" is a NEW ledger over the SAME table: what a redeploy leaves
+ * when the ledger lives in the database. `pageCap` models a server row cap below the page the sink
+ * asks for; `down` makes every call fail the way an unreachable database does; a duplicate `seq` fails
+ * like the primary key does (23505).
+ */
+export function fakeLedgerTable(opts: { pageCap?: number } = {}) {
+  const rows: Array<{ seq: number; line: string }> = [];
+  const state = { down: false };
+  const done = <T>(v: T) => ({ abortSignal: () => Promise.resolve(v) });
+  const unreachable = { message: 'connect ECONNREFUSED' };
+  const client = {
+    from: () => ({
+      select: () => ({
+        order: () => ({
+          range: (a: number, b: number) =>
+            done(state.down ? { data: null, error: unreachable } : { data: [...rows].sort((x, y) => x.seq - y.seq).slice(a, Math.min(b, a + (opts.pageCap ?? Infinity) - 1) + 1), error: null }),
+        }),
+      }),
+      insert: (row: { seq: number; line: string }) => {
+        if (state.down) return done({ error: unreachable });
+        if (rows.some((r) => r.seq === row.seq)) return done({ error: { code: '23505', message: 'duplicate key value violates unique constraint "kernel_ledger_pkey"' } });
+        rows.push({ ...row });
+        return done({ error: null });
+      },
+    }),
+  };
+  return { client: client as never, rows, state };
+}
+
 export function postRequest(over: Record<string, unknown> = {}) {
   return {
     agent: { agent_id: AGENT_ID, agent_name: 'kernel-demo-agent' },

@@ -29,9 +29,9 @@ import { decide, parseKernelRequest } from '../../src/kernel/decide';
 import { dryDecision, runUnderKernel } from '../../src/kernel/gate';
 import { POLICY_DOMAIN, POLICY_TYPES, parsePolicy, policyHash, policyTypedValue } from '../../src/kernel/policy';
 import { hashArgs, receiptHash, validateReceipt, verifyReceiptAuthenticity, verifyReceiptChain } from '../../src/kernel/receipt';
-import { StoreLedger, createMemoryStore } from '../../src/kernel/store';
+import { StoreLedger, createMemoryStore, createSupabaseStore } from '../../src/kernel/store';
 import type { GateDeps, HalEvidence, KernelLedger, KernelReceipt } from '../../src/kernel/types';
-import { AGENT_ID, NOW_MS, PAYEE, harness, iso, postRequest, signedPolicy, spendRequest } from '../../src/kernel/__tests__/fixtures';
+import { AGENT_ID, NOW_MS, PAYEE, fakeLedgerTable, harness, iso, postRequest, signedPolicy, spendRequest } from '../../src/kernel/__tests__/fixtures';
 
 const codes = (r: { reasons: Array<{ code: string }> }) => r.reasons.map((x) => x.code);
 
@@ -507,72 +507,104 @@ describe('request parsing: hostile and degenerate input', () => {
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 // RT-3 / RT-4 / RT-5 — the limit is only as durable as the ledger it lives in.
 // ═════════════════════════════════════════════════════════════════════════════════════════════
-describe('limits: durability and accumulation', () => {
-  // ── RT-3 ── pulling the limit to zero does not survive a restart. ────────────────────────────
-  // The production ledger is a JSONL file in the OS temp dir (src/routes/kernel.ts defaultDeps),
-  // which on Railway is EPHEMERAL. The owner's "limit to zero" is a NEW signed policy with a higher
-  // nonce. After a restart the ledger is empty, so the nonce high-water mark is gone, and ANY older
-  // validly-signed generous policy that is still unexpired can be POSTed again and is accepted. The
-  // agent is the party most likely to still hold it. The owner is never told the zero was undone.
-  async function restart(h: Awaited<ReturnType<typeof armed>>) {
-    const fresh = new StoreLedger(createMemoryStore()); // an empty ledger: what a redeploy leaves
-    return { ...h.deps, ledger: fresh } as GateDeps;
+// Run once per ledger backend (src/routes/kernel.ts KERNEL_LEDGER_BACKEND).
+//   file      today's default: JSONL in the OS temp dir, EPHEMERAL on Railway, /decide a dry preview.
+//             A restart is an EMPTY ledger. RT-3, RT-3b and RT-4 are OPEN here and stay pinned as
+//             it.failing, so the default's limits are stated honestly and cannot change unnoticed.
+//   supabase  public.kernel_ledger: a restart is a NEW ledger reading the SAME table, and a /decide
+//             spend ALLOW is a reservation on the ledger (gate.ts reserveDecision). The holes close.
+describe.each(['file', 'supabase'] as const)('limits: durability and accumulation (ledger backend: %s)', (backend) => {
+  const durable = backend === 'supabase';
+  const itGap = durable ? it : it.failing;
+  const CAPS = { per_tx_raw: '1000000', daily_raw: '1000000', total_raw: '1000000' };
+  /** A distinct payment effect per call, so the cap (not the one-use authorization) is what refuses. */
+  const nth = (i: number) => hashArgs({ resource: 'https://example.invalid/paid', i });
+
+  /** A harness whose ledger lives in this backend, and what a restart leaves of it. */
+  function start() {
+    const table = fakeLedgerTable();
+    const ledger = () => new StoreLedger(durable ? createSupabaseStore(table.client) : createMemoryStore());
+    const h = harness({ ledger: ledger() });
+    return { ...h, ledger: h.deps.ledger, restart: (): GateDeps => ({ ...h.deps, ledger: ledger() }) };
   }
-  it('control: within one ledger, an older (lower-nonce) generous policy is refused after the owner pulled the limit to zero', async () => {
-    const h = harness();
-    await h.ledger.appendPolicy(await signedPolicy(h.owner, { nonce: '1' }), iso);
-    await h.ledger.appendPolicy(await signedPolicy(h.owner, { nonce: '2', per_tx_raw: '0' }), iso);
-    await expect(h.ledger.appendPolicy(await signedPolicy(h.owner, { nonce: '1' }), iso)).rejects.toThrow();
-  });
-  it.failing('RT-3 after a restart, replaying the OLD generous policy through POST /policy must not undo the owner\'s limit-to-zero (BREACHED today)', async () => {
-    const h = harness();
-    const generous = await signedPolicy(h.owner, { nonce: '1' });
-    await h.ledger.appendPolicy(generous, iso);
-    await h.ledger.appendPolicy(await signedPolicy(h.owner, { nonce: '2', per_tx_raw: '0' }), iso);
-    const afterRestart = await restart(h as never);
-    // The REAL route, with the REAL owner/signature checks. The agent re-POSTs the policy it still holds.
+  function app(deps: GateDeps) {
     const a = express();
     a.use(express.json());
-    a.use('/api/v1/kernel', createKernelRouter(afterRestart));
-    const post = await request(a).post('/api/v1/kernel/policy').send(generous);
+    a.use('/api/v1/kernel', createKernelRouter({ ...deps, decideReserves: durable }));
+    return a;
+  }
+
+  // ── RT-3 ── pulling the limit to zero must survive a restart. ────────────────────────────────
+  // The owner's "limit to zero" is a NEW signed policy with a higher nonce. If a restart empties the
+  // ledger, the nonce high-water mark is gone and ANY older validly-signed generous policy that is
+  // still unexpired can be POSTed again and is accepted. The agent is the party most likely to still
+  // hold it. The owner is never told the zero was undone.
+  it('control: within one ledger, an older (lower-nonce) generous policy is refused after the owner pulled the limit to zero', async () => {
+    const s = start();
+    await s.ledger.appendPolicy(await signedPolicy(s.owner, { nonce: '1' }), iso);
+    await s.ledger.appendPolicy(await signedPolicy(s.owner, { nonce: '2', per_tx_raw: '0' }), iso);
+    await expect(s.ledger.appendPolicy(await signedPolicy(s.owner, { nonce: '1' }), iso)).rejects.toThrow();
+  });
+  itGap("RT-3 after a restart, replaying the OLD generous policy through POST /policy must not undo the owner's limit-to-zero", async () => {
+    const s = start();
+    const generous = await signedPolicy(s.owner, { nonce: '1' });
+    await s.ledger.appendPolicy(generous, iso);
+    await s.ledger.appendPolicy(await signedPolicy(s.owner, { nonce: '2', per_tx_raw: '0' }), iso);
+    const afterRestart = s.restart();
+    // The REAL route, with the REAL owner/signature checks. The agent re-POSTs the policy it still holds.
+    const post = await request(app(afterRestart)).post('/api/v1/kernel/policy').send(generous);
     const tool = jest.fn(async () => 'paid');
     const out = await runUnderKernel(spendRequest({ amount_raw: '10000' }), tool, afterRestart);
-    // SECURE: the zero must still bind. Today: 201 accepted, and the spend is ALLOWED.
+    // SECURE: the zero must still bind. File backend: 201 accepted, and the spend is ALLOWED.
     expect(post.status === 201 && out.verdict === 'ALLOW').toBe(false);
+    expect(post.status).toBe(409); // nonce_not_higher: the high-water mark was read back
+    expect(out.verdict).toBe('DENY');
+    expect(tool).not.toHaveBeenCalled();
   });
-  it.failing('RT-3b after a restart the cumulative spend history must not read as zero (the daily/total caps must not silently reset)', async () => {
-    const h = await armed({}, { per_tx_raw: '1000000', daily_raw: '1000000', total_raw: '1000000' });
+  itGap('RT-3b after a restart the cumulative spend history must not read as zero (the daily/total caps must not silently reset)', async () => {
+    const s = start();
+    await s.ledger.appendPolicy(await signedPolicy(s.owner, CAPS), iso);
     const tool = jest.fn(async () => 'paid');
-    expect((await runUnderKernel(spendRequest({ amount_raw: '1000000' }), tool, h.deps)).verdict).toBe('ALLOW'); // budget now spent
-    const afterRestart = await restart(h);
-    await afterRestart.ledger.appendPolicy(await signedPolicy(h.owner, { per_tx_raw: '1000000', daily_raw: '1000000', total_raw: '1000000' }), iso);
-    const again = await runUnderKernel(spendRequest({ amount_raw: '1000000' }), tool, afterRestart);
+    expect((await runUnderKernel(spendRequest({ amount_raw: '1000000', args_hash: nth(1) }), tool, s.deps)).verdict).toBe('ALLOW'); // budget now spent
+    const afterRestart = s.restart();
+    // A restart that lost the policy needs the owner to post it again before anything can be spent.
+    if ((await afterRestart.ledger.latestPolicy(AGENT_ID)) === null) await afterRestart.ledger.appendPolicy(await signedPolicy(s.owner, CAPS), iso);
+    const again = await runUnderKernel(spendRequest({ amount_raw: '1000000', args_hash: nth(2) }), tool, afterRestart);
     expect(again.verdict).not.toBe('ALLOW'); // SECURE: the day's budget is already gone
+    expect(codes(again)).toContain('spend_limit_zero'); // refused by the cap read back, not by a lookup failure
+    expect(tool).toHaveBeenCalledTimes(1);
   });
 
-  // ── RT-4 ── the HTTP surface is DRY, so it never accumulates spend. ──────────────────────────
-  // POST /decide writes nothing (by design: "a dry decision"). spentTotals sums receipts the gate
-  // wrote when it ALLOWED, so a remote client that asks /decide for permission N times reads
-  // daily_raw = 0 every time. The per-transaction ceiling holds (so limit-to-zero holds), but the
-  // DAILY and TOTAL caps cannot bind over this route no matter how often the client spends.
-  it.failing('RT-4 asking /decide repeatedly for spends that each fit per-tx but exceed the DAILY cap must eventually be refused (BREACHED today)', async () => {
-    const h = await armed({}, { per_tx_raw: '1000000', daily_raw: '1500000', total_raw: '99000000' });
-    let allowed = 0;
+  // ── RT-4 ── /decide must not hand out more than the cap. ─────────────────────────────────────
+  // A dry /decide writes nothing, so spentTotals never sees what a remote client did with its ALLOWs:
+  // asking N times reads daily_raw = 0 every time and the DAILY and TOTAL caps cannot bind over this
+  // route. The fix (supabase backend): a /decide spend ALLOW is a RESERVATION, written to the ledger
+  // under its lock like the decision row runUnderKernel writes before a tool, so every ALLOW handed
+  // out counts. An ask the client never acts on still spends budget: over-counting is the safe side.
+  itGap('RT-4 asking /decide repeatedly for spends that each fit per-tx but exceed the DAILY cap must eventually be refused', async () => {
+    const s = start();
+    await s.ledger.appendPolicy(await signedPolicy(s.owner, { per_tx_raw: '1000000', daily_raw: '1500000', total_raw: '99000000' }), iso);
+    const a = app(s.deps);
+    const verdicts: string[] = [];
     for (let i = 0; i < 10; i++) {
-      const r = await dryDecision(spendRequest({ amount_raw: '1000000' }), h.deps);
-      if (!('malformed' in r) && r.verdict === 'ALLOW') allowed++; // the remote client then "spends" 1,000,000
+      const r = await request(a).post('/api/v1/kernel/decide').send(spendRequest({ amount_raw: '1000000', args_hash: nth(i) }));
+      verdicts.push(r.status === 200 ? r.body.verdict : `HTTP ${r.status}`); // the remote client then "spends" 1,000,000 on each ALLOW
     }
-    expect(allowed).toBeLessThanOrEqual(1); // daily cap 1,500,000 admits one such spend
+    expect(verdicts.filter((v) => v === 'ALLOW').length).toBeLessThanOrEqual(1); // daily cap 1,500,000 admits one such spend
+    expect(verdicts).toEqual(['ALLOW', ...Array(9).fill('DENY')]); // refused by the cap, never by a broken ledger
   });
 
-  // ── RT-5 ── NOT atomic: concurrent calls overshoot the cap. ──────────────────────────────────
-  // The kernel documents this ("cumulative_total (no atomic reservation)"). This measures it.
-  it('RT-5 concurrent in-process spends must not exceed the DAILY cap (BREACHED today: no reservation)', async () => {
-    const h = await armed({}, { per_tx_raw: '1000000', daily_raw: '2000000', total_raw: '99000000' });
+  // ── RT-5 ── concurrent in-process spends. ────────────────────────────────────────────────────
+  // HELD on both backends: the gate decides again under the ledger lock (P0-TK-04/05, RT-5), so the
+  // 12 calls serialise and the third onward is refused. Across REPLICAS see durable-ledger.test.ts.
+  it('RT-5 concurrent in-process spends must not exceed the DAILY cap', async () => {
+    const s = start();
+    await s.ledger.appendPolicy(await signedPolicy(s.owner, { per_tx_raw: '1000000', daily_raw: '2000000', total_raw: '99000000' }), iso);
     const tool = jest.fn(async () => 'paid');
-    const results = await Promise.all(Array.from({ length: 12 }, () => runUnderKernel(spendRequest({ amount_raw: '1000000' }), tool, h.deps)));
+    const results = await Promise.all(Array.from({ length: 12 }, (_, i) => runUnderKernel(spendRequest({ amount_raw: '1000000', args_hash: nth(i) }), tool, s.deps)));
     const allowed = results.filter((r) => r.verdict === 'ALLOW').length;
-    expect(allowed).toBeLessThanOrEqual(2); // 2,000,000 / 1,000,000
+    expect(allowed).toBe(2); // 2,000,000 / 1,000,000
+    expect(tool).toHaveBeenCalledTimes(2);
   });
 });
 
