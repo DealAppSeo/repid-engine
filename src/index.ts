@@ -95,6 +95,7 @@ import memoryHeatEvictRouter from './routes/memory-heat-evict-route';
 import { runMemoryRootAnchorSweep } from './memory/memory-root-anchor-sweep';
 import proofCarryingEmitRouter from './routes/proof-carrying-emit';
 import kernelRouter, { receiptSignersHandler } from './routes/kernel';
+import experimentalRepidRouter from './routes/experimental-repid';
 import subscribeRouter from './routes/subscribe';
 import { publicRouter as referralTrackRouter, statsRouter as referralStatsRouter } from './routes/referrals';
 import securityStatusRouter from './routes/security-status';
@@ -788,6 +789,7 @@ app.use('/api/v1', memoryHeatStatusRouter);
 app.use('/api/v1', memoryHeatEvictRouter);
 app.use('/api/v1/proof-carrying', proofCarryingEmitRouter);
 app.use('/api/v1/kernel', kernelRouter); // policy kernel: default-deny, signed owner policy, kernel-receipt/1
+app.use('/api/v1/experimental', experimentalRepidRouter); // EXPERIMENTAL same-controller RepID (t12-exp-v1), read-only
 
 app.get('/api/v1/observability/x402-metrics', (req, res) => {
   const apiKey = (req as any).apiKey;

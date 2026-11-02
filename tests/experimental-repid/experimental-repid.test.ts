@@ -27,6 +27,8 @@ import {
 } from '../../src/services/experimental-repid';
 import { experimentalScoresRouter } from '../../src/routes/experimental-repid';
 
+beforeAll(() => { jest.spyOn(console, 'warn').mockImplementation(() => undefined); });
+
 // ── fake supabase-js client ─────────────────────────────────────────────────────────────────
 type Row = any;
 interface Op { table: string; op: 'select' | 'insert' }
