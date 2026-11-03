@@ -114,6 +114,13 @@ export interface TrustedSettlementContext {
    * sandbox adapter's full set, so a bundle missing any required containment dimension is refused.
    */
   required_checks?: readonly string[];
+  /**
+   * Whether this receipt is AUTHORITATIVE — the engine's decision (sandbox signature verified + config-pin
+   * matched + protected env), computed by authority.ts's establishAuthority. Absent/false keeps the receipt a
+   * non-anchorable DEMONSTRATION (D-129). PR CI never sets this true (the engine flag is off), so CI output is
+   * unchanged; only the engine's protected env can mark a receipt authoritative.
+   */
+  authoritative?: boolean;
 }
 
 export interface TrustedSettlementInput {
@@ -309,9 +316,10 @@ export function runTrustedSettlement(input: TrustedSettlementInput): TrustedSett
     evaluation_attestation,
     settlement_attestation,
     result,
-    // Self-signed throwaway keys, no pinned authority: this receipt is a DEMONSTRATION, never a trust anchor.
-    // The field is bound by content_hash + signature and surfaced by verifyCombinedReceipt (authoritative:false).
-    authoritative: false,
+    // Authoritative ONLY when the engine's protected env decided so (authority.ts: signature verified + config-pin
+    // matched + IMMUNE_ENGINE_AUTHORITY on). Absent/false — every PR-CI run — keeps the receipt a DEMONSTRATION,
+    // never a trust anchor. The field is bound by content_hash + signature and surfaced by verifyCombinedReceipt.
+    authoritative: context.authoritative === true,
   };
   const receipt = signCombinedReceipt(buildCombinedReceipt(receiptInput), keys.composite);
 

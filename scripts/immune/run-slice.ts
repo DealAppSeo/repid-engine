@@ -35,6 +35,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
 import { signComponentAttestation, verifyCombinedReceipt, SANDBOX_ATTESTATION_DOMAIN } from '../../src/immune/combined-receipt';
 import { verifySandboxReceipt, type SandboxReceiptVerification } from '../../src/immune/sandbox-receipt-verify';
+import { establishAuthority, type AuthorityDecision } from '../../src/immune/authority';
 import {
   runTrustedSettlement,
   fixtureOracle,
@@ -84,10 +85,14 @@ const REQUIRED_CONTAINMENT_CHECKS = [
  * signature is VERIFIED (tamper-evidence) and returned; pinning the ephemeral harness key to a trust anchor so a
  * verified receipt can be called AUTHENTIC is the next Sean-gated gate — see sandbox-receipt-verify.ts.
  */
-function adaptSandboxReceipt(dir: string, verdict: string, claimId: string): { sr: SliceSandboxReceipt; harnessPubKey: unknown; verification: SandboxReceiptVerification } {
+function adaptSandboxReceipt(dir: string, verdict: string, claimId: string): { sr: SliceSandboxReceipt; harnessPubKey: unknown; verification: SandboxReceiptVerification; authority: AuthorityDecision } {
   const envelope = readJsonMaybe(join(dir, 'receipt.json')); // { receipt, signature } — trustshell.sandbox-mission-receipt/v2
   const rc = envelope?.receipt; // the signed receipt body
   const verification = verifySandboxReceipt(envelope); // harness Ed25519 over canonical(receipt) — tamper-evidence
+  // The engine-side authoritative decision (sig verified + passport config-pin matched + protected env). In CI the
+  // protected-env flag is OFF, so this is always authoritative:false — the config-pin + sig run and are RECORDED,
+  // but the receipt stays a non-anchorable demonstration (D-129 B+A). Reuse the signature we just computed.
+  const authority = establishAuthority(envelope, { signature: verification });
   const promoteJson = readJsonMaybe(join(dir, 'promote.json')); // `trustshell sandbox promote --json`
   const keysJson = readJsonMaybe(join(dir, 'public-keys.json'));
 
@@ -124,6 +129,7 @@ function adaptSandboxReceipt(dir: string, verdict: string, claimId: string): { s
     },
     harnessPubKey: keysJson?.harness ?? rc?.keys?.harness ?? null,
     verification,
+    authority,
   };
 }
 
@@ -176,8 +182,8 @@ function main(): void {
       continue;
     }
     const id = issuedClaim.id;
-    const { sr, harnessPubKey, verification: sigv } = adaptSandboxReceipt(dir, verdict, id);
-    provenance.push({ bundle: tag, claim: id, trustshell_harness_public_key: harnessPubKey, harness_fingerprint: sigv.harness_fingerprint, signature_verified: sigv.verified, harness_pinned: sigv.pinned, note: 'harness signature VERIFIED (tamper-evidence); pinning the ephemeral harness key for AUTHENTICITY is the next Sean-gated gate' });
+    const { sr, harnessPubKey, verification: sigv, authority } = adaptSandboxReceipt(dir, verdict, id);
+    provenance.push({ bundle: tag, claim: id, trustshell_harness_public_key: harnessPubKey, harness_fingerprint: sigv.harness_fingerprint, signature_verified: sigv.verified, harness_pinned: sigv.pinned, config_pin_matched: authority.config.matched, config_mismatches: authority.config.mismatches, authoritative: authority.authoritative, note: 'signature VERIFIED (tamper-evidence) + passport config-pin checked; AUTHORITATIVE only in the engine protected env (D-129 B+A) — CI stays non-anchorable' });
     // FAIL CLOSED: a sandbox receipt whose harness signature does not verify was tampered or is unsigned — refuse it
     // before settlement. (Tamper-evidence only; the key is ephemeral + self-asserted, so this is not yet authenticity.)
     if (!sigv.verified) {
@@ -200,6 +206,9 @@ function main(): void {
         checker_id: 'oracle-fixture',
         checker_controller: 'controller-slice',
         required_checks: REQUIRED_CONTAINMENT_CHECKS,
+        // The engine-side authoritative decision. In CI the protected-env flag is off ⇒ false ⇒ the receipt stays
+        // a non-anchorable demonstration; only the engine marks a receipt authoritative (D-129 B+A).
+        authoritative: authority.authoritative,
       },
     });
 
