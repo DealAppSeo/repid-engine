@@ -159,9 +159,9 @@ function main(): void {
     // per-receipt filename or experiment_id.
     const tag = relative(bundlesDir, dir).replace(/[^A-Za-z0-9._-]+/g, '_') || basename(dir);
     // The claim this bundle was ISSUED, resolved by EXACT match on the bundle's own path segment — the maker job
-    // named it `$CLAIM_ID` (the `<claim>/verdict.json` folder). Exact, never a `tag.includes()` substring (which
-    // would mis-resolve if one claim id were a substring of another; Grok red-team), and never from the verdict's
-    // contents (the Maker must not pick which claim it is graded on; Strix CWE-807).
+    // named that inner `<claim>/verdict.json` folder for the claim id. Exact, never a `tag.includes()` substring
+    // (which would mis-resolve if one claim id were a substring of another; Grok red-team), and never from the
+    // verdict's contents (the Maker must not pick which claim it is graded on; Strix CWE-807).
     const issuedClaim = oracle.claims.find((c) => c.id === basename(dir));
     if (!issuedClaim) {
       console.error(`[run-slice] ${tag}: bundle path segment "${basename(dir)}" is not exactly one oracle claim — not scored`);
