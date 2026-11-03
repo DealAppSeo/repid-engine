@@ -13,7 +13,13 @@ import {
   ruledReport,
   rulerKey,
 } from '../hal/sealed-ruler';
-import { IncomparableMeasurementError, RuledMeasurement } from '../hal/measurement-ruler';
+import {
+  IncomparableMeasurementError,
+  RuledMeasurement,
+  formatStoredMeasurement,
+  rulerFaults,
+  serializeRuler,
+} from '../hal/measurement-ruler';
 import crypto from 'crypto';
 
 /**
@@ -37,6 +43,76 @@ export interface ValidationRun {
 
 function envTrue(name: string): boolean {
   return ['1', 'true', 'yes', 'on'].includes(String(process.env[name] ?? '').trim().toLowerCase());
+}
+
+/**
+ * HAL_PERSIST_RULER (default OFF) — shadow ruler persistence for hal_validation_summaries.
+ *
+ * OFF: byte-identical to before this flag — the summary row carries no `ruler`, and the regression
+ * read selects the same columns it always did.
+ * ON (requires the `ruler jsonb` column from
+ * supabase/migrations/20261102150000_hal_validation_summaries_ruler.sql, which the owner applies):
+ * the run's MeasurementRuler is serialized into `ruler`, an UNRULED summary is REFUSED (never
+ * written), and the regression read cites each stored F1 with its ruler — UNATTRIBUTED for a
+ * historical row whose ruler was never recorded.
+ *
+ * Inert until the owner applies the migration AND sets HAL_PERSIST_RULER.
+ */
+function persistRulerEnabled(): boolean {
+  return envTrue('HAL_PERSIST_RULER');
+}
+
+/** Thrown when HAL_PERSIST_RULER is on and the summary to persist carries no usable ruler. */
+export class UnruledSummaryError extends Error {
+  readonly faults: string[];
+  constructor(faults: string[]) {
+    super(
+      `[HAL-Validation-Harness] refusing to persist an UNRULED summary — an accuracy number without ` +
+        `its ruler is not a measurement and must not be recorded. Missing or invalid: ${faults.join(', ')}.`,
+    );
+    this.name = 'UnruledSummaryError';
+    this.faults = faults;
+  }
+}
+
+/**
+ * Build the hal_validation_summaries insert payload from a ruled measurement.
+ *
+ * With persistRuler=false the row is exactly what this harness has always written (no `ruler` key).
+ * With persistRuler=true the measurement's ruler is serialized into `ruler`; a measurement that does
+ * not carry a usable ruler is REFUSED (throws UnruledSummaryError) rather than recorded — the
+ * `rulerStatus: 'UNRULED'` condition the measurement modules document, enforced at the write.
+ */
+export function buildSummaryRow(args: {
+  runId: string;
+  measurement: RuledMeasurement;
+  byCategory: Record<string, unknown>;
+  byDifficulty: Record<string, unknown>;
+  harnessTag: string;
+  persistRuler: boolean;
+}): Record<string, unknown> {
+  const m = args.measurement;
+  const row: Record<string, unknown> = {
+    run_id: args.runId,
+    total_cases: m.matrix.tp + m.matrix.fp + m.matrix.fn + m.matrix.tn,
+    correct_cases: m.matrix.tp + m.matrix.tn,
+    accuracy: m.metrics.accuracy,
+    precision_score: m.metrics.precision,
+    recall_score: m.metrics.recall,
+    f1_score: m.metrics.f1,
+    false_positives: m.matrix.fp,
+    false_negatives: m.matrix.fn,
+    true_positives: m.matrix.tp,
+    true_negatives: m.matrix.tn,
+    by_category: args.byCategory,
+    by_difficulty: args.byDifficulty,
+    harness_version: args.harnessTag,
+  };
+  if (!args.persistRuler) return row;
+  const faults = rulerFaults(m.ruler);
+  if (faults.length > 0) throw new UnruledSummaryError(faults);
+  row.ruler = serializeRuler(m.ruler);
+  return row;
 }
 
 /** jsonb-friendly slice: matrix + metrics + the corpus it was taken on. */
@@ -114,40 +190,46 @@ export async function runValidationHarness(
   const slices = (name: string) =>
     Object.fromEntries(Object.entries(report.byBreakdown[name] ?? {}).map(([k, v]) => [k, sliceJson(v)]));
 
-  // 4. Save to summaries table.
-  const { error: sumErr } = await db.from('hal_validation_summaries').insert({
-    run_id: runId,
-    total_cases: m.matrix.tp + m.matrix.fp + m.matrix.fn + m.matrix.tn,
-    correct_cases: m.matrix.tp + m.matrix.tn,
-    accuracy: m.metrics.accuracy,
-    precision_score: m.metrics.precision,
-    recall_score: m.metrics.recall,
-    f1_score: m.metrics.f1,
-    false_positives: m.matrix.fp,
-    false_negatives: m.matrix.fn,
-    true_positives: m.matrix.tp,
-    true_negatives: m.matrix.tn,
-    by_category: slices('category'),
-    by_difficulty: slices('difficulty'),
-    harness_version: tag,
-  });
+  // 4. Save to summaries table. HAL_PERSIST_RULER off = the historical payload, unchanged.
+  const persistRuler = persistRulerEnabled();
+  const { error: sumErr } = await db.from('hal_validation_summaries').insert(
+    buildSummaryRow({
+      runId,
+      measurement: m,
+      byCategory: slices('category'),
+      byDifficulty: slices('difficulty'),
+      harnessTag: tag,
+      persistRuler,
+    }),
+  );
   if (sumErr) {
     console.error(`[HAL-Validation-Harness] Failed to write summary (ruler tag is ${tag.length} chars):`, sumErr.message);
   }
 
   // 5. Regression check against the latest earlier run on the SAME ruler only.
-  await checkRegression(report, tag);
+  await checkRegression(report, tag, persistRuler);
 
   return { runId, report };
 }
 
-async function checkRegression(report: RuledReport, tag: string): Promise<void> {
-  const { data, error } = await db
-    .from('hal_validation_summaries')
-    .select('f1_score, harness_version')
-    .eq('harness_version', tag)
-    .order('run_at', { ascending: false })
-    .limit(2); // [0] = this run, [1] = the previous run on this ruler
+async function checkRegression(report: RuledReport, tag: string, persistRuler: boolean): Promise<void> {
+  // Select the stored ruler only when persistence is on (and so the column exists); OFF reads the
+  // exact columns it always has, so the behaviour is unchanged. The select strings stay LITERAL in
+  // each branch — supabase-js parses them at the type level and a dynamic string loses the row type.
+  // [0] = this run, [1] = the previous run on this ruler.
+  const { data, error } = persistRuler
+    ? await db
+        .from('hal_validation_summaries')
+        .select('f1_score, harness_version, ruler')
+        .eq('harness_version', tag)
+        .order('run_at', { ascending: false })
+        .limit(2)
+    : await db
+        .from('hal_validation_summaries')
+        .select('f1_score, harness_version')
+        .eq('harness_version', tag)
+        .order('run_at', { ascending: false })
+        .limit(2);
 
   console.log(`\n=== REGRESSION CHECK ===`);
   const prev = !error && data && data.length > 1 ? data[1] : undefined;
@@ -156,6 +238,11 @@ async function checkRegression(report: RuledReport, tag: string): Promise<void> 
   } else {
     try {
       const prevF1 = prev.f1_score === null ? null : Number(prev.f1_score);
+      // Read path: a stored F1 is quoted only through its ruler. A row whose ruler was never
+      // recorded (any row before HAL_PERSIST_RULER: ruler = null) reads UNATTRIBUTED, never trended.
+      if (persistRuler) {
+        console.log(`Previous run: ${formatStoredMeasurement('f1', prevF1, (prev as { ruler?: unknown }).ruler ?? null)}`);
+      }
       const prevKey = String(prev.harness_version).slice(HARNESS_VERSION.length + 1);
       console.log(formatDelta('f1', keyed(report.overall), { value: prevF1, ruler: prevKey }));
       const cur = report.overall.metrics.f1;
