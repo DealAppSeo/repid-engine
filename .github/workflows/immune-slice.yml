@@ -1,0 +1,165 @@
+# Agent Immune System slice (increment 2): sandboxed Maker -> promotion gate -> trusted settler -> a
+# combined trust receipt (#1494) a separate verifier validates, plus the same flow REFUSING a bad/forged result.
+#
+# TRUST-BOUNDARY NOTE (the point of this file). Two separate jobs are NOT automatically a trust boundary.
+#   * `settle` consumes `maker`'s output as DATA ONLY (JSON + sha256 checks). It never executes, evals, sources
+#     or imports anything from the maker artifact. Its code and authorities come from the checked-out repid-engine
+#     base ref, not the artifact.
+#   * No shared mutable cache between the jobs (no actions/cache; the only hand-off is the uploaded artifact).
+#   * NO PRODUCTION SECRETS: the `maker` job has `contents: read` and nothing else; keys are throwaway and
+#     generated in-job; the settlement is a DRY-RUN. Prod oracle / secret / signing wiring is deferred and
+#     Sean-gated (see scripts/immune/run-slice.ts and src/immune/trusted-settler.ts).
+# Every action is pinned by full commit SHA.
+
+name: immune-slice
+
+on: [pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  # UNTRUSTED. Runs the stub Maker inside the TrustShell sandbox, promotes its outbox, and uploads the promoted
+  # files + sandbox receipts + the harness PUBLIC key as a DATA-only bundle. Runtime setup (runc + gVisor runsc,
+  # pinned image) is copied from trustshell's containment workflow (.github/workflows/sandbox-mission.yml, #674).
+  maker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # no more than this; the job has no secrets and never writes anywhere but its artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [runc, runsc]
+        claim: [arith-sum-true, arith-sum-false]
+    env:
+      RUNTIME: ${{ matrix.runtime }}
+      PINNED_DIGEST: sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+    steps:
+      - name: Checkout repid-engine
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # the job never pushes; keep the token off disk
+
+      - name: Checkout trustshell (origin/main) into ./trustshell
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: DealAppSeo/trustshell
+          ref: main
+          path: trustshell
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # gVisor from its official apt repository, registered with dockerd by `runsc install`. Copied verbatim
+      # from trustshell/.github/workflows/sandbox-mission.yml (#674): the hardened-runtime leg.
+      - name: Install gVisor (runsc) and register it with Docker
+        if: matrix.runtime == 'runsc'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y apt-transport-https ca-certificates curl gnupg
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+            | sudo tee /etc/apt/sources.list.d/gvisor.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y runsc
+          runsc --version
+          sudo runsc install
+          sudo systemctl restart docker
+
+      - name: Container runtimes Docker reports
+        run: |
+          docker info --format 'runtimes: {{range $k, $v := .Runtimes}}{{$k}} {{end}}'
+
+      - name: Pull the pinned sandbox image
+        run: docker pull -q "node:22-alpine@$PINNED_DIGEST"
+
+      - name: Build the trustshell CLI
+        working-directory: trustshell
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts # PR code must not run dependency install scripts
+          npm run sdk:build
+
+      - name: Run the stub Maker in the sandbox, promote, and assemble a DATA-only bundle
+        env:
+          TRUSTSHELL_HOME: ${{ runner.temp }}/ts-home
+          PROJ: ${{ runner.temp }}/proj
+          CLAIM_ID: ${{ matrix.claim }}
+        run: |
+          set -euo pipefail
+          ts() { node "$GITHUB_WORKSPACE/trustshell/dist/cli/index.js" "$@"; }
+          mkdir -p "$PROJ"
+          # The single claim, as DATA for the Maker. The `expected` label is WITHHELD — that is the oracle's secret.
+          node -e 'const cs=require(process.env.GITHUB_WORKSPACE+"/src/immune/fixtures/claims.json");const c=cs.find(x=>x.id===process.env.CLAIM_ID);if(!c){console.error("no claim "+process.env.CLAIM_ID);process.exit(1)}require("fs").writeFileSync(process.env.PROJ+"/claim.json",JSON.stringify({id:c.id,claim:c.claim}))'
+          cp "$GITHUB_WORKSPACE/src/immune/fixtures/maker.mjs" "$PROJ/maker.mjs"
+          printf 'node /mission/input/maker.mjs\n' > "$PROJ/maker.sh"
+          cd "$PROJ"
+          ts guard init
+          ts guard allow tool:sh --script maker.sh
+          ts guard allow tool:sandbox
+          ts guard require-sandbox on
+          ts run --sandbox --runtime "$RUNTIME" --tool sh -- sh maker.sh
+          id=$(ls "$TRUSTSHELL_HOME/sandbox/missions")
+          mdir="$TRUSTSHELL_HOME/sandbox/missions/$id"
+          echo "mission $id"
+          test -z "$(docker ps -aq --filter "name=ts-mission-$id")" || { echo "container still present"; exit 1; }
+          ts sandbox promote "$id" --json > "$RUNNER_TEMP/promote.json"
+          # Verify the sandbox receipt with the PUBLIC keys only (TrustShell's own verifier) before its data leaves this job.
+          node "$GITHUB_WORKSPACE/trustshell/dist/cli/index.js" verify --receipt "$mdir/receipt.json" --keys "$mdir/public-keys.json" --store "$mdir/trusted-store"
+          out="$RUNNER_TEMP/bundle/$CLAIM_ID"
+          mkdir -p "$out"
+          vpath=$(node -e 'const p=require(process.argv[1]).promoted.find(x=>x.name==="verdict.json");if(!p){console.error("verdict.json not promoted");process.exit(1)}process.stdout.write(p.path)' "$RUNNER_TEMP/promote.json")
+          cp "$vpath" "$out/verdict.json"
+          cp "$mdir/receipt.json" "$out/receipt.json"
+          cp "$mdir/public-keys.json" "$out/public-keys.json"      # harness PUBLIC key only
+          cp "$RUNNER_TEMP/promote.json" "$out/promote.json"
+
+      - name: Upload the promoted bundle (DATA only)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: maker-bundle-${{ matrix.runtime }}-${{ matrix.claim }}
+          path: ${{ runner.temp }}/bundle
+          if-no-files-found: error
+
+  # TRUSTED. Checks out the repid-engine base ref (its own code), downloads the maker bundles, and runs the
+  # trusted settler on them as DATA. Exits non-zero if any expected-ok receipt fails to verify or any
+  # expected-refusal verifies. This job executes NOTHING from the maker artifact.
+  settle:
+    needs: maker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repid-engine (base ref — trusted code, not the artifact)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      - name: Download the maker bundles (DATA only)
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: maker-bundle-*
+          path: ${{ runner.temp }}/bundles
+
+      - name: Trusted settlement — validate, score, DRY-RUN settle, emit + independently verify combined receipts
+        run: npx ts-node scripts/immune/run-slice.ts --bundles "$RUNNER_TEMP/bundles" --out "$RUNNER_TEMP/out"
+
+      - name: Upload the combined receipts, refusal demo, measurements, provenance
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: immune-slice-out
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error

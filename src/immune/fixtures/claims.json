@@ -1,0 +1,4 @@
+[
+  { "id": "arith-sum-true", "claim": "2 + 2 = 4", "expected": "TRUE" },
+  { "id": "arith-sum-false", "claim": "2 + 2 = 5", "expected": "FALSE" }
+]
