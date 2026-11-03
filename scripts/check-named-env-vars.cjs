@@ -86,6 +86,8 @@ const ALLOWLIST = {
   TRUSTRAILS_HMAC_SECRET:
     'No longer read by src/ since #1368 (the peer-verify verifier accepts PEER_VERIFY_HMAC_SECRET only). Still named in SPRINT_BOARD.md as the TrustRails (Vercel) secret, which is a different surface.',
   // ── composed / indirect src/ reads the generator cannot see ──────────────
+  HAL_PERSIST_RULER:
+    'Shadow ruler-persistence flag (default OFF), read as envTrue("HAL_PERSIST_RULER") -> process.env[name] in src/services/hal-validation-runner.ts; generator only captures literal process.env.NAME so it misses the indirection.',
   ONLY_ATTESTATIONS_LEAVE:
     'Read as env.ONLY_ATTESTATIONS_LEAVE inside the one shared reader (src/selfhost/egress-guard.ts, #1177), which takes env as a parameter; generator only captures literal process.env.NAME.',
   PROVER_AUTH_TOKEN:

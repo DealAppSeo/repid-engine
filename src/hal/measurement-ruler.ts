@@ -317,6 +317,59 @@ export function assertComparable(a: RuledMeasurement, b: RuledMeasurement): void
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// PERSISTENCE. A ruler is stored next to its F1 so a SAVED number keeps the ruler it was taken
+// with. This is the gap the module header describes: `hal_validation_summaries` recorded F1 and
+// `harness_version` but not the ruler, so two runs over the same 1000 ids were saved as 0.344 and
+// 0.798 under one `harness_version`. The stored form is the IDENTIFYING fields only (no manifest
+// metadata — positiveCount/builtAt/sources are not needed to cite or compare), so it round-trips
+// through jsonb and still satisfies `assertRuler`/`formatMeasurement`. Still pure: no I/O here.
+// ---------------------------------------------------------------------------------------------
+
+/** A ruler as persisted in the `hal_validation_summaries.ruler` jsonb column. */
+export interface StoredRuler {
+  corpus: Pick<CorpusManifest, 'corpusId' | 'contentHash' | 'caseCount'>;
+  width: ConfigurationWidth;
+  engineCommit?: string;
+}
+
+/** Reduce a ruler to the fields that identify the measurement, ready to write as jsonb. */
+export function serializeRuler(ruler: MeasurementRuler): StoredRuler {
+  return {
+    corpus: {
+      corpusId: ruler.corpus.corpusId,
+      contentHash: ruler.corpus.contentHash,
+      caseCount: ruler.corpus.caseCount,
+    },
+    width: { ...ruler.width },
+    ...(ruler.engineCommit ? { engineCommit: ruler.engineCommit } : {}),
+  };
+}
+
+/**
+ * A persisted ruler back as a `MeasurementRuler`, or `UNATTRIBUTED` when the stored value is null or
+ * does not validate. A historical row whose ruler was never recorded, and a garbled one, both read
+ * UNATTRIBUTED — a ruler is never fabricated for a number whose provenance is unknown.
+ */
+export function rulerFromStored(stored: unknown): MeasurementRuler | Unattributed {
+  if (stored == null) return UNATTRIBUTED;
+  const candidate = stored as unknown as MeasurementRuler;
+  return rulerFaults(candidate).length === 0 ? candidate : UNATTRIBUTED;
+}
+
+/**
+ * Render a stored HAL metric with its persisted ruler — the sanctioned read-side renderer.
+ * `stored` is the row's `ruler` jsonb; null or invalid renders as UNATTRIBUTED (visibly un-sourced,
+ * never quotable as comparable), a valid one renders with its full citation.
+ */
+export function formatStoredMeasurement(
+  metric: AccuracyMetric | string,
+  value: number | null,
+  stored: unknown,
+): string {
+  return formatMeasurement(metric, value, rulerFromStored(stored));
+}
+
 /**
  * A historical number we choose to keep quoting but cannot attribute. Deliberately NOT a
  * `RuledMeasurement`: it can be printed, and it cannot be recorded or compared.
