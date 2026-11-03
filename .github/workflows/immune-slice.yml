@@ -108,8 +108,9 @@ jobs:
           echo "mission $id"
           test -z "$(docker ps -aq --filter "name=ts-mission-$id")" || { echo "container still present"; exit 1; }
           ts sandbox promote "$id" --json > "$RUNNER_TEMP/promote.json"
-          # Verify the sandbox receipt with the PUBLIC keys only (TrustShell's own verifier) before its data leaves this job.
-          node "$GITHUB_WORKSPACE/trustshell/dist/cli/index.js" verify --receipt "$mdir/receipt.json" --keys "$mdir/public-keys.json" --store "$mdir/trusted-store"
+          # The sandbox's OWN receipt verifier already ran inside `sandbox promote` (verifyReceipt); assert its result
+          # before the data leaves this job. (`trustshell verify` is the HAL claim-checker, not a receipt verifier.)
+          node -e 'const p=require(process.env.RUNNER_TEMP+"/promote.json");if(!p.verify||p.verify.ok!==true){console.error("sandbox receipt did not self-verify: "+JSON.stringify(p.verify));process.exit(1)}'
           out="$RUNNER_TEMP/bundle/$CLAIM_ID"
           mkdir -p "$out"
           vpath=$(node -e 'const p=require(process.argv[1]).promoted.find(x=>x.name==="verdict.json");if(!p){console.error("verdict.json not promoted");process.exit(1)}process.stdout.write(p.path)' "$RUNNER_TEMP/promote.json")
