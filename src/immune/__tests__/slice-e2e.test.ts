@@ -89,7 +89,7 @@ describe('agent immune system slice — sandboxed maker → trusted settler → 
     expect(res.receipt.independence_class).toBe('same_controller_measured');
     expect(res.settlement.delta_sign).toBe('positive');
     expect(res.measurements.maker_tokens).toBeNull();
-    expect(res.verification).toEqual({ ok: true, reasons: [] });
+    expect(res.verification).toEqual({ ok: true, reasons: [], authoritative: false });
   });
 
   it('the claim the Maker gets wrong → incorrect / failure (legitimate negative), and the receipt still verifies', () => {
@@ -100,7 +100,7 @@ describe('agent immune system slice — sandboxed maker → trusted settler → 
     expect(res.receipt.result).toBe('incorrect');
     expect(res.receipt.settlement_outcome).toBe('failure');
     expect(res.settlement.delta_sign).toBe('negative');
-    expect(res.verification).toEqual({ ok: true, reasons: [] });
+    expect(res.verification).toEqual({ ok: true, reasons: [], authoritative: false });
   });
 
   it('REFUSAL (a): the failure re-labelled a success is refused incorrect_claimed_success', () => {
@@ -160,7 +160,7 @@ describe('agent immune system slice — sandboxed maker → trusted settler → 
     expect(res.receipt.result).toBe('not_scorable');
     expect(res.receipt.settlement_outcome).toBe('none');
     expect(res.settlement.delta_sign).toBe('none');
-    expect(res.verification).toEqual({ ok: true, reasons: [] });
+    expect(res.verification).toEqual({ ok: true, reasons: [], authoritative: false });
   });
 
   it('CONTAINMENT (Strix CWE-636): a promoted bundle with a FAILED containment check is refused, never settled', () => {
@@ -169,6 +169,20 @@ describe('agent immune system slice — sandboxed maker → trusted settler → 
       oracle,
       keys: newKeys(),
       context: ctx(trueClaim),
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.refused).toContain('containment_not_established');
+  });
+
+  it('CONTAINMENT (required-check allowlist, Grok red-team): a bundle missing a REQUIRED check is refused even when its own checks all passed', () => {
+    // The bundle's own checks (seccomp, network_egress_blocked) all pass, but the run REQUIRES container_destroyed,
+    // which the bundle never recorded — "some check passed" must not be enough.
+    const res = runTrustedSettlement({
+      bundle: bundleFor(trueClaim),
+      oracle,
+      keys: newKeys(),
+      context: { ...ctx(trueClaim), required_checks: ['seccomp', 'container_destroyed'] },
     });
     expect(res.ok).toBe(false);
     if (res.ok) return;

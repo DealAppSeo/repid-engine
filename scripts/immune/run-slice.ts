@@ -15,9 +15,20 @@
  * TRUST BOUNDARY NOTE. `settle` and `maker` are separate CI jobs, which is NOT automatically a trust boundary:
  * this runner treats the maker output as DATA only and shares no mutable cache with it. HONEST LIMIT: on a
  * `pull_request` event the settle job checks out the PR merge ref, so this code is the PR's OWN version, not a
- * protected base ref — the boundary holds only because the job carries no secret. The bundle's TrustShell harness
- * PUBLIC key is recorded as provenance; binding and VERIFYING the sandbox receipt's own harness signature (so the
- * settler carries it rather than re-deriving facts) is the next Sean-gated gate — see sandbox-provenance.json.
+ * protected base ref — the boundary holds only because the job carries no secret. Every combined receipt this
+ * runner emits is therefore marked `authoritative: false` (bound by content_hash + signature, surfaced by
+ * verifyCombinedReceipt) so a green verify of a demo receipt is never mistaken for a trust anchor.
+ *
+ * NEXT GATE (Sean-gated) — binding + VERIFYING the sandbox receipt's own harness signature so the settler carries
+ * it rather than re-deriving facts. The signing scheme is now known (reverse-engineered from a real CI bundle, so
+ * it is commit-robust): the envelope is `{ receipt, signature }` where `signature` is base64 raw Ed25519 (64 bytes)
+ * over the RFC-8785-style canonical JSON (recursively sorted keys, compact, no domain prefix, no pre-hash) of
+ * `receipt`; the harness public key is `receipt.keys.harness.public_key` (base64url) AND public-keys.json. CAVEAT
+ * that keeps this a Sean decision: that harness key is EPHEMERAL per mission (it differs run to run), so verifying
+ * the signature against the embedded key proves TAMPER-EVIDENCE + internal consistency, NOT authenticity against a
+ * pinned authority — a hostile Job A could self-sign a fabricated receipt. Closing the lie-path fully needs a
+ * trust anchor to PIN (a stable harness/promoter key, or anchoring the ephemeral key via the passport/promoter
+ * chain); choosing that anchor is the MAJOR/HITL part. The harness PUBLIC key is carried as provenance meanwhile.
  */
 import { createHash, generateKeyPairSync, type KeyObject } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -49,6 +60,19 @@ const newKeys = (): SettlementKeys => {
   const k = (): KeyObject => generateKeyPairSync('ed25519').privateKey;
   return { harness: k(), evaluation: k(), settlement: k(), composite: k() };
 };
+
+/**
+ * The containment dimensions a real promoted bundle MUST demonstrate — passed to the settler as its
+ * required-check allowlist so "some check passed" is not enough (Strix CWE-636 / Grok red-team). MUST mirror
+ * the `name`s adaptSandboxReceipt emits; a bundle whose receipt is missing or fails any of these is refused.
+ */
+const REQUIRED_CONTAINMENT_CHECKS = [
+  'restriction_profile_read_back',
+  'worker_executed',
+  'input_mounted_read_only',
+  'container_destroyed',
+  'promotion_self_verified',
+] as const;
 
 /**
  * DATA-ONLY adaptation of the TrustShell sandbox-mission receipt + promote output into the slice's shape.
@@ -134,12 +158,13 @@ function main(): void {
     // `tag` is unique per bundle (its path under the download dir), so the 2×2 CI matrix never collides a
     // per-receipt filename or experiment_id.
     const tag = relative(bundlesDir, dir).replace(/[^A-Za-z0-9._-]+/g, '_') || basename(dir);
-    // The claim this bundle was ISSUED, resolved from its published bundle NAME against the committed claim set —
-    // never from the verdict's own contents (the Maker must not pick which claim it is graded on; Strix CWE-807).
-    const issued = oracle.claims.filter((c) => tag.includes(c.id));
-    const issuedClaim = issued.length === 1 ? issued[0] : undefined;
+    // The claim this bundle was ISSUED, resolved by EXACT match on the bundle's own path segment — the maker job
+    // named it `$CLAIM_ID` (the `<claim>/verdict.json` folder). Exact, never a `tag.includes()` substring (which
+    // would mis-resolve if one claim id were a substring of another; Grok red-team), and never from the verdict's
+    // contents (the Maker must not pick which claim it is graded on; Strix CWE-807).
+    const issuedClaim = oracle.claims.find((c) => c.id === basename(dir));
     if (!issuedClaim) {
-      console.error(`[run-slice] ${tag}: bundle name does not identify exactly one oracle claim — not scored`);
+      console.error(`[run-slice] ${tag}: bundle path segment "${basename(dir)}" is not exactly one oracle claim — not scored`);
       summary.push({ bundle: tag, ok: false, refused: ['unidentified_issued_claim'] });
       failures++;
       continue;
@@ -160,6 +185,7 @@ function main(): void {
         maker_controller: 'controller-slice',
         checker_id: 'oracle-fixture',
         checker_controller: 'controller-slice',
+        required_checks: REQUIRED_CONTAINMENT_CHECKS,
       },
     });
 

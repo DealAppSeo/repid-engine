@@ -108,6 +108,12 @@ export interface TrustedSettlementContext {
   checker_controller: string;
   evaluation_version?: string;
   policy_digest?: string;
+  /**
+   * The containment checks that MUST be present and passed for this run (a required-check allowlist, not
+   * merely "some check passed"). Empty/absent keeps the base rule (≥1 check, all passed). CI passes the
+   * sandbox adapter's full set, so a bundle missing any required containment dimension is refused.
+   */
+  required_checks?: readonly string[];
 }
 
 export interface TrustedSettlementInput {
@@ -226,9 +232,14 @@ export function runTrustedSettlement(input: TrustedSettlementInput): TrustedSett
     if (normHash(bundle.verdict_sha256) !== '0x' + sha256Hex(bundle.verdict)) refused.push('verdict_sha_mismatch');
     // the sha the SANDBOX recorded for the promoted artifact must equal our bytes — a real binding, not a recompute.
     if (normHash(sr.artifact_sha256) !== normHash(bundle.verdict_sha256)) refused.push('sandbox_artifact_mismatch');
-    // containment must be DEMONSTRATED, not assumed: at least one recorded profile check, and every one passed.
-    // A promoted bundle with a missing or failed containment check is refused here, never settled as a success.
-    if (sr.profile_checks.length === 0 || sr.profile_checks.some((c) => !c.passed)) refused.push('containment_not_established');
+    // containment must be DEMONSTRATED, not assumed: at least one recorded profile check, every one passed,
+    // AND every REQUIRED check (when the caller names a set) present and passed — not merely "some check passed"
+    // (Strix CWE-636 / Grok red-team). A promoted bundle missing or failing any of these is refused, never settled.
+    const passedNames = new Set(sr.profile_checks.filter((c) => c.passed).map((c) => c.name));
+    const missingRequired = (context.required_checks ?? []).filter((n) => !passedNames.has(n));
+    if (sr.profile_checks.length === 0 || sr.profile_checks.some((c) => !c.passed) || missingRequired.length > 0) {
+      refused.push('containment_not_established');
+    }
   }
   if (refused.length) return { ok: false, refused };
 
@@ -298,6 +309,9 @@ export function runTrustedSettlement(input: TrustedSettlementInput): TrustedSett
     evaluation_attestation,
     settlement_attestation,
     result,
+    // Self-signed throwaway keys, no pinned authority: this receipt is a DEMONSTRATION, never a trust anchor.
+    // The field is bound by content_hash + signature and surfaced by verifyCombinedReceipt (authoritative:false).
+    authoritative: false,
   };
   const receipt = signCombinedReceipt(buildCombinedReceipt(receiptInput), keys.composite);
 
