@@ -48,6 +48,12 @@ import {
   describeCorpus,
   shortHash,
 } from './corpus-manifest';
+import {
+  CalibrationPoint,
+  CalibrationReport,
+  computeCalibration,
+  formatCalibration,
+} from './calibration';
 
 /** HAL pipeline strictness. 1 = deterministic extractor, 2 = cross-LLM fact-check quorum. */
 export type HalStrictness = 1 | 2;
@@ -104,6 +110,14 @@ export interface RuledMeasurement {
   ruler: MeasurementRuler;
   /** Canonical one-line citation for the headline metric. */
   citation: string;
+  /**
+   * Calibration of the predicted score over the SAME cases at the SAME ruler — present only when
+   * per-case `calibrationPoints` were supplied to `recordMeasurement`. Carried here, next to F1,
+   * because a Brier/ECE is only comparable within one ruler, exactly as F1 is. Does not affect the
+   * confusion matrix, the metrics, or any comparability logic; it only measures. Print it next to the
+   * citation with `formatCalibration(m.calibration)`.
+   */
+  calibration?: CalibrationReport;
 }
 
 /** Thrown when someone tries to record or compare an accuracy number without a usable ruler. */
@@ -255,6 +269,15 @@ export function recordMeasurement(args: {
   matrix: ConfusionMatrix;
   ruler: MeasurementRuler | Unattributed | null | undefined;
   headline?: AccuracyMetric;
+  /**
+   * Per-case (predicted probability of the positive class, realised 0/1) pairs, for calibration.
+   * Optional — a confusion matrix alone still records. When supplied they must number exactly the
+   * cases the matrix scored, so a Brier/ECE is never averaged over a different population than F1, and
+   * the resulting `calibration` is attached to the returned measurement. Because calibration can only
+   * be produced HERE, past the ruler gate, it can only ever ride a ruled measurement — the same gate
+   * that keeps an UNRULED summary from carrying an F1 keeps it from carrying a calibration claim.
+   */
+  calibrationPoints?: readonly CalibrationPoint[];
 }): RuledMeasurement {
   const { matrix } = args;
   for (const k of ['tp', 'fp', 'fn', 'tn'] as const) {
@@ -278,6 +301,23 @@ export function recordMeasurement(args: {
     );
   }
 
+  // Calibration, when per-case pairs are supplied, is taken over exactly the cases the matrix scored —
+  // the same population and the same ruler as F1. A mismatch would silently average calibration over a
+  // different set than the accuracy number beside it, which is the original cross-ruler bug in miniature.
+  let calibration: CalibrationReport | undefined;
+  if (args.calibrationPoints) {
+    if (args.calibrationPoints.length !== scored) {
+      throw new MissingRulerError(
+        [
+          `calibrationPoints has ${args.calibrationPoints.length} pairs but the matrix scored ${scored} ` +
+            `cases — calibration must be measured over the same population as F1`,
+        ],
+        'recordMeasurement',
+      );
+    }
+    calibration = computeCalibration(args.calibrationPoints);
+  }
+
   const metrics = metricsFromMatrix(matrix);
   const headline = args.headline ?? 'f1';
   return {
@@ -285,6 +325,7 @@ export function recordMeasurement(args: {
     metrics,
     ruler,
     citation: formatMeasurement(headline, metrics[headline], ruler),
+    ...(calibration ? { calibration } : {}),
   };
 }
 
@@ -390,3 +431,7 @@ export function formatUnattributed(n: UnattributedNumber): string {
 
 /** Re-exported for callers building ruler strings from a manifest alone. */
 export { describeCorpus, shortHash };
+
+/** Re-exported so a caller has one import surface for a measurement and its calibration. */
+export { computeCalibration, formatCalibration };
+export type { CalibrationPoint, CalibrationReport, ReliabilityBin } from './calibration';
