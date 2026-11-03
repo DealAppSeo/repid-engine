@@ -150,7 +150,9 @@ function main(): void {
   let failures = 0;
   let okReceiptKeys: SettlementKeys | null = null;
   let okFalseReceipt: unknown = null; // an incorrect-result receipt, for refusal demo (a)
+  let okFalseKeys: SettlementKeys | null = null; // ...and the keys that signed it — demo (a) must use ITS roots
   let okTrueReceipt: unknown = null; // a correct-result receipt, for refusal demo (b)
+  let okTrueKeys: SettlementKeys | null = null; // ...and the keys that signed it — demo (b) must use ITS roots
 
   for (const vf of verdictFiles) {
     const dir = dirname(vf);
@@ -214,16 +216,22 @@ function main(): void {
     }
     console.log(`[run-slice] ${tag}: ${res.receipt.result} / ${res.receipt.settlement_outcome} — combined receipt verifies`);
     okReceiptKeys = keys;
-    if (res.receipt.result === 'incorrect') okFalseReceipt = res.receipt;
-    if (res.receipt.result === 'correct') okTrueReceipt = res.receipt;
+    // Capture the keys ALONGSIDE the receipt they signed: each bundle has fresh keys, so a demo must verify its
+    // forged receipt against the SAME bundle's roots, never the last bundle's (Strix CWE-754).
+    if (res.receipt.result === 'incorrect') { okFalseReceipt = res.receipt; okFalseKeys = keys; }
+    if (res.receipt.result === 'correct') { okTrueReceipt = res.receipt; okTrueKeys = keys; }
   }
 
-  // Refusal demos: the same flow must REFUSE a dishonest / forged result. Needs the keys of an ok receipt.
+  // Refusal demos: the same flow must REFUSE a dishonest / forged result. Each bundle was settled with its OWN
+  // fresh keys, so every demo verifies its forged receipt against the roots of the SAME bundle that signed it — a
+  // cross-bundle root set makes `untrusted_signer` fire on the UNMODIFIED receipt, satisfying `!v.ok` for the wrong
+  // reason and proving nothing (Strix CWE-754). A demo that cannot run is a FAILURE, never a silent skip — so the
+  // gate also can't go green when no incorrect (demo a) or no correct (demo b) result was ever scored.
   const refusal: Record<string, unknown> = {};
   if (okReceiptKeys) {
-    const roots = trustRootsFor(okReceiptKeys);
-    // (a) a failure re-labelled a success.
-    if (okFalseReceipt && typeof okFalseReceipt === 'object') {
+    // (a) a failure re-labelled a success — against the forged receipt's OWN bundle roots.
+    if (okFalseReceipt && okFalseKeys && typeof okFalseReceipt === 'object') {
+      const roots = trustRootsFor(okFalseKeys);
       const forged = { ...(okFalseReceipt as Record<string, unknown>), settlement_outcome: 'success' };
       const v = verifyCombinedReceipt(forged, roots);
       refusal['incorrect_claimed_success'] = v;
@@ -231,9 +239,13 @@ function main(): void {
         console.error('[run-slice] refusal demo (a) did NOT refuse incorrect_claimed_success');
         failures++;
       } else console.log('[run-slice] refusal (a): incorrect→success refused:', v.reasons.join(', '));
+    } else {
+      console.error('[run-slice] refusal demo (a) could not run: no verified incorrect-result receipt');
+      failures++;
     }
-    // (b) a component re-signed by a rogue key not in the trust roots.
-    if (okTrueReceipt && typeof okTrueReceipt === 'object') {
+    // (b) a component re-signed by a rogue key not in the trust roots — against the correct bundle's OWN roots.
+    if (okTrueReceipt && okTrueKeys && typeof okTrueReceipt === 'object') {
+      const roots = trustRootsFor(okTrueKeys);
       const r = okTrueReceipt as { sandbox_attestation: { payload: unknown } };
       const rogue = generateKeyPairSync('ed25519').privateKey;
       const forged = { ...(okTrueReceipt as Record<string, unknown>), sandbox_attestation: signComponentAttestation(SANDBOX_ATTESTATION_DOMAIN, r.sandbox_attestation.payload, rogue) };
@@ -243,21 +255,12 @@ function main(): void {
         console.error('[run-slice] refusal demo (b) did NOT refuse sandbox_untrusted_signer');
         failures++;
       } else console.log('[run-slice] refusal (b): rogue-signed sandbox attestation refused:', v.reasons.join(', '));
+    } else {
+      console.error('[run-slice] refusal demo (b) could not run: no verified correct-result receipt');
+      failures++;
     }
   } else {
     console.error('[run-slice] no ok receipt available to run the refusal demos');
-    failures++;
-  }
-
-  // POSITIVE coverage (Strix CWE-754): the gate must DEMONSTRATE both scored outcomes — the matrix issues
-  // arith-sum-true (→ correct) and arith-sum-false (→ incorrect) — not merely "nothing failed". Absence of
-  // either means no bundle was actually scored that way (e.g. every verdict pushed into not_scorable), so fail.
-  if (!okTrueReceipt) {
-    console.error('[run-slice] gate not demonstrated: no CORRECT result was scored across the bundles');
-    failures++;
-  }
-  if (!okFalseReceipt) {
-    console.error('[run-slice] gate not demonstrated: no INCORRECT result was scored across the bundles');
     failures++;
   }
 
