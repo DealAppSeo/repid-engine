@@ -26,6 +26,7 @@ import {
   MeasurementRuler,
   RuledMeasurement,
   recordMeasurement,
+  type CalibrationPoint,
 } from './measurement-ruler';
 import { CorpusCase, buildCorpusManifest, CorpusManifest } from './corpus-manifest';
 
@@ -67,7 +68,8 @@ export interface BenchmarkSummary {
   rulerStatus: 'ruled' | 'UNRULED';
   /**
    * The ruled measurement, present only when a ruler was supplied. Carries the canonical citation
-   * string ("F1 = x on corpus <id>@<hash> at N families, strictness s").
+   * string ("F1 = x on corpus <id>@<hash> at N families, strictness s") and, from the per-case
+   * hal_score vs gold label, a `calibration` report (Brier, reliability bins, ECE) at that same ruler.
    */
   ruled?: RuledMeasurement;
 }
@@ -186,9 +188,18 @@ export async function scoreBenchmark(
   const accuracy = (tp + tn) / (items.length || 1);
 
   // Attach the ruler when one was supplied. `recordMeasurement` validates it and throws if it is
-  // incomplete — a bad ruler fails here rather than producing a number that looks authoritative.
+  // incomplete — a bad ruler fails here rather than producing a number that looks authoritative. The
+  // same call also carries calibration: one (hal_score, gold-label) pair per scored case, positive
+  // class = hallucination (predicted = hal_score, actual = 1 iff goldHallucination), measured over the
+  // same samples the confusion matrix was. It rides `ruled`, so an UNRULED summary carries none.
   const ruled = opts.ruler
-    ? recordMeasurement({ matrix: { tp, fp, fn, tn }, ruler: opts.ruler })
+    ? recordMeasurement({
+        matrix: { tp, fp, fn, tn },
+        ruler: opts.ruler,
+        calibrationPoints: samples.map(
+          (s): CalibrationPoint => ({ predicted: s.halScore, actual: s.goldHallucination ? 1 : 0 }),
+        ),
+      })
     : undefined;
 
   return {
