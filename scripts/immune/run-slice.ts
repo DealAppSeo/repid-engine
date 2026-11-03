@@ -203,6 +203,15 @@ function main(): void {
       failures++;
       continue;
     }
+    // A verifying receipt is NOT a passing gate (Strix CWE-754). In CI every downloaded bundle was ISSUED a
+    // committed-oracle claim and the stub Maker answers it, so a clean-but-not_scorable receipt means the
+    // (untrusted) verdict never named its issued claim — the bundle was NOT scored and the boundary NOT shown.
+    // not_scorable stays legitimate for the settler/verifier in general; here, in the gate, it is a failure.
+    if (res.receipt.result === 'not_scorable') {
+      console.error(`[run-slice] ${tag}: receipt verifies but result=not_scorable — bundle was not scored; failing the gate`);
+      failures++;
+      continue;
+    }
     console.log(`[run-slice] ${tag}: ${res.receipt.result} / ${res.receipt.settlement_outcome} — combined receipt verifies`);
     okReceiptKeys = keys;
     if (res.receipt.result === 'incorrect') okFalseReceipt = res.receipt;
@@ -237,6 +246,18 @@ function main(): void {
     }
   } else {
     console.error('[run-slice] no ok receipt available to run the refusal demos');
+    failures++;
+  }
+
+  // POSITIVE coverage (Strix CWE-754): the gate must DEMONSTRATE both scored outcomes — the matrix issues
+  // arith-sum-true (→ correct) and arith-sum-false (→ incorrect) — not merely "nothing failed". Absence of
+  // either means no bundle was actually scored that way (e.g. every verdict pushed into not_scorable), so fail.
+  if (!okTrueReceipt) {
+    console.error('[run-slice] gate not demonstrated: no CORRECT result was scored across the bundles');
+    failures++;
+  }
+  if (!okFalseReceipt) {
+    console.error('[run-slice] gate not demonstrated: no INCORRECT result was scored across the bundles');
     failures++;
   }
 
