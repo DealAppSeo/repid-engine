@@ -34,6 +34,7 @@ import { createHash, generateKeyPairSync, type KeyObject } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
 import { signComponentAttestation, verifyCombinedReceipt, SANDBOX_ATTESTATION_DOMAIN } from '../../src/immune/combined-receipt';
+import { verifySandboxReceipt, type SandboxReceiptVerification } from '../../src/immune/sandbox-receipt-verify';
 import {
   runTrustedSettlement,
   fixtureOracle,
@@ -79,12 +80,14 @@ const REQUIRED_CONTAINMENT_CHECKS = [
  * FAIL-CLOSED: every containment fact is derived from the REAL receipt (`receipt.profile.checks` / `worker` /
  * `destroy` / mounts); a missing receipt or a missing/failed fact yields a NOT-promoted, not-contained shape the
  * settler refuses. The bound artifact sha is the one the SANDBOX recorded (airlock / promoted), never a recompute
- * of our own bytes — so the settler's cross-check is a real binding, not a tautology. (Verifying the receipt's own
- * harness signature is the next Sean-gated gate; the harness public key is carried as provenance.)
+ * of our own bytes — so the settler's cross-check is a real binding, not a tautology. The receipt's own harness
+ * signature is VERIFIED (tamper-evidence) and returned; pinning the ephemeral harness key to a trust anchor so a
+ * verified receipt can be called AUTHENTIC is the next Sean-gated gate — see sandbox-receipt-verify.ts.
  */
-function adaptSandboxReceipt(dir: string, verdict: string, claimId: string): { sr: SliceSandboxReceipt; harnessPubKey: unknown } {
+function adaptSandboxReceipt(dir: string, verdict: string, claimId: string): { sr: SliceSandboxReceipt; harnessPubKey: unknown; verification: SandboxReceiptVerification } {
   const envelope = readJsonMaybe(join(dir, 'receipt.json')); // { receipt, signature } — trustshell.sandbox-mission-receipt/v2
   const rc = envelope?.receipt; // the signed receipt body
+  const verification = verifySandboxReceipt(envelope); // harness Ed25519 over canonical(receipt) — tamper-evidence
   const promoteJson = readJsonMaybe(join(dir, 'promote.json')); // `trustshell sandbox promote --json`
   const keysJson = readJsonMaybe(join(dir, 'public-keys.json'));
 
@@ -120,6 +123,7 @@ function adaptSandboxReceipt(dir: string, verdict: string, claimId: string): { s
       profile_checks,
     },
     harnessPubKey: keysJson?.harness ?? rc?.keys?.harness ?? null,
+    verification,
   };
 }
 
@@ -172,8 +176,16 @@ function main(): void {
       continue;
     }
     const id = issuedClaim.id;
-    const { sr, harnessPubKey } = adaptSandboxReceipt(dir, verdict, id);
-    provenance.push({ bundle: tag, claim: id, trustshell_harness_public_key: harnessPubKey, note: 'carried as provenance; harness-signature carry-through is the next Sean-gated gate' });
+    const { sr, harnessPubKey, verification: sigv } = adaptSandboxReceipt(dir, verdict, id);
+    provenance.push({ bundle: tag, claim: id, trustshell_harness_public_key: harnessPubKey, harness_fingerprint: sigv.harness_fingerprint, signature_verified: sigv.verified, harness_pinned: sigv.pinned, note: 'harness signature VERIFIED (tamper-evidence); pinning the ephemeral harness key for AUTHENTICITY is the next Sean-gated gate' });
+    // FAIL CLOSED: a sandbox receipt whose harness signature does not verify was tampered or is unsigned — refuse it
+    // before settlement. (Tamper-evidence only; the key is ephemeral + self-asserted, so this is not yet authenticity.)
+    if (!sigv.verified) {
+      console.error(`[run-slice] ${tag}: sandbox receipt harness signature did NOT verify (${sigv.reasons.join(', ')}) — refusing`);
+      summary.push({ bundle: tag, ok: false, refused: ['sandbox_signature_invalid'], signature_reasons: sigv.reasons });
+      failures++;
+      continue;
+    }
 
     const keys = newKeys();
     const res = runTrustedSettlement({
