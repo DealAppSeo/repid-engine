@@ -100,6 +100,8 @@ export interface SettlementKeys {
 /** The binding context: who made it, who checked it, which experiment. The stub Maker + fixture oracle share a controller. */
 export interface TrustedSettlementContext {
   experiment_id: string;
+  /** The claim this bundle was ISSUED. Scoring binds to THIS, never to the claim id inside the untrusted verdict. */
+  claim_id: string;
   maker_id: string;
   maker_controller: string;
   checker_id: string;
@@ -187,15 +189,20 @@ export function fixtureOracle(claims: readonly OracleClaim[], oracleSetId: strin
   return { oracle_set_id: oracleSetId, hash: '0x' + sha256Hex(JSON.stringify(claims)), claims };
 }
 
-/** Score the Maker's one-line verdict against the oracle. Unparseable or unknown-claim ⇒ missing_evaluation. */
-function scoreVerdict(verdict: string, oracle: FixtureOracle): VerifiedCorrect {
+/**
+ * Score the Maker's one-line verdict against the oracle, bound to the claim this bundle was ISSUED.
+ * Unparseable, a verdict naming a DIFFERENT claim than the issued one, or an unknown claim ⇒ missing_evaluation
+ * (never scored). The Maker must not be able to select which claim it is graded on by naming a favourable id.
+ */
+function scoreVerdict(verdict: string, oracle: FixtureOracle, expectedClaimId: string): VerifiedCorrect {
   let parsed: { id?: unknown; verdict?: unknown };
   try {
     parsed = JSON.parse((verdict.trim().split('\n')[0] ?? '')) as typeof parsed;
   } catch {
     return 'missing_evaluation';
   }
-  const claim = oracle.claims.find((c) => c.id === parsed.id);
+  if (parsed.id !== expectedClaimId) return 'missing_evaluation';
+  const claim = oracle.claims.find((c) => c.id === expectedClaimId);
   if (!claim || (parsed.verdict !== 'TRUE' && parsed.verdict !== 'FALSE')) return 'missing_evaluation';
   return parsed.verdict === claim.expected ? 'correct' : 'incorrect';
 }
@@ -217,12 +224,16 @@ export function runTrustedSettlement(input: TrustedSettlementInput): TrustedSett
   } else {
     if (sr.airlock_decision !== 'promote') refused.push('sandbox_not_promoted');
     if (normHash(bundle.verdict_sha256) !== '0x' + sha256Hex(bundle.verdict)) refused.push('verdict_sha_mismatch');
+    // the sha the SANDBOX recorded for the promoted artifact must equal our bytes — a real binding, not a recompute.
     if (normHash(sr.artifact_sha256) !== normHash(bundle.verdict_sha256)) refused.push('sandbox_artifact_mismatch');
+    // containment must be DEMONSTRATED, not assumed: at least one recorded profile check, and every one passed.
+    // A promoted bundle with a missing or failed containment check is refused here, never settled as a success.
+    if (sr.profile_checks.length === 0 || sr.profile_checks.some((c) => !c.passed)) refused.push('containment_not_established');
   }
   if (refused.length) return { ok: false, refused };
 
-  // (2) score the verdict against the fixture oracle.
-  const verified_correct = scoreVerdict(bundle.verdict, oracle);
+  // (2) score the verdict against the fixture oracle, bound to the claim this bundle was ISSUED (not the verdict's id).
+  const verified_correct = scoreVerdict(bundle.verdict, oracle, context.claim_id);
   const result = RESULT_OF[verified_correct];
 
   // (3) DRY-RUN settlement: outcome and delta sign from the verdict. No DB write.
@@ -277,8 +288,8 @@ export function runTrustedSettlement(input: TrustedSettlementInput): TrustedSett
     ruler: { oracle_set_id: oracle.oracle_set_id, hash: oracle.hash },
     mode: 'shadow',
     identities: { maker_id: context.maker_id, maker_controller: context.maker_controller, checker_id: context.checker_id },
-    executed: true,
-    contained: sr.profile_checks.filter((c) => c.passed).map((c) => c.name),
+    executed: true, // only reached past the containment gate above: promoted + every profile check passed.
+    contained: sr.profile_checks.map((c) => c.name), // all of them — none is silently dropped; a failed one already refused.
     settled,
     settlement_event_id,
     settlement_outcome,

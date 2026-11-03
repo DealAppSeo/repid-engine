@@ -3,13 +3,16 @@
 #
 # TRUST-BOUNDARY NOTE (the point of this file). Two separate jobs are NOT automatically a trust boundary.
 #   * `settle` consumes `maker`'s output as DATA ONLY (JSON + sha256 checks). It never executes, evals, sources
-#     or imports anything from the maker artifact. Its code and authorities come from the checked-out repid-engine
-#     base ref, not the artifact.
+#     or imports anything from the maker artifact.
+#   * HONEST LIMIT (Grok/Strix): on a `pull_request` event actions/checkout has no explicit `ref:`, so `settle`
+#     checks out the PR MERGE ref — the settler code here is the PR's OWN version, not a protected base ref. This
+#     boundary holds ONLY because neither job carries a secret. A genuinely protected settler (base-ref/protected
+#     code + real signing keys + real oracle + a real on-chain anchor) is the next Sean-gated gate; DO NOT add any
+#     secret to these jobs until that boundary exists. See scripts/immune/run-slice.ts and src/immune/trusted-settler.ts.
 #   * No shared mutable cache between the jobs (no actions/cache; the only hand-off is the uploaded artifact).
 #   * NO PRODUCTION SECRETS: the `maker` job has `contents: read` and nothing else; keys are throwaway and
-#     generated in-job; the settlement is a DRY-RUN. Prod oracle / secret / signing wiring is deferred and
-#     Sean-gated (see scripts/immune/run-slice.ts and src/immune/trusted-settler.ts).
-# Every action is pinned by full commit SHA.
+#     generated in-job; the settlement is a DRY-RUN.
+# Every action is pinned by full commit SHA; the cross-repo trustshell checkout is pinned to a reviewed commit.
 
 name: immune-slice
 
@@ -35,17 +38,21 @@ jobs:
     env:
       RUNTIME: ${{ matrix.runtime }}
       PINNED_DIGEST: sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+      # Reviewed DealAppSeo/trustshell commit that provides the sandbox AND mints the receipt. Floating `main`
+      # would let anyone who lands a commit there run unsandboxed in our CI and emit a receipt for containment
+      # that never happened (Strix CWE-1357). Bump this only with review of that commit.
+      TRUSTSHELL_COMMIT: "045bd37e9aead64be3889ca8309a6c1272b41b44"
     steps:
       - name: Checkout repid-engine
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # the job never pushes; keep the token off disk
 
-      - name: Checkout trustshell (origin/main) into ./trustshell
+      - name: Checkout trustshell (pinned reviewed commit) into ./trustshell
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: DealAppSeo/trustshell
-          ref: main
+          ref: ${{ env.TRUSTSHELL_COMMIT }}
           path: trustshell
           persist-credentials: false
 
@@ -81,6 +88,9 @@ jobs:
         working-directory: trustshell
         run: |
           set -euo pipefail
+          # The checkout ref could be overridden by a PR edit to this workflow; assert the exact reviewed commit
+          # before running any of trustshell's scripts (Strix CWE-1357).
+          test "$(git rev-parse HEAD)" = "$TRUSTSHELL_COMMIT" || { echo "::error::trustshell checkout $(git rev-parse HEAD) != pinned $TRUSTSHELL_COMMIT"; exit 1; }
           npm ci --ignore-scripts # PR code must not run dependency install scripts
           npm run sdk:build
 
@@ -126,9 +136,10 @@ jobs:
           path: ${{ runner.temp }}/bundle
           if-no-files-found: error
 
-  # TRUSTED. Checks out the repid-engine base ref (its own code), downloads the maker bundles, and runs the
-  # trusted settler on them as DATA. Exits non-zero if any expected-ok receipt fails to verify or any
-  # expected-refusal verifies. This job executes NOTHING from the maker artifact.
+  # SETTLER. Downloads the maker bundles and runs the settler on them as DATA — never executing them. Exits
+  # non-zero if any expected-ok receipt fails to verify or any expected-refusal verifies. See the HONEST LIMIT
+  # in the header: on `pull_request` this runs the PR's OWN settler code (merge ref), so the only thing keeping
+  # it safe is that there is NO secret in this job. The protected settler is the next Sean-gated gate.
   settle:
     needs: maker
     runs-on: ubuntu-latest
@@ -136,7 +147,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout repid-engine (base ref — trusted code, not the artifact)
+      - name: Checkout repid-engine (PR merge ref — see HONEST LIMIT in header; safe only because no secret here)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

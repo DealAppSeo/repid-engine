@@ -45,6 +45,7 @@ const newKeys = (): SettlementKeys => {
 
 const ctx = (claim: OracleClaim): TrustedSettlementContext => ({
   experiment_id: `immune-slice-${claim.id}`,
+  claim_id: claim.id,
   maker_id: 'agent-maker-stub',
   maker_controller: 'controller-slice',
   checker_id: 'oracle-fixture',
@@ -142,5 +143,59 @@ describe('agent immune system slice — sandboxed maker → trusted settler → 
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.refused).toContain('verdict_sha_mismatch');
+  });
+
+  it('BINDING (Strix CWE-807): a verdict naming a DIFFERENT claim than the one ISSUED is never scored (not_scorable)', () => {
+    // Issued the TRUE claim, but the Maker answers naming the FALSE claim — it must not pick its own answer key.
+    const verdict = JSON.stringify({ id: falseClaim.id, verdict: 'TRUE' });
+    const sha = '0x' + createHash('sha256').update(verdict, 'utf8').digest('hex');
+    const bundle: PromotedBundle = {
+      verdict,
+      verdict_sha256: sha,
+      sandbox_receipt: { mission_id: 'mission-x', airlock_decision: 'promote', artifact_sha256: sha, profile_checks: [{ name: 'seccomp', passed: true }] },
+    };
+    const res = runTrustedSettlement({ bundle, oracle, keys: newKeys(), context: ctx(trueClaim) });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.receipt.result).toBe('not_scorable');
+    expect(res.receipt.settlement_outcome).toBe('none');
+    expect(res.settlement.delta_sign).toBe('none');
+    expect(res.verification).toEqual({ ok: true, reasons: [] });
+  });
+
+  it('CONTAINMENT (Strix CWE-636): a promoted bundle with a FAILED containment check is refused, never settled', () => {
+    const res = runTrustedSettlement({
+      bundle: bundleFor(trueClaim, { profile_checks: [{ name: 'seccomp', passed: true }, { name: 'container_destroyed', passed: false }] }),
+      oracle,
+      keys: newKeys(),
+      context: ctx(trueClaim),
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.refused).toContain('containment_not_established');
+  });
+
+  it('CONTAINMENT: a promoted bundle recording NO containment checks is refused (cannot attest what it never observed)', () => {
+    const res = runTrustedSettlement({
+      bundle: bundleFor(trueClaim, { profile_checks: [] }),
+      oracle,
+      keys: newKeys(),
+      context: ctx(trueClaim),
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.refused).toContain('containment_not_established');
+  });
+
+  it('BINDING: a sandbox that recorded a DIFFERENT artifact sha than the promoted bytes is refused (real bind, not tautology)', () => {
+    const res = runTrustedSettlement({
+      bundle: bundleFor(trueClaim, { artifact_sha256: '0x' + 'ab'.repeat(32) }), // sandbox "recorded" a sha ≠ our bytes
+      oracle,
+      keys: newKeys(),
+      context: ctx(trueClaim),
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.refused).toContain('sandbox_artifact_mismatch');
   });
 });

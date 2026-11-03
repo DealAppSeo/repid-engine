@@ -13,10 +13,11 @@
  * NON-ZERO if any expected-ok receipt fails to verify or any expected-refusal verifies.
  *
  * TRUST BOUNDARY NOTE. `settle` and `maker` are separate CI jobs, which is NOT automatically a trust boundary:
- * this runner treats the maker output as data only, shares no mutable cache with it, and runs the repid-engine
- * base ref's code. The bundle's TrustShell harness PUBLIC key is recorded as provenance; binding the sandbox's
- * own signature through into the slice's sandbox attestation (so the settler carries it rather than re-signing
- * under a fresh harness key) is the next Sean-gated gate — see sandbox-provenance.json.
+ * this runner treats the maker output as DATA only and shares no mutable cache with it. HONEST LIMIT: on a
+ * `pull_request` event the settle job checks out the PR merge ref, so this code is the PR's OWN version, not a
+ * protected base ref — the boundary holds only because the job carries no secret. The bundle's TrustShell harness
+ * PUBLIC key is recorded as provenance; binding and VERIFYING the sandbox receipt's own harness signature (so the
+ * settler carries it rather than re-deriving facts) is the next Sean-gated gate — see sandbox-provenance.json.
  */
 import { createHash, generateKeyPairSync, type KeyObject } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -49,32 +50,52 @@ const newKeys = (): SettlementKeys => {
   return { harness: k(), evaluation: k(), settlement: k(), composite: k() };
 };
 
-/** DATA-ONLY adaptation of the TrustShell sandbox-mission receipt + promote output into the slice's shape. */
+/**
+ * DATA-ONLY adaptation of the TrustShell sandbox-mission receipt + promote output into the slice's shape.
+ * FAIL-CLOSED: every containment fact is derived from the REAL receipt (`receipt.profile.checks` / `worker` /
+ * `destroy` / mounts); a missing receipt or a missing/failed fact yields a NOT-promoted, not-contained shape the
+ * settler refuses. The bound artifact sha is the one the SANDBOX recorded (airlock / promoted), never a recompute
+ * of our own bytes — so the settler's cross-check is a real binding, not a tautology. (Verifying the receipt's own
+ * harness signature is the next Sean-gated gate; the harness public key is carried as provenance.)
+ */
 function adaptSandboxReceipt(dir: string, verdict: string, claimId: string): { sr: SliceSandboxReceipt; harnessPubKey: unknown } {
-  const receiptJson = readJsonMaybe(join(dir, 'receipt.json')); // trustshell.sandbox-mission-receipt/*
+  const envelope = readJsonMaybe(join(dir, 'receipt.json')); // { receipt, signature } — trustshell.sandbox-mission-receipt/v2
+  const rc = envelope?.receipt; // the signed receipt body
   const promoteJson = readJsonMaybe(join(dir, 'promote.json')); // `trustshell sandbox promote --json`
   const keysJson = readJsonMaybe(join(dir, 'public-keys.json'));
-  const sha = '0x' + sha256hex(verdict);
+
+  // the sha the SANDBOX independently recorded for the promoted verdict file (not our recompute of the bytes).
+  const recordedIn = (xs: unknown): string | undefined =>
+    Array.isArray(xs) ? (xs.find((a: any) => a?.name === 'verdict.json' && typeof a?.sha256 === 'string') as any)?.sha256 : undefined;
+  const recordedSha = recordedIn(rc?.artifacts?.promoted) ?? recordedIn(rc?.airlock?.inspected) ?? recordedIn(promoteJson?.promoted);
+
+  const checks: any[] = Array.isArray(rc?.profile?.checks) ? rc.profile.checks : [];
+  const inputMount = Array.isArray(rc?.profile?.observed?.Mounts)
+    ? rc.profile.observed.Mounts.find((m: any) => m?.Destination === '/mission/input')
+    : undefined;
+  const profile_checks: SliceSandboxReceipt['profile_checks'] = [
+    { name: 'restriction_profile_read_back', passed: checks.length > 0 && checks.every((c: any) => c?.ok === true), detail: `${checks.length} docker-inspect checks` },
+    { name: 'worker_executed', passed: rc?.worker?.exit_code === 0 && rc?.worker?.timed_out === false && rc?.worker?.oom_killed === false },
+    { name: 'input_mounted_read_only', passed: inputMount?.RW === false },
+    { name: 'container_destroyed', passed: rc?.destroy?.container_removed === true },
+    { name: 'promotion_self_verified', passed: promoteJson?.verify?.ok === true },
+  ];
+  // promoted only when a real receipt recorded THIS artifact AND the promotion writer self-verified.
   const promoted =
-    (Array.isArray(promoteJson?.promoted) && promoteJson.promoted.length > 0) ||
-    (Array.isArray(receiptJson?.artifacts?.promoted) && receiptJson.artifacts.promoted.some((a: any) => a?.sha256));
-  // Provenance cross-check (warn-only): the sha TrustShell recorded for the promoted file should equal our bytes' sha.
-  const recorded: string | undefined = receiptJson?.artifacts?.promoted?.find?.((a: any) => a?.name === 'verdict.json')?.sha256;
-  if (recorded && recorded.replace(/^0x/i, '').toLowerCase() !== sha.slice(2)) {
-    console.warn(`[run-slice] ${claimId}: TrustShell recorded sha ${recorded} != verdict bytes sha ${sha} (provenance warning)`);
-  }
+    rc != null &&
+    typeof recordedSha === 'string' &&
+    promoteJson?.verify?.ok === true &&
+    Array.isArray(promoteJson?.promoted) &&
+    promoteJson.promoted.some((a: any) => a?.name === 'verdict.json');
+
   return {
     sr: {
-      mission_id: String(receiptJson?.mission_id ?? promoteJson?.mission_id ?? `mission-${claimId}`),
+      mission_id: String(rc?.mission_id ?? `mission-${claimId}`),
       airlock_decision: promoted ? 'promote' : 'refuse',
-      artifact_sha256: sha,
-      profile_checks: [
-        { name: 'profile_read_back_before_start', passed: receiptJson?.profile != null },
-        { name: 'container_destroyed', passed: receiptJson?.destroy?.container_removed !== false },
-        { name: 'input_mounted_read_only', passed: true },
-      ],
+      artifact_sha256: typeof recordedSha === 'string' ? recordedSha : 'unrecorded',
+      profile_checks,
     },
-    harnessPubKey: keysJson?.harness ?? null,
+    harnessPubKey: keysJson?.harness ?? rc?.keys?.harness ?? null,
   };
 }
 
@@ -110,18 +131,22 @@ function main(): void {
   for (const vf of verdictFiles) {
     const dir = dirname(vf);
     const verdict = readFileSync(vf, 'utf8');
-    let id = 'unknown';
-    try {
-      id = String((JSON.parse(verdict.trim().split('\n')[0] ?? '') as { id?: unknown }).id ?? 'unknown');
-    } catch {
-      /* keep 'unknown' — the settler will score it missing_evaluation */
+    // `tag` is unique per bundle (its path under the download dir), so the 2×2 CI matrix never collides a
+    // per-receipt filename or experiment_id.
+    const tag = relative(bundlesDir, dir).replace(/[^A-Za-z0-9._-]+/g, '_') || basename(dir);
+    // The claim this bundle was ISSUED, resolved from its published bundle NAME against the committed claim set —
+    // never from the verdict's own contents (the Maker must not pick which claim it is graded on; Strix CWE-807).
+    const issued = oracle.claims.filter((c) => tag.includes(c.id));
+    const issuedClaim = issued.length === 1 ? issued[0] : undefined;
+    if (!issuedClaim) {
+      console.error(`[run-slice] ${tag}: bundle name does not identify exactly one oracle claim — not scored`);
+      summary.push({ bundle: tag, ok: false, refused: ['unidentified_issued_claim'] });
+      failures++;
+      continue;
     }
-    // `key` is unique per bundle (its path under the download dir), so the 2×2 CI matrix never collides a
-    // per-receipt filename or experiment_id; `id` stays the human claim label used for scoring + the summary.
-    const key = relative(bundlesDir, dir).replace(/[^A-Za-z0-9._-]+/g, '_') || basename(dir);
-    const tag = key;
+    const id = issuedClaim.id;
     const { sr, harnessPubKey } = adaptSandboxReceipt(dir, verdict, id);
-    provenance.push({ bundle: tag, claim: id, trustshell_harness_public_key: harnessPubKey, note: 'carried as provenance; signature carry-through is the next Sean-gated gate' });
+    provenance.push({ bundle: tag, claim: id, trustshell_harness_public_key: harnessPubKey, note: 'carried as provenance; harness-signature carry-through is the next Sean-gated gate' });
 
     const keys = newKeys();
     const res = runTrustedSettlement({
@@ -130,6 +155,7 @@ function main(): void {
       keys,
       context: {
         experiment_id: `immune-slice-${tag}`,
+        claim_id: id,
         maker_id: 'agent-maker-stub',
         maker_controller: 'controller-slice',
         checker_id: 'oracle-fixture',
