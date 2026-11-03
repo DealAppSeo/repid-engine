@@ -167,6 +167,13 @@ export interface CombinedReceiptBody {
   settlement_attestation: ComponentAttestation<SettlementAttestationPayload>;
   // ── the headline ──
   result: ReceiptResult;
+  /**
+   * Whether this receipt is backed by a PINNED authority. Absent or false ⇒ a self-signed demonstration
+   * (throwaway per-run keys, no pinned harness/oracle/settlement authority) — NOT a trust anchor. It is
+   * bound by content_hash + signature, and verifyCombinedReceipt surfaces it, so a green verify of a demo
+   * receipt is never mistaken for authority. A real pinned-authority binding is the next Sean-gated gate.
+   */
+  authoritative?: boolean;
 }
 
 export interface CombinedReceipt extends CombinedReceiptBody {
@@ -250,6 +257,8 @@ export function signCombinedReceipt(r: CombinedReceipt, signingKey: KeyObject): 
 export interface CombinedReceiptVerification {
   ok: boolean;
   reasons: string[];
+  /** true only when the receipt asserts `authoritative: true`. A green `ok` with `authoritative: false` is a demo, not a trust anchor. */
+  authoritative: boolean;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -328,8 +337,10 @@ export function verifyCombinedReceipt(
   };
 
   if (!isObj(receipt) || !isObj(receipt['identities'])) {
-    return { ok: false, reasons: ['malformed'] };
+    return { ok: false, reasons: ['malformed'], authoritative: false };
   }
+  // Surfaced in the result (never a refusal): a demo receipt (authoritative !== true) verifies fine but is no trust anchor.
+  const authoritative = receipt['authoritative'] === true;
   const r = receipt as unknown as SignedCombinedReceipt;
 
   // (1) composite signature present, verifies under its named key, and that key is trusted for the composite role.
@@ -383,5 +394,5 @@ export function verifyCombinedReceipt(
   // (6) replay.
   if (seenExperimentIds.has(r.experiment_id)) refuse('experiment_replayed');
 
-  return { ok: reasons.length === 0, reasons };
+  return { ok: reasons.length === 0, reasons, authoritative };
 }

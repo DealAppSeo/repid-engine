@@ -90,7 +90,7 @@ interface SignWith {
   settlement?: KeyObject;
 }
 
-function make(over: Partial<Facts> = {}, signWith: SignWith = {}): { receipt: SignedCombinedReceipt; trustRoots: CombinedReceiptTrustRoots } {
+function make(over: Partial<Facts> = {}, signWith: SignWith = {}, authoritative?: boolean): { receipt: SignedCombinedReceipt; trustRoots: CombinedReceiptTrustRoots } {
   const f = facts(over);
   const combined = authority();
   const sandbox = authority();
@@ -132,6 +132,7 @@ function make(over: Partial<Facts> = {}, signWith: SignWith = {}): { receipt: Si
     evaluation_attestation,
     settlement_attestation,
     result: f.result,
+    ...(authoritative === undefined ? {} : { authoritative }),
   };
 
   const receipt = signCombinedReceipt(buildCombinedReceipt(input), signWith.combined ?? combined.key);
@@ -147,7 +148,20 @@ function make(over: Partial<Facts> = {}, signWith: SignWith = {}): { receipt: Si
 describe('combined trust receipt — anti-forgery verifier', () => {
   it('accepts a well-formed correct, same-controller, settled-success receipt', () => {
     const { receipt, trustRoots } = make();
-    expect(verifyCombinedReceipt(receipt, trustRoots)).toEqual({ ok: true, reasons: [] });
+    expect(verifyCombinedReceipt(receipt, trustRoots)).toEqual({ ok: true, reasons: [], authoritative: false });
+  });
+
+  // ── Non-authoritative marker: a green verify of a demo receipt must never read as a trust anchor ──
+  it('surfaces authoritative:false for a demo receipt (default), and authoritative:true only when the signed body asserts it', () => {
+    const demo = make(); // no authoritative in the body
+    expect(verifyCombinedReceipt(demo.receipt, demo.trustRoots)).toEqual({ ok: true, reasons: [], authoritative: false });
+    const pinned = make({}, {}, true); // authoritative:true, bound by content_hash + signature
+    expect(verifyCombinedReceipt(pinned.receipt, pinned.trustRoots)).toEqual({ ok: true, reasons: [], authoritative: true });
+    // the marker is signed: flipping it post-signing breaks the content hash + signature, never silently reads true.
+    const forgedTrue = { ...demo.receipt, authoritative: true };
+    const v = verifyCombinedReceipt(forgedTrue, demo.trustRoots);
+    expect(v.ok).toBe(false);
+    expect(v.reasons).toContain('content_hash_mismatch');
   });
 
   // ── Issue A: the headline new test ────────────────────────────────────────────────────────────
@@ -163,7 +177,7 @@ describe('combined trust receipt — anti-forgery verifier', () => {
   // ── Issue B: a legitimate negative settlement ─────────────────────────────────────────────────
   it('2. accepts a verified-incorrect result that settles a negative (failure) delta', () => {
     const { receipt, trustRoots } = make({ result: 'incorrect', verified_correct: 'incorrect', settled: true, settlement_outcome: 'failure' });
-    expect(verifyCombinedReceipt(receipt, trustRoots)).toEqual({ ok: true, reasons: [] });
+    expect(verifyCombinedReceipt(receipt, trustRoots)).toEqual({ ok: true, reasons: [], authoritative: false });
   });
 
   it('3. refuses an incorrect result represented as a settled success', () => {
