@@ -15,10 +15,18 @@
  *                  that the net-positive same-controller delta (self-measured evidence scoring itself well)
  *                  is impossible to miss, so nobody mistakes it for independent reputation.
  *
- * SCOPE (honest, per Grok D-107 review): this grounds each delta in the task-evidence PROVENANCE its own row
- * carries (evidence_id cites trinity_tasks:<id>, plus evidence_ref + a content hash) — the evidence IS cited.
- * It does NOT cross-join to verify that the cited trinity_task actually exists and completed; that join is
- * increment 2 (needs trinity_tasks + the receipt chain) and is deliberately NOT claimed here.
+ * SCOPE. Increment 1 grounds each delta in the task-evidence PROVENANCE its own row carries (evidence_id cites
+ * trinity_tasks:<id>, plus evidence_ref + a content hash) — the evidence IS cited. Increment 2 (OPT-IN: pass
+ * `taskEvidence`) cross-joins that citation to real task state the CALLER resolves: every cited trinity_tasks:<id>
+ * must resolve to a real task row (cited_task_exists) AND be verified done by the caller's bar (cited_task_verified_done).
+ * The reducer stays PURE — the caller runs the read-only trinity_tasks query and passes the existing/done id sets in,
+ * exactly as it passes the rows. Omit `taskEvidence` and the reducer behaves as increment 1 (no task-existence invariant).
+ *
+ * DONE-BAR, verified live [V 2026-11-04]: the 656 live rows cite 330 distinct tasks; all 330 EXIST, all 330 have a
+ * non-null `result`, and all 330 are `status='done'` with known-answer lineage — 0 are `status='completed'` (the
+ * lifecycle marks done as 'done', NOT 'completed'; a `status='completed'` literal false-alarms on all 330). The code's
+ * own done-bar is `result IS NOT NULL` (`loadKnownAnswerRows` filters on that, never status). So "done" = has a result;
+ * the caller names its exact bar in `doneBar`, recorded on the invariant.
  *
  * Read query (copy-paste, read-only; agent_id cast to text so the reducer never needs the uuid type):
  *   SELECT mode, dimension, eligibility, scoring_version, oracle_id, agent_id::text AS agent_id,
@@ -45,6 +53,24 @@ export interface PackRow {
   delta: number | string;
 }
 
+/**
+ * Increment 2 (opt-in): the real task state the caller resolved for the cited trinity_tasks ids, read-only.
+ * `existing` = ids that resolve to a real trinity_tasks row; `done` = ids the caller confirms were actually done
+ * (for known-answer that is "has a non-null result", NOT status='completed'). `doneBar` records what done meant.
+ */
+export interface TaskEvidenceLookup {
+  existing: Iterable<string | number>;
+  done: Iterable<string | number>;
+  doneBar?: string;
+}
+
+const CITED_TASK_RE = /^trinity_tasks:(.+)$/;
+/** The trinity_tasks id a row cites, or null when the evidence_id is not a task citation (e.g. an immune content hash). */
+export function citedTaskId(evidenceId: string): string | null {
+  const m = CITED_TASK_RE.exec((evidenceId ?? '').trim());
+  return m ? m[1]!.trim() : null;
+}
+
 export interface DeltaTally { n: number; pos: number; neg: number; zero: number; net: number }
 export interface Invariant { name: string; held: boolean; count: number; note: string }
 export interface Signal { name: string; note: string; detail: Record<string, number> }
@@ -58,6 +84,8 @@ export interface EvidencePack {
   byEvidenceKind: Record<string, number>;        // what each delta was scored from
   invariants: Invariant[];
   signals: Signal[];                             // surfaced, non-gating
+  /** Increment 2 (null unless taskEvidence was supplied): the cross-join of cited trinity_tasks:<id> to real task state. */
+  citedTasks: { cited: number; existing: number; done: number; missingRows: number; notDoneRows: number } | null;
   /** true ⇒ every invariant held ⇒ safe to publish as same-controller shadow evidence, no independence claim. */
   ok: boolean;
 }
@@ -74,7 +102,7 @@ function addDelta(t: DeltaTally, d: number): void {
 
 const present = (s: string | undefined): boolean => !!s && s.trim() !== '';
 
-export function evidencePack(rows: PackRow[]): EvidencePack {
+export function evidencePack(rows: PackRow[], taskEvidence?: TaskEvidenceLookup): EvidencePack {
   const byMode: Record<string, number> = {};
   const byDimension: Record<string, DeltaTally> = {};
   const byControllerClass: Record<string, DeltaTally> = {};
@@ -85,6 +113,11 @@ export function evidencePack(rows: PackRow[]): EvidencePack {
   let selfDealing = 0;
   let missingRuler = 0;
   let missingEvidence = 0;
+  const existingSet = new Set<string>([...(taskEvidence?.existing ?? [])].map(String));
+  const doneSet = new Set<string>([...(taskEvidence?.done ?? [])].map(String));
+  const citedDistinct = new Set<string>();
+  let missingTaskRows = 0;
+  let notDoneTaskRows = 0;
 
   for (const r of rows) {
     const parsed = Number(r.delta);
@@ -107,6 +140,15 @@ export function evidencePack(rows: PackRow[]): EvidencePack {
     if (!ver) missingRuler += 1;
     // grounding: every delta must CITE its task evidence (id + ref + content hash all present).
     if (!(present(r.evidence_id) && present(r.evidence_ref) && present(r.evidence_hash))) missingEvidence += 1;
+    // increment 2: resolve the cited trinity_tasks:<id> against caller-supplied task state (only for task citations).
+    const tid = citedTaskId(r.evidence_id);
+    if (tid !== null) {
+      citedDistinct.add(tid);
+      if (taskEvidence) {
+        if (!existingSet.has(tid)) missingTaskRows += 1;
+        if (!doneSet.has(tid)) notDoneTaskRows += 1;
+      }
+    }
   }
 
   const invariants: Invariant[] = [
@@ -142,6 +184,23 @@ export function evidencePack(rows: PackRow[]): EvidencePack {
     },
   ];
 
+  if (taskEvidence) {
+    invariants.push(
+      {
+        name: 'cited_task_exists',
+        held: missingTaskRows === 0,
+        count: missingTaskRows,
+        note: 'increment 2: every row citing trinity_tasks:<id> must resolve to a real trinity_tasks row',
+      },
+      {
+        name: 'cited_task_verified_done',
+        held: notDoneTaskRows === 0,
+        count: notDoneTaskRows,
+        note: `increment 2: the cited task must be verified done (${taskEvidence.doneBar ?? 'caller-defined bar'})`,
+      },
+    );
+  }
+
   // Non-gating: surface any same-controller class whose delta is net-positive — self-measured evidence
   // scoring itself up. Expected for known-answer, but it is the exact gaming-shaped signal that must be
   // visible so it is never mistaken for, or promoted to, independent-counterparty reputation.
@@ -165,6 +224,15 @@ export function evidencePack(rows: PackRow[]): EvidencePack {
     byEvidenceKind,
     invariants,
     signals,
+    citedTasks: taskEvidence
+      ? {
+          cited: citedDistinct.size,
+          existing: [...citedDistinct].filter((t) => existingSet.has(t)).length,
+          done: [...citedDistinct].filter((t) => doneSet.has(t)).length,
+          missingRows: missingTaskRows,
+          notDoneRows: notDoneTaskRows,
+        }
+      : null,
     ok: invariants.every((i) => i.held),
   };
 }
