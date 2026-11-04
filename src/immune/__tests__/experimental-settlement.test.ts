@@ -15,6 +15,12 @@ import type { ExperimentalStore, ExperimentalEventRow } from '../../services/exp
 const sha256hex = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
 const gen = (): SettlementKeys => { const k = () => generateKeyPairSync('ed25519').privateKey; return { harness: k(), evaluation: k(), settlement: k(), composite: k() }; };
 const AGENT = '00000000-0000-0000-0000-000000000abc';
+const CP = '00000000-0000-0000-0000-0000000000ff';
+const ALPHA_SQUAD = '550e8400-e29b-41d4-a716-446655440001'; // Matthew (designated)
+const BETA_SQUAD = '550e8400-e29b-41d4-a716-446655440002';  // Mark (designated)
+/** inject a fixed owner verdict (the real DB owner check is mocked in these tests). */
+const independenceReturning = (v: 'independent' | 'same_owner' | 'owner_unknown') =>
+  (async () => v) as unknown as Parameters<typeof settleImmuneReceipt>[1]['independence'];
 
 /** A valid signed receipt (correct|incorrect) from the settler, plus its keys (authoritative:false as the settler emits). */
 function settled(result: 'correct' | 'incorrect', keys: SettlementKeys = gen()) {
@@ -123,5 +129,53 @@ describe('immune experimental settlement — verified+authoritative only, inert 
       expect(out.row.eligibility).toBe('independent_counterparty');
       expect(out.row.counterparty_agent_id).toBe('00000000-0000-0000-0000-0000000000ff');
     }
+  });
+
+  // OWNER-ASSURANCE — the squad designation is recorded as an HONEST tag and NEVER launders eligibility.
+  it('owner-assurance: a DESIGNATED pair is tagged designated but is NEVER the evidence independent_counterparty', async () => {
+    const { receipt, verification, agentId } = authoritativeReceipt('correct');
+    const out = await settleImmuneReceipt(
+      { receipt, verification, agentId, counterpartyAgentId: CP, squads: { maker: ALPHA_SQUAD, counterparty: BETA_SQUAD } },
+      { mode: 'shadow', enabled: false, independence: independenceReturning('owner_unknown') },
+    );
+    expect(out.status).toBe('dry_run');
+    if (out.status !== 'dry_run') return;
+    expect(out.row.metadata.owner_assurance).toBe('designated');        // honestly flagged for the experiment
+    expect(out.row.eligibility).toBe('same_controller_measured');       // but the award path is NOT independent
+    expect(out.row.counterparty_agent_id).toBeNull();                   // and no award counterparty is recorded
+  });
+
+  it('owner-assurance: a real same_owner pair is NEVER laundered by a designation (none)', async () => {
+    const { receipt, verification, agentId } = authoritativeReceipt('correct');
+    const out = await settleImmuneReceipt(
+      { receipt, verification, agentId, counterpartyAgentId: CP, squads: { maker: ALPHA_SQUAD, counterparty: BETA_SQUAD } },
+      { mode: 'shadow', enabled: false, independence: independenceReturning('same_owner') },
+    );
+    expect(out.status).toBe('dry_run');
+    if (out.status !== 'dry_run') return;
+    expect(out.row.metadata.owner_assurance).toBe('none');
+    expect(out.row.metadata.owner_assurance_reason).toBe('same_real_owner');
+    expect(out.row.eligibility).toBe('same_controller_measured');
+  });
+
+  it('owner-assurance: evidence-independent ⇒ verified AND independent_counterparty (the only path to verified)', async () => {
+    const { receipt, verification, agentId } = authoritativeReceipt('correct');
+    const out = await settleImmuneReceipt(
+      { receipt, verification, agentId, counterpartyAgentId: CP, squads: { maker: ALPHA_SQUAD, counterparty: BETA_SQUAD } },
+      { mode: 'shadow', enabled: false, independence: independenceReturning('independent') },
+    );
+    expect(out.status).toBe('dry_run');
+    if (out.status !== 'dry_run') return;
+    expect(out.row.metadata.owner_assurance).toBe('verified');
+    expect(out.row.eligibility).toBe('independent_counterparty');
+  });
+
+  it('owner-assurance: no counterparty / no squads ⇒ none', async () => {
+    const { receipt, verification, agentId } = authoritativeReceipt('correct');
+    const out = await settleImmuneReceipt({ receipt, verification, agentId }, { mode: 'shadow', enabled: false });
+    expect(out.status).toBe('dry_run');
+    if (out.status !== 'dry_run') return;
+    expect(out.row.metadata.owner_assurance).toBe('none');
+    expect(out.row.metadata.owner_assurance_reason).toBe('owner_unknown_undesignated');
   });
 });
