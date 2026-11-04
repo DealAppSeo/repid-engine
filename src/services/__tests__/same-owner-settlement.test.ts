@@ -21,7 +21,7 @@ jest.mock('../../db', () => {
   };
   const from = (table: string) => {
     const q: any = {
-      select: () => q, eq: () => q, maybeSingle: () => q, single: () => q,
+      select: () => q, eq: () => q, in: () => q, maybeSingle: () => q, single: () => q,
       insert: (payload: unknown) => { mockOps.push({ table, payload }); return q; },
       then: (ok: any, bad: any) => Promise.resolve({ data: rows[table] ?? null, error: null }).then(ok, bad),
     };
@@ -42,6 +42,7 @@ import { resolveOwner, type OwnerClaim, type OwnerResolution } from '../agent-ow
 import {
   applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas, applyServiceOutcomeDeltas, applyServiceDisputeResolution,
 } from '../validation-repid-delta';
+import { gateSettlementDeltas } from '../same-owner-settlement';
 
 const claim = (ownerKey: string): OwnerClaim =>
   ({ source: 'repid_agents.builder_id', assurance: 'administrative', ownerKey, ownerKeyKind: 'builder_id', capUsdcPerTx: null, capUsdcTotal: null });
@@ -312,5 +313,67 @@ describe('dispute deltas', () => {
     SAME();
     await applyServiceDisputeResolution(contract, 'no_fault');
     expect(rows()).toEqual([]);
+  });
+});
+
+// ── owner-classes designation overlay (D-133/D-135): shadow-only annotation that NEVER un-withholds ──
+// gateSettlementDeltas is exercised directly so owners + squads are both injected (no DB). The overlay records
+// how independence WOULD be assured under the squad fiction; evidence (would_not_count) still governs the number.
+describe('owner-classes designation overlay', () => {
+  const ALPHA_SQUAD = '550e8400-e29b-41d4-a716-446655440001'; // Matthew (designated)
+  const BETA_SQUAD = '550e8400-e29b-41d4-a716-446655440002';  // Mark (designated)
+  const C = { id: 'c-x', service_id: 's-x', provider_agent_id: 'prov', buyer_agent_id: 'buy' };
+  // resolve: a per-side owner claim (null = no claim => owner_not_established => owner_unknown).
+  const resolver = (buyerKey: string | null, provKey: string | null) =>
+    (async (ref: { id: string }) => (ref.id === 'buy'
+      ? (buyerKey ? res('buy', claim(buyerKey)) : res('buy'))
+      : (provKey ? res('prov', claim(provKey)) : res('prov')))) as unknown as Parameters<typeof gateSettlementDeltas>[2];
+  const squadsOf = (buyer: string | null, provider: string | null) => (async () => ({ buyer, provider }));
+
+  test('enforce: owner_unknown + two distinct designated squads => assurance "designated" but the delta is STILL withheld', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    const out = await gateSettlementDeltas(C, { provider: 10, buyer: 5 }, resolver(FLEET, null), squadsOf(ALPHA_SQUAD, BETA_SQUAD));
+    expect(out.provider.meta.same_owner_settlement?.would_not_count).toBe('owner_unknown'); // evidence: not independent
+    expect(out.provider.meta.same_owner_settlement?.counted).toBe(false);                   // so enforce withholds
+    expect(out.provider.delta).toBe(0);                                                     // the number is 0
+    expect(out.provider.meta.owner_assurance).toEqual({ assurance: 'designated', reason: expect.stringContaining('distinct_designated_owner') });
+  });
+
+  test('shadow: designated recorded, numbers unchanged', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'shadow';
+    const out = await gateSettlementDeltas(C, { provider: 10, buyer: 5 }, resolver(FLEET, null), squadsOf(ALPHA_SQUAD, BETA_SQUAD));
+    expect(out.provider.delta).toBe(10);
+    expect(out.buyer.delta).toBe(5);
+    expect(out.provider.meta.owner_assurance?.assurance).toBe('designated');
+  });
+
+  test('a real same_owner is NEVER laundered by a designation (none)', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'shadow';
+    const out = await gateSettlementDeltas(C, { provider: 10, buyer: 5 }, resolver(FLEET, FLEET), squadsOf(ALPHA_SQUAD, BETA_SQUAD));
+    expect(out.provider.meta.same_owner_settlement?.would_not_count).toBe('same_owner');
+    expect(out.provider.meta.owner_assurance).toEqual({ assurance: 'none', reason: 'same_real_owner' });
+  });
+
+  test('evidence-independent => verified, and no squad lookup is needed', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'shadow';
+    let squadsCalled = false;
+    const sq = (async () => { squadsCalled = true; return { buyer: ALPHA_SQUAD, provider: BETA_SQUAD }; });
+    const out = await gateSettlementDeltas(C, { provider: 10, buyer: 5 }, resolver(FLEET, OTHER), sq);
+    expect(out.provider.meta.owner_assurance?.assurance).toBe('verified');
+    expect(squadsCalled).toBe(false); // squads consulted only when the real verdict is owner_unknown
+  });
+
+  test('same designated squad on both sides => not independent (none), delta still withheld under enforce', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'enforce';
+    const out = await gateSettlementDeltas(C, { provider: 10, buyer: 5 }, resolver(FLEET, null), squadsOf(ALPHA_SQUAD, ALPHA_SQUAD));
+    expect(out.provider.meta.owner_assurance).toEqual({ assurance: 'none', reason: 'same_designated_owner' });
+    expect(out.provider.delta).toBe(0);
+  });
+
+  test('off: no overlay at all (byte-for-byte today)', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'off';
+    const out = await gateSettlementDeltas(C, { provider: 10, buyer: 5 }, resolver(FLEET, null), squadsOf(ALPHA_SQUAD, BETA_SQUAD));
+    expect(out.provider.meta).toEqual({});
+    expect(out.buyer.meta).toEqual({});
   });
 });
