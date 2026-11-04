@@ -22,6 +22,7 @@ import { resolveHalStrictness } from '../scoring/pipeline';
 import { settleX402Payment } from '../services/x402-real-settler';
 import { insertScoreEvent } from '../scoring/score-event-writer';
 import { scoreEventGuardEnforced } from '../routes/score-event-guard';
+import { fenceServiceAward, serviceAwardFenceEnabled } from '../scoring/service-award-fence';
 
 export const T12_E2E_TASK_CLASS = 't12_onchain_e2e_proof'; // pairs with the T12 empowerment-seed E2E patrol
 
@@ -49,8 +50,43 @@ async function resolveAgent(agent: string): Promise<{ id: string | null; current
   return { id: (data as any)?.id ?? null, current_repid: (data as any)?.current_repid ?? 100 };
 }
 
-/** Append a positive RepID delta (clean verify reward) and return the event id. Earned-floor enforced by trigger. */
-async function applyRepidReward(agent: string, delta: number, meta: any): Promise<number | null> {
+/** Map HAL's verdict string onto the fence's hal_decision domain (null when unrecognized/absent). */
+function fenceHalDecision(verdict: string | null): 'vetoed' | 'flagged' | 'clean' | 'abstain' | null {
+  const v = (verdict ?? '').toLowerCase();
+  if (v === 'clean' || v === 'pass' || v === 'approved') return 'clean';
+  if (v.includes('veto')) return 'vetoed';
+  if (v.includes('flag')) return 'flagged';
+  if (v.includes('abstain')) return 'abstain';
+  return null;
+}
+
+interface RewardResult { event_id: number | null; demoted: boolean; reasons: string[]; }
+
+/**
+ * Append a positive RepID delta (clean verify reward) and return the event id. Earned-floor enforced by trigger.
+ *
+ * §P0 fence (D-130 M3b) behind SERVICE_AWARD_FENCE (default OFF). The fence call below is reached on EVERY path;
+ * when the flag is off its result is discarded and the canonical writes + return value are unchanged — so behaviour
+ * is identical to today (not byte-identical: one pure, side-effect-free call is added). When the flag is ON, a
+ * SERVICE_FULFILLED award is DEMOTED to shadow unless it is verified-clean AND independent AND idempotent:
+ * canonical repid_agents.current_repid and the canonical event are NOT written, and the demotion reasons are
+ * recorded on the t12_e2e_proofs row (repid_event_id stays null). The harness establishes no independence and
+ * carries no idempotency key, so today every award demotes when the flag is on — which is the point: it was
+ * moving canonical RepID on unverified work. Flipping the flag is a MAJOR/owner action (r23), after the count.
+ * New blast radius once flipped: the three-way conjunction in fenceServiceAward + the fenceHalDecision mapping
+ * become load-bearing — an error there could suppress a legitimate award (it cannot mint a false one).
+ * ponytail: demotion is recorded on the proof row, not a separate shadow table — upgrade to repid_experimental_events if that evidence needs its own surface.
+ */
+async function applyRepidReward(agent: string, delta: number, meta: any): Promise<RewardResult> {
+  const fence = fenceServiceAward({
+    hal_decision: fenceHalDecision(meta?.hal_verdict ?? null),
+    independence: 'unknown', // harness establishes none (same-controller Trinity agents); never 'independent'
+    idempotency_key: null,   // the award carries no replay key today
+  });
+  if (serviceAwardFenceEnabled() && !fence.canonical) {
+    return { event_id: null, demoted: true, reasons: fence.reasons };
+  }
+
   const { id, current_repid: before } = await resolveAgent(agent);
   await db.from('repid_agents').update({ current_repid: Math.max(0, Math.round(before + delta)), last_updated: new Date().toISOString() }).eq('agent_name', agent);
   const after = (await resolveAgent(agent)).current_repid;
@@ -71,14 +107,14 @@ async function applyRepidReward(agent: string, delta: number, meta: any): Promis
       metadata: proofMetadata,
     });
     if (!r.ok) throw new Error(`repid_score_events insert failed: ${r.error}`);
-    return r.id ? Number(r.id) : null;
+    return { event_id: r.id ? Number(r.id) : null, demoted: false, reasons: [] };
   }
   const { data, error } = await db.from('repid_score_events').insert({
     agent_id: id, event_type: 'SERVICE_FULFILLED', delta, repid_before: before, repid_after: after,
     metadata: proofMetadata,
   }).select('id').maybeSingle();
   if (error) throw new Error(`repid_score_events insert failed: ${error.message}`);
-  return (data as any)?.id ?? null;
+  return { event_id: (data as any)?.id ?? null, demoted: false, reasons: [] };
 }
 
 export async function runE2EProof(input: E2EProofInput): Promise<E2EProofRow> {
@@ -106,10 +142,15 @@ export async function runE2EProof(input: E2EProofInput): Promise<E2EProofRow> {
     stages_real.x402 = s.settlement_source === 'onchain_x402' && !!s.tx_hash && !/^0xmock/.test(s.tx_hash);
   } catch (e: any) { x402_settlement_source = `x402_error:${e?.message ?? e}`.slice(0, 80); }
 
-  // Stage 3 — RepID delta (always real).
+  // Stage 3 — RepID delta. The SERVICE_AWARD_FENCE may demote it to shadow (no canonical move); default OFF.
   let repid_event_id: number | null = null;
+  let repid_award_demoted = false;
+  let repid_demote_reasons: string[] = [];
   try {
-    repid_event_id = await applyRepidReward(input.agent, repidDelta, { run_id: input.runId, hal_verdict, x402_tx_hash });
+    const reward = await applyRepidReward(input.agent, repidDelta, { run_id: input.runId, hal_verdict, x402_tx_hash });
+    repid_event_id = reward.event_id;
+    repid_award_demoted = reward.demoted;
+    repid_demote_reasons = reward.reasons;
     stages_real.repid = repid_event_id !== null;
   } catch (e: any) { /* recorded via proof_status below */ }
 
@@ -131,7 +172,8 @@ export async function runE2EProof(input: E2EProofInput): Promise<E2EProofRow> {
     hal_score, hal_verdict, x402_tx_hash, x402_payment_id: `t12-${input.runId}`, x402_chain_id: 84532,
     repid_event_id, repid_delta: stages_real.repid ? repidDelta : null,
     zkp_proof_id, eas_attestation_uid, proof_status, stages_real,
-    metadata: { task_class: T12_E2E_TASK_CLASS, x402_settlement_source, counterparty, amount_usdc: amount },
+    metadata: { task_class: T12_E2E_TASK_CLASS, x402_settlement_source, counterparty, amount_usdc: amount,
+      ...(repid_award_demoted ? { repid_award_demoted: true, repid_demote_reasons } : {}) },
   };
   const { data, error } = await db.from('t12_e2e_proofs').insert(row).select('id').maybeSingle();
   if (error) throw new Error(`t12_e2e_proofs insert failed: ${error.message}`);
