@@ -16,6 +16,9 @@
  *      AND a store is injected — otherwise a DRY-RUN returns the would-write row and touches no table.
  *   3. independence is DERIVED here via eligibilityFor (the DB-backed owner check), never trusted from the receipt;
  *      same-controller can never become independent_counterparty by replay (the DB CHECK is the backstop).
+ * The REAL owner verdict is also recorded as an owner-assurance TAG on the experimental event (owner-classes.ts):
+ * verified|designated|none, metadata-only. It never alters `eligibility`, so a squad DESIGNATION can never be
+ * mistaken for evidence-verified independence or move a real award.
  * Default (mode off / flag off / no store) is inert, and today nothing is authoritative (P0 not yet active), so this
  * is dry-run end to end until the owner activates the gates.
  */
@@ -24,6 +27,9 @@ import {
   EXPERIMENTAL_DOMAIN, eligibilityFor, experimentalRepidMode,
   type ExperimentalEventRow, type ExperimentalStore, type Dimension, type Eligibility, type ExperimentalMode,
 } from '../services/experimental-repid';
+import { partyIndependence } from '../services/same-owner-settlement';
+import { assessIndependence } from '../services/owner-classes';
+import type { PartyIndependence } from '../scoring/grounding';
 
 export const IMMUNE_EVIDENCE_KIND = 'immune_receipt';
 export const IMMUNE_SCORING_VERSION = 'immune-receipt-v1';
@@ -84,7 +90,7 @@ const settleEnabled = (): boolean => process.env['IMMUNE_SETTLE_ENABLED'] === '1
  * the injected store's `insert` (ON the table's one-time UNIQUE constraints); default is dry-run.
  */
 export async function settleImmuneReceipt(
-  input: { receipt: SignedCombinedReceipt; verification: CombinedReceiptVerification; agentId: string; counterpartyAgentId?: string | null },
+  input: { receipt: SignedCombinedReceipt; verification: CombinedReceiptVerification; agentId: string; counterpartyAgentId?: string | null; squads?: { maker?: string | null; counterparty?: string | null } },
   deps: { store?: ExperimentalStore; mode?: ExperimentalMode; enabled?: boolean; independence?: Parameters<typeof eligibilityFor>[2] } = {},
 ): Promise<ImmuneSettleResult> {
   // (1) THE P0 GATE: only a verified + authoritative receipt may move reputation.
@@ -96,11 +102,24 @@ export async function settleImmuneReceipt(
 
   if (immuneDelta(input.receipt.result) === null) return { status: 'not_scorable' };
 
-  // (3) independence DERIVED, never trusted from the receipt.
-  const eligibility = await eligibilityFor(input.agentId, input.counterpartyAgentId ?? null, deps.independence);
-  const row = buildImmuneExperimentalRow(input.receipt, input.agentId, eligibility, mode, input.counterpartyAgentId ?? null);
+  // (3) independence DERIVED, never trusted from the receipt. Resolve the REAL owner verdict ONCE (the DB owner
+  // check) and reuse it for BOTH the eligibility (the money path) and the owner-assurance tag (the experiment).
+  const cp = input.counterpartyAgentId ?? null;
+  const resolveIndependence = deps.independence ?? ((a: string, b: string) => partyIndependence(a, b));
+  let real: PartyIndependence = 'owner_unknown';
+  const eligibility = await eligibilityFor(input.agentId, cp, async (a, b) => (real = await resolveIndependence(a, b)));
+  const row = buildImmuneExperimentalRow(input.receipt, input.agentId, eligibility, mode, cp);
   if (row === null) return { status: 'not_scorable' };
   if (row.oracle_id === input.agentId) return { status: 'refused', reason: 'self_dealing' };
+
+  // OWNER-ASSURANCE (owner-classes, shadow/experiment-only): layer the squad DESIGNATION on top of the REAL
+  // evidence verdict, honestly tagged, and record it as METADATA. Evidence always wins — a designation only fills
+  // an owner_unknown gap and is tagged 'designated', NEVER 'verified'; a real same_owner is never laundered. This
+  // never touches `eligibility`, so a designated pair can never become the evidence `independent_counterparty` that
+  // gates a real award (that stays DB-CHECK-backed). The experiment reads metadata.owner_assurance; the canonical
+  // award path reads eligibility — two different fields, deliberately.
+  const assurance = assessIndependence(real, { squadId: input.squads?.maker }, { squadId: input.squads?.counterparty });
+  row.metadata = { ...row.metadata, owner_assurance: assurance.assurance, owner_assurance_reason: assurance.reason, owner_independent: assurance.independent };
 
   // (2) inert unless explicitly enabled AND a store is injected: otherwise return the would-write, touch nothing.
   const enabled = deps.enabled ?? settleEnabled();
