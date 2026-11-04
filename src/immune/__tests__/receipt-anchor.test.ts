@@ -116,6 +116,26 @@ describe('immune receipt on-chain anchor — inert + gated', () => {
     expect(r).toMatchObject({ anchored: true, dry_run: false, uid: '0xuid', txHash: '0xtx' });
   });
 
+  // §11 red-team: "fake on-chain success without a confirmed tx". An authoritative, verifying receipt passes the
+  // gates and the write is attempted, but the chain write returns NO uid — whether silently ({uid:null}, no error)
+  // or with a revert. Neither may be reported as anchored: a null-uid result is a confirmation failure, not success.
+  // Teeth: relax the guard to `if (r.error)` only and the silent-null case wrongly flips anchored→true.
+  it('REFUSES a fake on-chain success: an attestFn that returns no uid is never reported anchored (§11)', async () => {
+    const { receipt, roots } = receiptWith(true);
+
+    const silentNull: AttestFn = async () => ({ uid: null, txHash: null }); // write "succeeded" but produced no attestation
+    const s = await anchorReceipt(receipt, roots, { enabled: true, attestFn: silentNull });
+    expect(s.anchored).toBe(false);
+    expect(s.dry_run).toBe(false);
+    expect(s.uid).toBeNull();
+    expect(s.error).toBe('attest returned no uid');
+
+    const reverted: AttestFn = async () => ({ uid: null, txHash: null, error: 'execution reverted' });
+    const r = await anchorReceipt(receipt, roots, { enabled: true, attestFn: reverted });
+    expect(r.anchored).toBe(false);
+    expect(r.error).toBe('execution reverted');
+  });
+
   it('buildReceiptAnchor maps the receipt onto the shared proof schema (pure)', () => {
     const { receipt } = receiptWith(true);
     expect(buildReceiptAnchor(receipt, 7)).toEqual({
