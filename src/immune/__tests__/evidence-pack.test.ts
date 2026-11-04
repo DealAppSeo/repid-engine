@@ -1,4 +1,4 @@
-import { evidencePack, type PackRow } from '../evidence-pack';
+import { evidencePack, citedTaskId, type PackRow } from '../evidence-pack';
 
 // A clean same-controller shadow row (the shape the live 656 rows have: each cites its trinity_task + a hash).
 const row = (over: Partial<PackRow> = {}): PackRow => ({
@@ -90,5 +90,45 @@ describe('evidencePack', () => {
     expect(p.total).toBe(0);
     expect(p.ok).toBe(true);
     expect(p.signals).toHaveLength(0);
+  });
+
+  // ── increment 2: opt-in cited-task existence join (reducer stays pure; caller resolves task state) ──
+  it('no taskEvidence ⇒ increment-1 behaviour: citedTasks null, no task-existence invariants', () => {
+    const p = evidencePack([row(), row()]);
+    expect(p.citedTasks).toBeNull();
+    expect(p.invariants.map((i) => i.name)).not.toContain('cited_task_exists');
+    expect(p.invariants).toHaveLength(5);
+  });
+
+  it('cited tasks all exist AND are done ⇒ both increment-2 invariants hold; citedTasks summary is exact', () => {
+    const rows = [row({ evidence_id: 'trinity_tasks:t1' }), row({ evidence_id: 'trinity_tasks:t2' }), row({ evidence_id: 'trinity_tasks:t1' })];
+    const p = evidencePack(rows, { existing: ['t1', 't2'], done: ['t1', 't2'], doneBar: 'has a non-null result' });
+    expect(p.invariants.find((i) => i.name === 'cited_task_exists')!.held).toBe(true);
+    expect(p.invariants.find((i) => i.name === 'cited_task_verified_done')!.held).toBe(true);
+    expect(p.citedTasks).toEqual({ cited: 2, existing: 2, done: 2, missingRows: 0, notDoneRows: 0 });
+    expect(p.ok).toBe(true);
+  });
+
+  it('TRIPWIRE (increment 2): a row citing a task that does not exist fails cited_task_exists', () => {
+    const p = evidencePack([row({ evidence_id: 'trinity_tasks:real' }), row({ evidence_id: 'trinity_tasks:ghost' })], { existing: ['real'], done: ['real'] });
+    const inv = p.invariants.find((i) => i.name === 'cited_task_exists')!;
+    expect(inv.held).toBe(false);
+    expect(inv.count).toBe(1);           // one row cites a non-existent task
+    expect(p.citedTasks!.missingRows).toBe(1);
+    expect(p.ok).toBe(false);
+  });
+
+  it('TRIPWIRE (increment 2): a cited task that exists but is NOT done fails cited_task_verified_done', () => {
+    const p = evidencePack([row({ evidence_id: 'trinity_tasks:answered' }), row({ evidence_id: 'trinity_tasks:unanswered' })], { existing: ['answered', 'unanswered'], done: ['answered'] });
+    expect(p.invariants.find((i) => i.name === 'cited_task_exists')!.held).toBe(true);   // both exist
+    expect(p.invariants.find((i) => i.name === 'cited_task_verified_done')!.held).toBe(false); // one unanswered
+    expect(p.citedTasks).toMatchObject({ cited: 2, existing: 2, done: 1, notDoneRows: 1 });
+    expect(p.ok).toBe(false);
+  });
+
+  it('citedTaskId parses a task citation and returns null for a non-task evidence_id', () => {
+    expect(citedTaskId('trinity_tasks:12345')).toBe('12345');
+    expect(citedTaskId('0xdeadbeef')).toBeNull();           // an immune content hash is not a task citation
+    expect(citedTaskId('')).toBeNull();
   });
 });
