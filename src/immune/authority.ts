@@ -1,56 +1,84 @@
 /**
- * immune/authority.ts — the engine-side decision that makes a combined trust receipt AUTHORITATIVE (D-129, B+A).
+ * immune/authority.ts — the protected-engine decision that makes a combined trust receipt AUTHORITATIVE (D-130).
  *
- * A receipt is authoritative — safe for the engine to anchor with its pinned attester — only when ALL hold:
+ * A receipt is authoritative — safe for the engine to anchor with its pinned attester — only when ALL FOUR hold:
  *   1. the sandbox receipt's harness signature VERIFIES (tamper-evidence; sandbox-receipt-verify.ts), AND
  *   2. its passport config MATCHES the committed pin (config-pin.ts), AND
- *   3. this runs in the ENGINE's protected env (IMMUNE_ENGINE_AUTHORITY=1), never in PR CI.
+ *   3. its execution ORIGIN is AUTHENTICATED — a mission admission (trusted runner) + owner grant, each signed by
+ *      a PINNED EXTERNAL root the Maker does not control, cross-bound to this mission + artifact (execution-origin.ts), AND
+ *   4. this runs in the ENGINE's protected env (IMMUNE_ENGINE_AUTHORITY=1), never in PR CI.
  *
- * Neither 1 nor 2 is authenticity on its own: the harness key is EPHEMERAL per mission and the passport is
- * self-signed, so a hostile producer can both sign and config-match a fabricated receipt. Authenticity comes
- * from the ENGINE — it runs this check inside its protected env and anchors under HYPERDAG_ATTESTOR_PRIVATE_KEY,
- * the stable on-chain root that already roots the 225 real ZKP anchors (D-129). The env flag is that protected-env
- * gate; default OFF => authoritative:false, so every PR-CI receipt stays a non-anchorable demonstration (r23,
- * shadow-until-ratified). Flipping the flag only enables the decision; the on-chain send itself stays MAJOR/HITL.
+ * WHY 3 IS THE GATE (Grok + Chat, independently). Conditions 1–2 are self-asserted: the harness key is ephemeral
+ * and the passport self-signed, so a hostile producer can sign AND config-match a fabricated receipt. Without an
+ * authenticated origin the engine would LAUNDER that into its attester. Condition 3 rests on roots the Maker cannot
+ * forge, so a correctly self-signed, config-matching receipt with no valid admission is REFUSED even with the flag on.
+ *
+ * NO CALLER OVERRIDE (D-130 P0-a). The production decision is DERIVED here from verified evidence: `enabled` is read
+ * from the env ONLY, and the signature is VERIFIED here — neither is a caller-provided boolean or an injected result.
+ * The admission, owner grant, and pinned roots come from the ENGINE's protected context, never from the untrusted
+ * receipt. The default (no roots, no admission) is fail-closed: not authentic ⇒ not authoritative.
  */
-import { verifySandboxReceipt, type SandboxReceiptVerification } from './sandbox-receipt-verify';
+import { verifySandboxReceipt } from './sandbox-receipt-verify';
 import { checkConfigPin, SLICE_PINNED_CONFIG, type PinnedConfig, type ConfigPinResult } from './config-pin';
+import { verifyExecutionOrigin, type OriginBinding, type OriginRoot, type OriginVerification } from './execution-origin';
 
 export interface AuthorityDecision {
-  /** verified AND config-pinned AND in the engine's protected env — the only state safe to anchor. */
+  /** signature + config-pin + authenticated origin + the engine's protected env — the only state safe to anchor. */
   authoritative: boolean;
   signature_verified: boolean;
   config: ConfigPinResult;
+  origin: OriginVerification;
   engine_enabled: boolean;
   /** why NOT authoritative (empty when authoritative). */
   reasons: string[];
 }
 
-/** True only in the engine's protected env; PR CI never sets it, so CI receipts are never authoritative. */
+/**
+ * What the protected engine supplies to decide authority. `envelope` is the untrusted sandbox `{ receipt, signature }`;
+ * `binding` is the mission + artifact the engine is deciding on; `admission`/`ownerGrant`/roots are the engine's
+ * protected context. Omitting the admission/roots is fail-closed (origin not authentic ⇒ not authoritative).
+ */
+export interface AuthorityInput {
+  envelope: unknown;
+  binding: OriginBinding;
+  admission?: unknown;
+  ownerGrant?: unknown;
+  pinned?: PinnedConfig;
+  admissionRoots?: readonly OriginRoot[];
+  ownerRoots?: readonly OriginRoot[];
+  seenNonces?: ReadonlySet<string>;
+  now?: number;
+}
+
+/** Read the protected-env flag HERE, never from a caller — a PR job cannot force it on (D-130 P0-a). */
 const engineEnabled = (): boolean => process.env['IMMUNE_ENGINE_AUTHORITY'] === '1';
 
 /**
- * Decide whether the sandbox `{ receipt, signature }` envelope backs an AUTHORITATIVE receipt. Never throws.
- * `enabled` overrides the env gate (tests pass it explicitly); omit it to read the protected-env flag. Pass a
- * precomputed `signature` verification to avoid re-verifying when the caller already has one.
+ * Decide whether a combined receipt backed by this sandbox evidence is AUTHORITATIVE. Never throws. Every input
+ * that matters is derived here (the env flag, the signature verification) or comes from the engine's protected
+ * context (admission, owner grant, roots) — nothing authoritative can be asserted by a caller-supplied boolean.
  */
-export function establishAuthority(
-  envelope: unknown,
-  opts: { pinned?: PinnedConfig; enabled?: boolean; signature?: SandboxReceiptVerification } = {},
-): AuthorityDecision {
-  const enabled = opts.enabled ?? engineEnabled();
-  const sig = opts.signature ?? verifySandboxReceipt(envelope);
-  const config = checkConfigPin((envelope as { receipt?: unknown })?.receipt, opts.pinned ?? SLICE_PINNED_CONFIG);
+export function establishAuthority(input: AuthorityInput): AuthorityDecision {
+  const enabled = engineEnabled(); // derived here; never a caller override
+  const sig = verifySandboxReceipt(input.envelope); // verified here; never a caller-injected result
+  const receipt = (input.envelope as { receipt?: unknown } | null)?.receipt;
+  const config = checkConfigPin(receipt, input.pinned ?? SLICE_PINNED_CONFIG);
+  const origin = verifyExecutionOrigin(
+    { admission: input.admission, ownerGrant: input.ownerGrant, binding: input.binding },
+    { admissionRoots: input.admissionRoots, ownerRoots: input.ownerRoots, seenNonces: input.seenNonces, now: input.now },
+  );
 
   const reasons: string[] = [];
   if (!sig.verified) reasons.push('sandbox_signature_invalid');
   if (!config.matched) reasons.push(...config.mismatches.map((m) => `config_pin:${m}`));
+  if (!origin.authentic) reasons.push(...origin.reasons.map((r) => `origin:${r}`));
   if (!enabled) reasons.push('engine_authority_disabled');
 
   return {
-    authoritative: sig.verified && config.matched && enabled,
+    authoritative: enabled && sig.verified && config.matched && origin.authentic,
     signature_verified: sig.verified,
     config,
+    origin,
     engine_enabled: enabled,
     reasons,
   };

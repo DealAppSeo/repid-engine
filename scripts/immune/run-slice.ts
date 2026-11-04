@@ -89,10 +89,6 @@ function adaptSandboxReceipt(dir: string, verdict: string, claimId: string): { s
   const envelope = readJsonMaybe(join(dir, 'receipt.json')); // { receipt, signature } — trustshell.sandbox-mission-receipt/v2
   const rc = envelope?.receipt; // the signed receipt body
   const verification = verifySandboxReceipt(envelope); // harness Ed25519 over canonical(receipt) — tamper-evidence
-  // The engine-side authoritative decision (sig verified + passport config-pin matched + protected env). In CI the
-  // protected-env flag is OFF, so this is always authoritative:false — the config-pin + sig run and are RECORDED,
-  // but the receipt stays a non-anchorable demonstration (D-129 B+A). Reuse the signature we just computed.
-  const authority = establishAuthority(envelope, { signature: verification });
   const promoteJson = readJsonMaybe(join(dir, 'promote.json')); // `trustshell sandbox promote --json`
   const keysJson = readJsonMaybe(join(dir, 'public-keys.json'));
 
@@ -100,6 +96,14 @@ function adaptSandboxReceipt(dir: string, verdict: string, claimId: string): { s
   const recordedIn = (xs: unknown): string | undefined =>
     Array.isArray(xs) ? (xs.find((a: any) => a?.name === 'verdict.json' && typeof a?.sha256 === 'string') as any)?.sha256 : undefined;
   const recordedSha = recordedIn(rc?.artifacts?.promoted) ?? recordedIn(rc?.airlock?.inspected) ?? recordedIn(promoteJson?.promoted);
+
+  // The protected-engine authority decision. In CI there is NO mission admission or owner grant and the engine flag
+  // is OFF, so this is always authoritative:false — the sig + config-pin run and are RECORDED, but without an
+  // authenticated ORIGIN (P0) the receipt can never be a trust anchor (D-130). Binding = this mission + artifact.
+  const authority = establishAuthority({
+    envelope,
+    binding: { mission_id: String(rc?.mission_id ?? `mission-${claimId}`), artifact_digest: typeof recordedSha === 'string' ? recordedSha : 'unrecorded' },
+  });
 
   const checks: any[] = Array.isArray(rc?.profile?.checks) ? rc.profile.checks : [];
   const inputMount = Array.isArray(rc?.profile?.observed?.Mounts)
@@ -183,7 +187,7 @@ function main(): void {
     }
     const id = issuedClaim.id;
     const { sr, harnessPubKey, verification: sigv, authority } = adaptSandboxReceipt(dir, verdict, id);
-    provenance.push({ bundle: tag, claim: id, trustshell_harness_public_key: harnessPubKey, harness_fingerprint: sigv.harness_fingerprint, signature_verified: sigv.verified, harness_pinned: sigv.pinned, config_pin_matched: authority.config.matched, config_mismatches: authority.config.mismatches, authoritative: authority.authoritative, note: 'signature VERIFIED (tamper-evidence) + passport config-pin checked; AUTHORITATIVE only in the engine protected env (D-129 B+A) — CI stays non-anchorable' });
+    provenance.push({ bundle: tag, claim: id, trustshell_harness_public_key: harnessPubKey, harness_fingerprint: sigv.harness_fingerprint, signature_verified: sigv.verified, harness_pinned: sigv.pinned, config_pin_matched: authority.config.matched, config_mismatches: authority.config.mismatches, origin_authentic: authority.origin.authentic, origin_reasons: authority.origin.reasons, authoritative: authority.authoritative, note: 'signature VERIFIED (tamper-evidence) + passport config-pin checked; AUTHORITATIVE requires an authenticated ORIGIN (admission+grant under external roots, P0) + the engine protected env (D-130) — CI has neither, stays non-anchorable' });
     // FAIL CLOSED: a sandbox receipt whose harness signature does not verify was tampered or is unsigned — refuse it
     // before settlement. (Tamper-evidence only; the key is ephemeral + self-asserted, so this is not yet authenticity.)
     if (!sigv.verified) {
