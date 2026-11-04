@@ -100,9 +100,21 @@ describe('receipt-store — append-only evidence + lifecycle, inert, no launderi
     const base: ImmuneReceiptEvent[] = [{ content_hash: h, event_type: 'recorded', event_data: null, actor: 'x' }, { content_hash: h, event_type: 'outcome_verified', event_data: null, actor: 'x' }];
     expect(currentState(base).is_authoritative).toBe(false);
     const authed = [...base, { content_hash: h, event_type: 'origin_authenticated' as const, event_data: null, actor: 'engine' }];
-    expect(currentState(authed).is_authoritative).toBe(true);
+    expect(currentState(authed).is_authoritative).toBe(true); // DB-mirror mode (no trustedActors): presence
     const revoked = [...authed, { content_hash: h, event_type: 'revoked' as const, event_data: null, actor: 'engine' }];
     expect(currentState(revoked).is_authoritative).toBe(false);
+  });
+
+  it('currentState fail-closed mode: a privileged event is ignored unless its actor is trusted', () => {
+    const h = 'abc';
+    const authed: ImmuneReceiptEvent[] = [
+      { content_hash: h, event_type: 'recorded', event_data: null, actor: 'x' },
+      { content_hash: h, event_type: 'outcome_verified', event_data: null, actor: 'x' },
+      { content_hash: h, event_type: 'origin_authenticated', event_data: null, actor: 'engine' },
+    ];
+    expect(currentState(authed, new Set()).is_authoritative).toBe(false);            // empty trust set ⇒ ignored
+    expect(currentState(authed, new Set(['other'])).is_authoritative).toBe(false);   // wrong actor ⇒ ignored
+    expect(currentState(authed, new Set(['engine'])).is_authoritative).toBe(true);   // trusted actor ⇒ honored
   });
 });
 
@@ -125,15 +137,39 @@ describe('verifyEvidenceBundle — re-validate an exported bundle without trusti
     expect(v.reasons).toContain('content_hash_tampered');
   });
 
-  it('rejects an illegitimate state ordering (settled without verification, anchored without authority)', () => {
+  it('REJECTS a forged authority: an origin_authenticated event from an untrusted actor never folds into authority', () => {
+    // the red-team path: take a REAL, validly-signed receipt and staple on a privileged event the engine never
+    // appended. Default (fail-closed) ⇒ it is rejected and is_authoritative stays false.
     const { receipt, verification, roots } = makeReceipt();
+    const { events } = recordReceipt(receipt, verification, { enabled: false }); // recorded + outcome_verified
+    const h = receipt.content_hash;
+    const forged = [...events!, { content_hash: h, event_type: 'origin_authenticated' as const, event_data: null, actor: 'immune-slice' }];
+    const v = verifyEvidenceBundle({ receipt, events: forged }, roots);
+    expect(v.valid).toBe(false);
+    expect(v.reasons).toContain('untrusted_privileged_event:origin_authenticated');
+    expect(v.state.is_authoritative).toBe(false);
+  });
+
+  it('a bundle from a TRUSTED channel honors the engine actor (ordering still enforced)', () => {
+    const { receipt, verification, roots } = makeReceipt();
+    const { events } = recordReceipt(receipt, verification, { enabled: false }); // recorded + outcome_verified
+    const h = receipt.content_hash;
+    const authed = [...events!, { content_hash: h, event_type: 'origin_authenticated' as const, event_data: null, actor: 'repid-engine-protected' }];
+    const v = verifyEvidenceBundle({ receipt, events: authed }, roots, new Set(), new Set(['repid-engine-protected']));
+    expect(v.valid).toBe(true);
+    expect(v.state.is_authoritative).toBe(true);
+  });
+
+  it('rejects an illegitimate state ordering even for trusted events (settled without verification, anchored without authority)', () => {
+    const { receipt, roots } = makeReceipt();
     const h = receipt.content_hash;
     const forgedEvents: ImmuneReceiptEvent[] = [
-      { content_hash: h, event_type: 'recorded', event_data: null, actor: 'x' },
-      { content_hash: h, event_type: 'settled', event_data: null, actor: 'x' },  // but never outcome_verified
-      { content_hash: h, event_type: 'anchored', event_data: null, actor: 'x' }, // and never origin_authenticated
+      { content_hash: h, event_type: 'recorded', event_data: null, actor: 'engine' },
+      { content_hash: h, event_type: 'settled', event_data: null, actor: 'engine' },  // but never outcome_verified
+      { content_hash: h, event_type: 'anchored', event_data: null, actor: 'engine' }, // and never origin_authenticated
     ];
-    const v = verifyEvidenceBundle({ receipt, events: forgedEvents }, roots);
+    // trust the actor so the privileged events DO fold — now the ordering invariants must catch the bad shape.
+    const v = verifyEvidenceBundle({ receipt, events: forgedEvents }, roots, new Set(), new Set(['engine']));
     expect(v.valid).toBe(false);
     expect(v.reasons).toEqual(expect.arrayContaining(['settled_without_verification', 'anchored_without_authority']));
   });

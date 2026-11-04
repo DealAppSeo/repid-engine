@@ -38,6 +38,15 @@ export type ImmuneReceiptEventType =
 /** The M2 (untrusted-path) events. The rest are appended only by the protected engine. */
 const M2_EVENTS: ReadonlySet<ImmuneReceiptEventType> = new Set(['recorded', 'outcome_verified', 'verification_failed']);
 
+/**
+ * The PRIVILEGED (engine-only) events: a producer who could mint these would launder evidence into authority.
+ * In-DB their provenance is enforced by role/RLS (only the engine role may INSERT them); in an EXPORTED bundle
+ * there is no such guarantee, so the DB-untrusting re-verifier gates them on a trusted actor (see currentState).
+ */
+const PRIVILEGED_EVENTS: ReadonlySet<ImmuneReceiptEventType> = new Set([
+  'origin_authenticated', 'policy_authorized', 'settled', 'anchored',
+]);
+
 /** The immutable evidence row: flat bindings for querying, plus the full signed receipt for re-verification. */
 export interface ImmuneReceiptRecord {
   content_hash: string;
@@ -143,9 +152,29 @@ export function recordReceipt(
   return { persisted: Boolean(enabled && opts.writeFn), record, events };
 }
 
-/** Fold a receipt's events into its current state. Pure; mirrors the SQL view so offline state == DB state. */
-export function currentState(events: readonly ImmuneReceiptEvent[]): ReceiptState {
-  const has = (t: ImmuneReceiptEventType): boolean => events.some((e) => e.event_type === t);
+/**
+ * Fold a receipt's events into its current state. Pure.
+ *
+ * `trustedActors` controls whether PRIVILEGED (engine-only) events are trusted by their actor:
+ *   - UNDEFINED ⇒ DB-mirror mode: presence is authoritative. Valid ONLY when the caller guarantees provenance —
+ *     i.e. folding rows of the SQL view, which runs over RLS-guarded tables where only the engine role may INSERT
+ *     a privileged event. This mode mirrors the SQL view exactly (offline state == DB state).
+ *   - PROVIDED (incl. empty) ⇒ fail-closed mode: a privileged event counts ONLY if its `actor` is in the set.
+ *     This is what the DB-untrusting bundle re-verifier uses, so a forged `origin_authenticated`/`settled`/
+ *     `anchored` event in an exported bundle can never fold into authority. Empty set ⇒ no privileged state.
+ * `revoked`/`superseded` are never actor-gated (they only ever DROP authority — honoring them is fail-safe).
+ *
+ * ponytail: the actor is a plaintext label — unforgeable only in-DB under RLS, or in a bundle received over a
+ * trusted channel. Full attribution of an exported bundle needs engine-SIGNED events; add that when the engine
+ * event-signer lands, and have the bundle verifier check the signature instead of an actor allowlist.
+ */
+export function currentState(
+  events: readonly ImmuneReceiptEvent[],
+  trustedActors?: ReadonlySet<string>,
+): ReceiptState {
+  const trusted = (e: ImmuneReceiptEvent): boolean =>
+    !PRIVILEGED_EVENTS.has(e.event_type) || trustedActors === undefined || trustedActors.has(e.actor);
+  const has = (t: ImmuneReceiptEventType): boolean => events.some((e) => e.event_type === t && trusted(e));
   const is_origin_authenticated = has('origin_authenticated');
   const is_revoked = has('revoked');
   const is_superseded = has('superseded');
@@ -179,11 +208,18 @@ export interface BundleVerification {
  * content hash, re-run verifyCombinedReceipt under the given roots (crypto + bindings + no recombination), bind
  * the events to the receipt, and check the state ordering is legitimate (no state may outrank its prerequisites).
  * `valid` requires the receipt verify AND the state be well-formed; an un-authoritative-but-valid bundle is fine.
+ *
+ * The event log is UNSIGNED and carries no DB/RLS guarantee here, so a PRIVILEGED (engine-only) event is trusted
+ * only when its actor is in `trustedEventActors` — DEFAULT EMPTY, i.e. fail-closed. A bundle that carries a
+ * privileged event from an untrusted actor is REJECTED (`untrusted_privileged_event:<type>`) and never folds into
+ * authority/settled/anchored — closing the "forge an origin_authenticated event ⇒ authoritative receipt" path.
+ * Supply the engine's actor id(s) ONLY for a bundle received over a trusted channel (see currentState's ceiling).
  */
 export function verifyEvidenceBundle(
   bundle: unknown,
   trustRoots: CombinedReceiptTrustRoots,
   seenExperimentIds: ReadonlySet<string> = new Set(),
+  trustedEventActors: ReadonlySet<string> = new Set(),
 ): BundleVerification {
   const reasons: string[] = [];
   const empty: ReceiptState = {
@@ -207,8 +243,17 @@ export function verifyEvidenceBundle(
   // every event must belong to THIS receipt.
   if (events.some((e) => e?.content_hash !== receipt.content_hash)) reasons.push('event_hash_mismatch');
 
-  // state ordering: no state outranks its prerequisites.
-  const state = currentState(events);
+  // a privileged event from an actor we cannot trust here is a forgery attempt — reject it outright, and (via
+  // the gated fold below) never let it count toward authority. DISTINCT so each unauthorized type is named once.
+  const untrusted = new Set<string>();
+  for (const e of events) {
+    if (e && PRIVILEGED_EVENTS.has(e.event_type) && !trustedEventActors.has(e.actor)) untrusted.add(e.event_type);
+  }
+  for (const t of untrusted) reasons.push(`untrusted_privileged_event:${t}`);
+
+  // state is folded in fail-closed mode: a privileged event counts only from a trusted actor.
+  const state = currentState(events, trustedEventActors);
+  // state ordering: no (trusted) state outranks its prerequisites.
   if (state.is_settled && !state.is_outcome_verified) reasons.push('settled_without_verification');
   if (state.is_anchored && !state.is_authoritative) reasons.push('anchored_without_authority');
   if (state.is_authoritative && !state.is_outcome_verified) reasons.push('authoritative_without_verification');

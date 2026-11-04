@@ -5,7 +5,9 @@
 -- ║  Creates two append-only tables + one view. Nothing live changes until the owner        ║
 -- ║  applies this AND sets IMMUNE_PERSIST_ENABLED (default OFF). With the flag OFF the        ║
 -- ║  write path is a dry-run that returns the row + events and touches no table.             ║
--- ║  Grants below are INTENT — the owner sets the exact roles (see GRANTS block).             ║
+-- ║  SAFE BY DEFAULT: RLS + append-only + anon/authenticated lockout are enforced as DDL      ║
+-- ║  below (deny-by-default; service_role is the single writer). Only the future              ║
+-- ║  least-privilege worker/engine ROLE SPLIT is left as owner intent.                        ║
 -- ╚══════════════════════════════════════════════════════════════════════════════════════╝
 --
 -- WHY (D-130, Chat's addition). A receipt being STORED, cryptographically VALID, origin-AUTHENTICATED,
@@ -76,7 +78,10 @@ create unique index if not exists immune_receipt_events_once_idx
   where event_type in ('origin_authenticated', 'policy_authorized', 'settled', 'anchored');
 
 -- ── 3. immune_receipt_state — the DERIVED current-state projection (never infer state from a row) ────
-create or replace view public.immune_receipt_state as
+-- security_invoker: the view runs with the QUERYING role's privileges, so it can never leak rows past the
+-- underlying tables' grants/RLS (without it a view owned by a privileged role would bypass the lockout below).
+create or replace view public.immune_receipt_state
+  with (security_invoker = true) as
 select
   r.content_hash,
   r.experiment_id,
@@ -104,18 +109,31 @@ group by r.content_hash, r.experiment_id, r.result, r.settlement_outcome, r.mode
 comment on view public.immune_receipt_state is
   'Derived current state per receipt, folded from immune_receipt_events. is_authoritative requires an origin_authenticated event (P0) and no revoke/supersede — it is NOT the receipt.authoritative field. Consumers read state HERE, never from row existence.';
 
--- ── GRANTS (INTENT — owner sets exact roles; append-only is the invariant) ──────────────────────────
--- 1. NOBODY gets UPDATE or DELETE on either table (append-only; corrections are new rows + events).
--- 2. The untrusted slice/worker role may INSERT a receipt and the M2 events ('recorded',
---    'outcome_verified', 'verification_failed') and SELECT the state view.
--- 3. The AUTHORITATIVE events ('origin_authenticated','policy_authorized','settled','anchored') and
---    'revoked'/'superseded' are INSERTable ONLY by the protected repid-engine role — enforce with RLS
---    or a SECURITY DEFINER function, so a worker/PR job can never launder evidence into authority.
--- Example (owner adapts role names):
---   revoke update, delete on public.immune_receipts, public.immune_receipt_events from public;
---   grant insert, select on public.immune_receipts to immune_worker;
---   grant insert (content_hash, event_type, event_data, actor) on public.immune_receipt_events to immune_worker;
---   -- then an RLS policy on immune_receipt_events restricting the authoritative event_types to the engine role.
+-- ── SECURITY: append-only, deny-by-default, no implicit anon/authenticated access (ENFORCED DDL) ─────
+-- Enforced as DDL, not comments. The backend connects as service_role, which bypasses RLS for row access
+-- but is STILL bound by table GRANTS — so revoking UPDATE/DELETE/TRUNCATE from it makes append-only hold
+-- even for the engine (a correction is a NEW row + a `superseded` event, never an UPDATE). RLS is enabled
+-- with NO permissive policy, so every non-bypass role (incl. the PostgREST-exposed anon/authenticated) gets
+-- nothing by default (CWE-862: no row is reachable without an explicit grant + policy).
+alter table public.immune_receipts       enable row level security;
+alter table public.immune_receipt_events enable row level security;
+
+revoke all on public.immune_receipts       from anon, authenticated;
+revoke all on public.immune_receipt_events from anon, authenticated;
+revoke all on public.immune_receipt_state  from anon, authenticated;
+
+revoke update, delete, truncate on public.immune_receipts       from service_role;
+revoke update, delete, truncate on public.immune_receipt_events from service_role;
+grant  select, insert           on public.immune_receipts       to   service_role;
+grant  select, insert           on public.immune_receipt_events to   service_role;
+grant  select                   on public.immune_receipt_state  to   service_role;
+
+-- INTENT (future least-privilege split — owner provisions the roles; NOT applied here): a dedicated
+-- immune_worker gets INSERT on immune_receipts + an RLS policy on immune_receipt_events WITH CHECK
+-- (event_type in ('recorded','outcome_verified','verification_failed')), while the authoritative events
+-- ('origin_authenticated','policy_authorized','settled','anchored') and 'revoked'/'superseded' stay
+-- INSERTable only by the engine role. Until those roles exist, service_role is the single trusted writer
+-- and the TS layer (receipt-store.ts recordReceipt) enforces the M2-vs-engine split in process.
 
 -- ── ROLLBACK (DOWN) — undo if ever applied (nothing live depends on it while IMMUNE_PERSIST_ENABLED is off) ─
 -- drop view if exists public.immune_receipt_state;
