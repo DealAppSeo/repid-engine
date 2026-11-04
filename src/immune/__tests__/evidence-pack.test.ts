@@ -1,0 +1,94 @@
+import { evidencePack, type PackRow } from '../evidence-pack';
+
+// A clean same-controller shadow row (the shape the live 656 rows have: each cites its trinity_task + a hash).
+const row = (over: Partial<PackRow> = {}): PackRow => ({
+  mode: 'shadow',
+  dimension: 'validator',
+  eligibility: 'same_controller_measured',
+  scoring_version: 'ka-v2-precommitted',
+  oracle_id: 'answer_key:hal_test_cases.expected_decision',
+  agent_id: 'agent-uuid-1',
+  evidence_kind: 'known_answer',
+  evidence_id: 'trinity_tasks:t1',
+  evidence_ref: 'trinity_tasks/t1;hal_test_cases/c1',
+  evidence_hash: 'a'.repeat(64),
+  delta: 1,
+  ...over,
+});
+
+describe('evidencePack', () => {
+  it('groups by mode/dimension/controller-class/ruler/evidence-kind and tallies +/- delta; clean net-negative set is ok with no signal', () => {
+    const rows = [
+      row({ dimension: 'validator', delta: 1 }),
+      row({ dimension: 'validator', delta: -2 }),
+      row({ dimension: 'calibration', scoring_version: 'brier-v1', delta: 0 }),
+    ];
+    const p = evidencePack(rows);
+    expect(p.total).toBe(3);
+    expect(p.byMode).toEqual({ shadow: 3 });
+    expect(p.byDimension['validator']).toEqual({ n: 2, pos: 1, neg: 1, zero: 0, net: -1 });
+    expect(p.byDimension['calibration']).toEqual({ n: 1, pos: 0, neg: 0, zero: 1, net: 0 });
+    expect(p.byControllerClass['same_controller_measured']!.net).toBe(-1);
+    expect(p.byScoringVersion).toEqual({ 'ka-v2-precommitted': 2, 'brier-v1': 1 });
+    expect(p.byEvidenceKind).toEqual({ known_answer: 3 });
+    expect(p.ok).toBe(true);
+    expect(p.signals).toHaveLength(0); // net is negative → no net-positive signal
+  });
+
+  it('SIGNAL: a net-positive same-controller class is surfaced (non-gating; ok stays true)', () => {
+    const p = evidencePack([row({ delta: 1 }), row({ delta: 1 })]);
+    expect(p.ok).toBe(true); // a signal does not fail the pack
+    const sig = p.signals.find((s) => s.name === 'same_controller_net_positive')!;
+    expect(sig).toBeDefined();
+    expect(sig.detail).toMatchObject({ n: 2, pos: 2, neg: 0, net: 2 });
+  });
+
+  it('TRIPWIRE: an independent_counterparty row is surfaced, not passed silently', () => {
+    const p = evidencePack([row(), row({ eligibility: 'independent_counterparty', agent_id: 'a', oracle_id: 'o' })]);
+    const inv = p.invariants.find((i) => i.name === 'no_independent_counterparty')!;
+    expect(inv.held).toBe(false);
+    expect(inv.count).toBe(1);
+    expect(p.ok).toBe(false);
+    expect(p.byControllerClass['independent_counterparty']!.n).toBe(1);
+  });
+
+  it('TRIPWIRE: an active-mode row fails shadow_only', () => {
+    const p = evidencePack([row({ mode: 'active' })]);
+    expect(p.invariants.find((i) => i.name === 'shadow_only')!.held).toBe(false);
+    expect(p.ok).toBe(false);
+  });
+
+  it('TRIPWIRE: oracle_id === agent_id is self-dealing', () => {
+    const p = evidencePack([row({ oracle_id: 'same', agent_id: 'same' })]);
+    expect(p.invariants.find((i) => i.name === 'no_self_dealing')!.held).toBe(false);
+    expect(p.ok).toBe(false);
+  });
+
+  it('TRIPWIRE (r24): a row with no scoring_version has no ruler', () => {
+    const p = evidencePack([row({ scoring_version: '' })]);
+    expect(p.invariants.find((i) => i.name === 'every_measurement_has_a_ruler')!.held).toBe(false);
+    expect(p.byScoringVersion['(none)']).toBe(1);
+    expect(p.ok).toBe(false);
+  });
+
+  it('TRIPWIRE (grounding): a delta that does not cite its task evidence fails', () => {
+    const p = evidencePack([row({ evidence_hash: '' })]);
+    const inv = p.invariants.find((i) => i.name === 'every_delta_cites_task_evidence')!;
+    expect(inv.held).toBe(false);
+    expect(inv.count).toBe(1);
+    expect(p.ok).toBe(false);
+  });
+
+  it('coerces a numeric-string delta (as pg returns it) and sums net correctly', () => {
+    const p = evidencePack([row({ delta: '0.2475' }), row({ delta: '1' }), row({ delta: '-1.95' })]);
+    expect(p.byDimension['validator']!.net).toBeCloseTo(-0.7025, 6);
+    expect(p.byDimension['validator']).toMatchObject({ n: 3, pos: 2, neg: 1, zero: 0 });
+  });
+
+  it('empty input is ok (no rows, all invariants vacuously hold, no signals)', () => {
+    const p = evidencePack([]);
+    expect(p.total).toBe(0);
+    expect(p.ok).toBe(true);
+    expect(p.signals).toHaveLength(0);
+  });
+});
