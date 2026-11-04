@@ -1,2 +1,6 @@
 # solc hashes the exact source bytes, so a CRLF checkout changes compiled metadata (repid-engine #1476).
 *.sol text eol=lf
+
+# Generated, set-semantic env registry: union-merge so parallel PRs each adding a flag do not
+# conflict on it (order is irrelevant, it is regenerated on prebuild, and CI check would catch a bad merge).
+src/config/known-env-vars.generated.ts merge=union
