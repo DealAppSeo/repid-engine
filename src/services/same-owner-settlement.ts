@@ -24,9 +24,19 @@
 import { db } from '../db';
 import { verifierIndependence } from './bounty-authorization';
 import { resolveOwner, type AgentRef, type OwnerResolution } from './agent-owner-resolver';
+import { assessIndependence, type IndependenceAssurance } from './owner-classes';
 import { sameOwnerSettlementMode, type PartyIndependence, type SameOwnerSettlementMode } from '../scoring/grounding';
 
 type Resolve = (ref: AgentRef) => Promise<OwnerResolution>;
+
+/** agentId -> squad_id (repid_agents.squad_id, uuid) for the two parties; null when unknown. Owner-classes only. */
+type Squads = (buyerId: string, providerId: string) => Promise<{ buyer: string | null; provider: string | null }>;
+const dbSquads: Squads = async (buyerId, providerId) => {
+  const { data, error } = await db.from('repid_agents').select('id, squad_id').in('id', [buyerId, providerId]);
+  if (error || !data) return { buyer: null, provider: null };
+  const m = new Map((data as { id: string; squad_id: string | null }[]).map((r) => [r.id, r.squad_id]));
+  return { buyer: m.get(buyerId) ?? null, provider: m.get(providerId) ?? null };
+};
 
 /** Never throws: verifierIndependence turns a failed lookup into owner_not_established. */
 export async function partyIndependence(a: string, b: string, resolve: Resolve = resolveOwner): Promise<PartyIndependence> {
@@ -43,7 +53,18 @@ export interface SameOwnerSettlementTag {
   /** What the row would carry without the rule. */
   ungated_delta: number;
 }
-type Side = { delta: number; meta: { same_owner_settlement?: SameOwnerSettlementTag } };
+/**
+ * EXPERIMENT (owner-classes, shadow-only overlay): how independence WOULD be assured if the squad designation
+ * were real — `verified` (evidence found two distinct real owners), `designated` (a squad fiction, NEVER counted
+ * as verified), or `none`. A SEPARATE key from the settlement tag on purpose: it NEVER governs `counted` — a
+ * designation cannot un-withhold a real delta (evidence does that, in the tag). Aggregating `designated` as
+ * verified reintroduces the lie this guards.
+ */
+export interface OwnerAssuranceTag {
+  assurance: IndependenceAssurance;
+  reason: string;
+}
+type Side = { delta: number; meta: { same_owner_settlement?: SameOwnerSettlementTag; owner_assurance?: OwnerAssuranceTag } };
 
 /**
  * Gate one contract's provider and buyer deltas. 'off' returns them untouched with empty metadata
@@ -53,6 +74,7 @@ export async function gateSettlementDeltas(
   contract: { id: string; provider_agent_id: string; buyer_agent_id: string },
   deltas: { provider: number; buyer: number },
   resolve: Resolve = resolveOwner,
+  squads: Squads = dbSquads,
 ): Promise<{ provider: Side; buyer: Side }> {
   const mode = sameOwnerSettlementMode();
   if (mode === 'off') return { provider: { delta: deltas.provider, meta: {} }, buyer: { delta: deltas.buyer, meta: {} } };
@@ -60,12 +82,25 @@ export async function gateSettlementDeltas(
   const independence = await partyIndependence(contract.buyer_agent_id, contract.provider_agent_id, resolve);
   const notCounted = independence === 'independent' ? null : independence;
   const withhold = mode === 'enforce' && notCounted !== null;
+
+  // EXPERIMENT (owner-classes): layer the squad designation on the REAL verdict, honestly tagged. This only
+  // annotates how independence WOULD be assured if the designation were real — evidence still governs
+  // `counted`/`withhold` (unchanged below), so a `designated` can never un-withhold a real delta. Resolve squads
+  // only when the real verdict is owner_unknown (the sole case a designation may speak to) — otherwise no DB read.
+  const squadIds = independence === 'owner_unknown'
+    ? await squads(contract.buyer_agent_id, contract.provider_agent_id)
+    : { buyer: null, provider: null };
+  const assurance = assessIndependence(independence, { squadId: squadIds.buyer }, { squadId: squadIds.provider });
+
   if (notCounted) {
-    console.log(JSON.stringify({ event: 'same_owner_settlement', contract_id: contract.id, mode, would_not_count: notCounted, withheld: withhold }));
+    console.log(JSON.stringify({ event: 'same_owner_settlement', contract_id: contract.id, mode, would_not_count: notCounted, withheld: withhold, owner_assurance: assurance.assurance }));
   }
   const side = (d: number): Side => ({
     delta: withhold ? 0 : d,
-    meta: { same_owner_settlement: { mode, would_not_count: notCounted, counted: !withhold, ungated_delta: d } },
+    meta: {
+      same_owner_settlement: { mode, would_not_count: notCounted, counted: !withhold, ungated_delta: d },
+      owner_assurance: { assurance: assurance.assurance, reason: assurance.reason },
+    },
   });
   return { provider: side(deltas.provider), buyer: side(deltas.buyer) };
 }
