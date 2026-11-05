@@ -9,7 +9,7 @@
  * reused against a different settlement. This module is the v2 "binding" — the six facts bound into one
  * canonical object whose hash the engine signature would cover (D-130 / Chat + Grok advisory):
  *
- *   deliverable_sha256     the exact bytes attested to        (swap the deliverable  -> hash changes)
+ *   deliverable_sha256     the exact bytes attested to        (swap it -> hash changes; must equal the origin's artifact_digest)
  *   work_statement_hash    the exact contract                 (swap the contract     -> hash changes)
  *   evaluation_spec_hash   the exact acceptance criteria       (soften the criteria   -> hash changes)
  *   execution_origin       the admission+grant it ran under    (stale / replayed      -> not authentic)
@@ -20,9 +20,11 @@
  * embed the result in the receipt core, so the existing keccak content hash (and the service-key signature over
  * it) already covers it — no new signer. `verifyReceiptBinding` REBUILDS a binding from the material a holder
  * presents and compares field-by-field: any swapped deliverable, softened criteria, forged PASS (a PASS whose
- * deliverable/spec do not match the bound ones), or wrong settlement shows up as a named mismatch. Origin
- * authenticity (stale, replayed, forged admission) is NOT re-implemented here — it delegates to the existing,
- * tested `verifyExecutionOrigin` primitive, so one authority root set governs both.
+ * deliverable/spec do not match the bound ones), or wrong settlement shows up as a named mismatch. A deliverable
+ * whose hash is not the artifact the origin attests (a deliverable stapled onto an unrelated authentic run) is
+ * caught by a cross-check between deliverable_sha256 and the origin's artifact_digest. Origin authenticity
+ * (stale, replayed, forged admission) is NOT re-implemented here — it delegates to the existing, tested
+ * `verifyExecutionOrigin` primitive, so one authority root set governs both.
  *
  * NO SILENT UPGRADE. A v1 receipt carries no binding. `receiptBinding(receipt)` returns null for it, and
  * `verifyReceiptBinding` refuses a material set with no bound binding — a legacy receipt is verified as v1
@@ -135,6 +137,7 @@ export function receiptBinding(receipt: unknown): ReceiptBindingV2 | null {
 /** Each way the presented material can fail to match what was signed — the named attacks (D-147). */
 export type BindingMismatch =
   | 'deliverable_swapped' // the presented deliverable is not the bytes attested to (also catches a forged PASS for other work)
+  | 'deliverable_origin_mismatch' // the deliverable's hash is not the artifact the origin attests — a deliverable stapled onto an unrelated authentic run
   | 'work_statement_changed' // the contract differs from the signed one
   | 'evaluation_spec_changed' // the acceptance criteria were softened/changed after signing
   | 'execution_origin_changed' // a different origin was substituted
@@ -177,6 +180,14 @@ export function verifyReceiptBinding(
   if (rebuilt.execution_origin !== bound.execution_origin) mismatches.push('execution_origin_changed');
   if (rebuilt.controller_assurance !== bound.controller_assurance) mismatches.push('controller_assurance_changed');
   if (rebuilt.settled_evidence_id !== bound.settled_evidence_id) mismatches.push('settlement_mismatch');
+
+  // The bound deliverable MUST be the artifact the origin attests. Without this, the six fields can each be
+  // self-consistent while deliverable_sha256 and the origin's artifact_digest describe DIFFERENT bytes — a real
+  // deliverable stapled onto an unrelated authentic run, so "provenance bound to the deliverable" would be only
+  // coincidental. Compared case-insensitively, matching verifyExecutionOrigin's own digest compare.
+  if (bound.deliverable_sha256.toLowerCase() !== String(presented.origin.artifact_digest).toLowerCase()) {
+    mismatches.push('deliverable_origin_mismatch');
+  }
 
   // Origin authenticity (stale / replay / forged admission) — delegate to the tested primitive, one root set.
   const origin = verifyExecutionOrigin(

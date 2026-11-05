@@ -141,6 +141,20 @@ describe('Receipt v2 binding (D-147)', () => {
     expect(v.mismatches).toEqual(['settlement_mismatch']);
   });
 
+  it('ATTACK stapled deliverable: a deliverable that is not the origin-attested artifact is caught, nothing else fires', () => {
+    // The six fields are each internally self-consistent AND the origin is authentic — but the deliverable the
+    // receipt commits to is NOT the artifact the admission attested. Only a cross-check between deliverable_sha256
+    // and the origin's artifact_digest catches a real deliverable stapled onto an unrelated authentic run.
+    const OTHER = 'a different deliverable the admission never attested';
+    const mat = material({ deliverableBytes: OTHER }); // origin still attests H(DELIVERABLE), not H(OTHER)
+    const stapled = buildReceiptBinding(mat);          // deliverable_sha256 = H(OTHER); execution_origin binds the authentic origin
+    expect(mat.origin.artifact_digest).toBe(sha(DELIVERABLE)); // the origin attests the ORIGINAL artifact
+    expect(stapled.deliverable_sha256).toBe(sha(OTHER));       // the receipt commits a DIFFERENT deliverable
+    const v = verifyReceiptBinding(stapled, mat, AUTH);
+    expect(v.ok).toBe(false);
+    expect(v.mismatches).toEqual(['deliverable_origin_mismatch']); // the ONLY failure — every other field is self-consistent
+  });
+
   it('ATTACK downgraded controller assurance: administrative is not the signed proven_wallet', () => {
     const v = verifyReceiptBinding(SIGNED, material({ controllerAssurance: 'administrative' }), AUTH);
     expect(v.mismatches).toContain('controller_assurance_changed');
