@@ -6,7 +6,7 @@
 // experimental-repid eagerly imports src/db, whose config loader throws without SUPABASE creds. Factory-mock it.
 jest.mock('../../db', () => ({ db: {} }));
 import { generateKeyPairSync } from 'node:crypto';
-import { runLaneADryRun, satisfactionToVerdict, type LaneADryRunInput } from '../lane-a-dryrun';
+import { runLaneADryRun, satisfactionToVerdict, acceptanceThreshold, type LaneADryRunInput } from '../lane-a-dryrun';
 import { specWorkStatementHash, parseWorkStatement } from '../../services/work-statement-spec';
 import type { SettlementKeys } from '../trusted-settler';
 
@@ -82,5 +82,32 @@ describe('Lane A dry-run — inert precommit -> acceptance -> receipt -> would-w
   it('the collapse is a reversible knob: threshold 0.5 would accept a half-met deliverable', () => {
     expect(satisfactionToVerdict(0.5, 1)).toBe('incorrect');
     expect(satisfactionToVerdict(0.5, 0.5)).toBe('correct');
+  });
+
+  // D-147 / red-team #3: a zero threshold is an accept-anything footgun (score >= 0 passes every deliverable,
+  // even one where no criterion was met), so it is INVALID and falls back to the default 1.0 — not honoured as "accept all".
+  describe('acceptanceThreshold rejects the zero / out-of-range footgun (D-147)', () => {
+    it('empty / unset defaults to 1.0 (all criteria)', () => {
+      expect(acceptanceThreshold('')).toBe(1);
+      expect(acceptanceThreshold(undefined)).toBe(1);
+    });
+    it('0 is INVALID → falls back to 1.0, never accept-anything', () => {
+      expect(acceptanceThreshold('0')).toBe(1);
+      expect(acceptanceThreshold('0.0')).toBe(1);
+    });
+    it('negative and >1 are invalid → 1.0', () => {
+      expect(acceptanceThreshold('-0.5')).toBe(1);
+      expect(acceptanceThreshold('1.5')).toBe(1);
+      expect(acceptanceThreshold('nonsense')).toBe(1);
+    });
+    it('a valid fraction in (0,1] is honoured', () => {
+      expect(acceptanceThreshold('0.5')).toBe(0.5);
+      expect(acceptanceThreshold('1')).toBe(1);
+      expect(acceptanceThreshold('0.75')).toBe(0.75);
+    });
+    it('a 0 threshold no longer lets an all-criteria-failed deliverable pass', () => {
+      // score 0 (nothing met) against the resolved threshold must be incorrect, because 0 resolved to 1.0, not 0.
+      expect(satisfactionToVerdict(0, acceptanceThreshold('0'))).toBe('incorrect');
+    });
   });
 });
