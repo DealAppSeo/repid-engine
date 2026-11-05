@@ -61,7 +61,21 @@
  */
 
 import { validateAgentApiKey } from '../auth/api-keys';
-import { resolveOwner, sameOwner, type AgentRef, type OwnerResolution } from './agent-owner-resolver';
+import { resolveOwner, sameOwner, ASSURANCE_RANK, type AgentRef, type OwnerResolution } from './agent-owner-resolver';
+
+/**
+ * The weakest owner evidence that can establish a DIFFERENT owner (D-148).
+ *
+ * An administrative builder_id (rank 1) is a foreign key set as a side effect of agent
+ * creation — "an administrative association nobody signed … NOT evidence of ownership"
+ * (agent-owner-resolver). So two DIFFERENT builder_ids are two unsigned associations, not
+ * two owners, and must not read as independence. Independence therefore requires evidence
+ * ABOVE administrative on BOTH sides, in a shared namespace. Administrative can still prove
+ * SAMENESS (the sameOwner check below) — a shared FK is a real shared link — it simply
+ * cannot, alone, prove a DIFFERENCE. Raise this to `ASSURANCE_RANK.attested_unverified` if
+ * an unverified signature should also be insufficient for independence.
+ */
+const MIN_INDEPENDENCE_ASSURANCE = ASSURANCE_RANK.administrative; // claims must rank strictly above this
 
 /**
  * The scope a key must carry to verify a bounty.
@@ -194,18 +208,31 @@ export async function verifierIndependence(
   if (v.claims.some((a) => c.claims.some((b) => sameOwner(a, b)))) {
     return { ok: false, reason: 'same_owner', detail: 'Verifier and claimant share an owner.' };
   }
-  // Different keys prove different owners only within ONE namespace. A builder id and an SBT
-  // token can name the same human (Strix, #1470), so with no namespace in common the owners
-  // cannot be compared, and that is not independence.
-  // 'opaque' (e.g. a KYA custodian tier) is not an owner identity, so it cannot show a difference.
-  const kinds = (r: OwnerResolution) =>
-    new Set(r.claims.filter((x) => x.ownerKey && x.ownerKeyKind !== 'opaque').map((x) => x.ownerKeyKind));
-  const vk = kinds(v);
-  if (![...kinds(c)].some((k) => vk.has(k))) {
+  // Different keys prove different owners only within ONE namespace AND only when the evidence
+  // outranks an administrative FK (MIN_INDEPENDENCE_ASSURANCE). A builder id and an SBT token can
+  // name the same human (Strix, #1470), so with no namespace in common the owners cannot be
+  // compared. 'opaque' (a KYA custodian tier) is not an owner identity. And two different
+  // administrative builder_ids are not two owners — they are two unsigned FKs (D-148).
+  const distinctKinds = (r: OwnerResolution) =>
+    new Set(
+      r.claims
+        .filter(
+          (x) =>
+            x.ownerKey &&
+            x.ownerKeyKind !== 'opaque' &&
+            ASSURANCE_RANK[x.assurance] > MIN_INDEPENDENCE_ASSURANCE,
+        )
+        .map((x) => x.ownerKeyKind),
+    );
+  const vk = distinctKinds(v);
+  if (![...distinctKinds(c)].some((k) => vk.has(k))) {
     return {
       ok: false,
       reason: 'owner_not_established',
-      detail: 'Verifier and claimant owners are recorded in different namespaces, so they cannot be compared.',
+      detail:
+        'Independence not established: verifier and claimant need owner evidence stronger than an ' +
+        'administrative builder_id, recorded in a shared namespace. Different administrative ids ' +
+        'alone are not different owners (D-148).',
     };
   }
   return { ok: true };
