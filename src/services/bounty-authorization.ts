@@ -82,7 +82,10 @@ import { resolveOwner, sameOwner, ASSURANCE_RANK, type AgentRef, type OwnerResol
  * shared link — it simply cannot, alone, prove a DIFFERENCE. Lower this to
  * `ASSURANCE_RANK.administrative` to let an unverified signature count for independence.
  */
-const MIN_INDEPENDENCE_ASSURANCE = ASSURANCE_RANK.attested_unverified; // strictly above → proven_wallet | proven_human only
+// Read lazily (call time), NOT at module load: dereferencing ASSURANCE_RANK at top level crashes when a
+// circular import leaves it undefined mid-initialization (tests/model-family-wiring loads the full app graph,
+// which can evaluate this module before agent-owner-resolver has defined ASSURANCE_RANK). Value is unchanged.
+const minIndependenceAssurance = (): number => ASSURANCE_RANK.attested_unverified; // strictly above → proven_wallet | proven_human only
 
 /**
  * The scope a key must carry to verify a bounty.
@@ -228,7 +231,7 @@ export async function verifierIndependence(
           (x) =>
             x.ownerKey &&
             x.ownerKeyKind !== 'opaque' &&
-            ASSURANCE_RANK[x.assurance] > MIN_INDEPENDENCE_ASSURANCE,
+            ASSURANCE_RANK[x.assurance] > minIndependenceAssurance(),
         )
         .map((x) => x.ownerKeyKind),
     );
