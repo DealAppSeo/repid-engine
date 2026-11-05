@@ -9,6 +9,11 @@
  * evidence ABOVE administrative on BOTH sides, in a shared namespace. Administrative can
  * still prove SAMENESS — a shared FK is a real shared link — it just cannot prove a DIFFERENCE.
  *
+ * The bar was raised during review (Grok, #1516): independence requires a PROVEN binding
+ * (proven_wallet / proven_human) on both sides, not merely something above administrative —
+ * an unverified attested claim (a custodianship link, a read-time-unverified delegation) can
+ * be minted by one attester under two keys, so it is not proof of two distinct controllers.
+ *
  * These drive the function over a mocked resolve fn, so they fix the exact OwnerResolution
  * shape each case produces (synthetic — no DB).
  */
@@ -72,9 +77,17 @@ describe('verifierIndependence — minimum-assurance rule (D-148)', () => {
     expect(r).toMatchObject({ ok: false, reason: 'same_owner' });
   });
 
-  test('unverified custody (attested) outranks administrative: different wallets, shared namespace => independent', async () => {
+  test('unverified custody (attested) does NOT establish independence — one attester, two keys (Grok #1516)', async () => {
+    // Two custodianship links from the same (unverified) attester naming different addresses are not
+    // two independent controllers. The bar requires a PROVEN binding, which these are not.
     const r = await call(resolved(custody('0xaaa')), resolved(custody('0xbbb')));
-    expect(r).toEqual({ ok: true });
+    expect(r).toMatchObject({ ok: false, reason: 'owner_not_established' });
+  });
+
+  test('a proven binding beats an unverified one: signed wallet vs attested custody => still not established', async () => {
+    // Even one proven side is not enough — the OTHER side is only attested, so no PROVEN pair exists.
+    const r = await call(resolved(walletBind('W1')), resolved(custody('0xbbb')));
+    expect(r).toMatchObject({ ok: false, reason: 'owner_not_established' });
   });
 
   test('unverified custody on one side, administrative-only on the other => not established', async () => {
