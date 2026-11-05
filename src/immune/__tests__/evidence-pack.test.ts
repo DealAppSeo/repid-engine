@@ -17,7 +17,7 @@ const row = (over: Partial<PackRow> = {}): PackRow => ({
 });
 
 describe('evidencePack', () => {
-  it('groups by mode/dimension/controller-class/ruler/evidence-kind and tallies +/- delta; clean net-negative set is ok with no signal', () => {
+  it('groups by mode/dimension/controller-class/ruler/evidence-kind and tallies +/- delta; clean net-negative set is ok with no net-positive signal', () => {
     const rows = [
       row({ dimension: 'validator', delta: 1 }),
       row({ dimension: 'validator', delta: -2 }),
@@ -32,7 +32,8 @@ describe('evidencePack', () => {
     expect(p.byScoringVersion).toEqual({ 'ka-v2-precommitted': 2, 'brier-v1': 1 });
     expect(p.byEvidenceKind).toEqual({ known_answer: 3 });
     expect(p.ok).toBe(true);
-    expect(p.signals).toHaveLength(0); // net is negative → no net-positive signal
+    expect(p.signals.find((s) => s.name === 'same_controller_net_positive')).toBeUndefined(); // net is negative → no net-positive signal
+    expect(p.signals.find((s) => s.name === 'task_existence_check_skipped')).toBeDefined();    // task-citing rows, no taskEvidence → skipped existence check is surfaced
   });
 
   it('SIGNAL: a net-positive same-controller class is surfaced (non-gating; ok stays true)', () => {
@@ -130,5 +131,25 @@ describe('evidencePack', () => {
     expect(citedTaskId('trinity_tasks:12345')).toBe('12345');
     expect(citedTaskId('0xdeadbeef')).toBeNull();           // an immune content hash is not a task citation
     expect(citedTaskId('')).toBeNull();
+  });
+
+  // ── no-silent-failure: a skipped existence check must be SEEN, never read as a pass ──
+  it('SIGNAL: task-citing rows with NO taskEvidence surface task_existence_check_skipped (non-gating)', () => {
+    const p = evidencePack([row({ evidence_id: 'trinity_tasks:t1' }), row({ evidence_id: 'trinity_tasks:t1' }), row({ evidence_id: 'trinity_tasks:t2' })]);
+    expect(p.citedTasks).toBeNull();                                  // increment-2 did not run
+    const sig = p.signals.find((s) => s.name === 'task_existence_check_skipped')!;
+    expect(sig).toBeDefined();
+    expect(sig.detail).toEqual({ citing_rows: 3, cited_tasks: 2 });   // rows vs distinct tasks
+    expect(p.ok).toBe(true);                                          // non-gating: the opt-in is intentional
+  });
+
+  it('no task_existence_check_skipped signal when taskEvidence IS supplied (the join ran)', () => {
+    const p = evidencePack([row({ evidence_id: 'trinity_tasks:t1' })], { existing: ['t1'], done: ['t1'] });
+    expect(p.signals.find((s) => s.name === 'task_existence_check_skipped')).toBeUndefined();
+  });
+
+  it('no task_existence_check_skipped signal when no row cites a task (nothing to check)', () => {
+    const p = evidencePack([row({ evidence_id: '0xdeadbeef', evidence_ref: 'immune', evidence_hash: 'b'.repeat(64) })]);
+    expect(p.signals.find((s) => s.name === 'task_existence_check_skipped')).toBeUndefined();
   });
 });
