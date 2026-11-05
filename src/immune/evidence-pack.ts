@@ -116,6 +116,7 @@ export function evidencePack(rows: PackRow[], taskEvidence?: TaskEvidenceLookup)
   const existingSet = new Set<string>([...(taskEvidence?.existing ?? [])].map(String));
   const doneSet = new Set<string>([...(taskEvidence?.done ?? [])].map(String));
   const citedDistinct = new Set<string>();
+  let citedRows = 0;
   let missingTaskRows = 0;
   let notDoneTaskRows = 0;
 
@@ -143,6 +144,7 @@ export function evidencePack(rows: PackRow[], taskEvidence?: TaskEvidenceLookup)
     // increment 2: resolve the cited trinity_tasks:<id> against caller-supplied task state (only for task citations).
     const tid = citedTaskId(r.evidence_id);
     if (tid !== null) {
+      citedRows += 1;
       citedDistinct.add(tid);
       if (taskEvidence) {
         if (!existingSet.has(tid)) missingTaskRows += 1;
@@ -213,6 +215,20 @@ export function evidencePack(rows: PackRow[], taskEvidence?: TaskEvidenceLookup)
         detail: { n: t.n, pos: t.pos, neg: t.neg, net: Number(t.net.toFixed(4)) },
       });
     }
+  }
+
+  // No-silent-failure (r10 / THE_ONE §10): if rows CITE tasks but the caller supplied no taskEvidence, the
+  // increment-2 existence/done join DID NOT run. `ok` then reflects increment-1 grounding only, not task
+  // existence — so surface that the check was SKIPPED rather than let a green pack read as "existence verified".
+  // This is distinct from a check that RAN and FAILED (the cited_task_exists invariant covers that). Non-gating:
+  // the opt-in is intentional (a non-task caller shouldn't be forced to resolve task state), but any task-bearing
+  // production use is expected to pass taskEvidence — this signal is the tripwire for when it doesn't.
+  if (!taskEvidence && citedDistinct.size > 0) {
+    signals.push({
+      name: 'task_existence_check_skipped',
+      note: 'rows cite trinity_tasks:<id> but no taskEvidence was supplied — the increment-2 existence/done join did not run; ok reflects increment-1 grounding only, not task existence',
+      detail: { citing_rows: citedRows, cited_tasks: citedDistinct.size },
+    });
   }
 
   return {
