@@ -101,7 +101,11 @@ d('XC1-PF the NPA preflight module, attacked directly', () => {
     ['chain, another chain', { chain_id: 84532 }, 'request_chain_differs_from_npa'],
   ])('[XC1-PF-01] a request field that is not exactly what was signed is refused: %s', async (_n, raw, code) => {
     const s = await signed();
-    const sub = (v: unknown) => (typeof v === 'string' ? v.replace('SELLER', seller.address).replace('BUYER', buyer.address).replace('ATTACKER', attacker.address).replace('FLIP', `${seller.address.slice(0, 41)}${seller.address[41] === 'f' ? '0' : 'f'}`) : v);
+    // FLIP = the seller address with its last nibble changed to a DIFFERENT value. ethers returns an EIP-55
+    // checksummed (mixed-case) address, so the last char must be compared case-insensitively: an uppercase 'F'
+    // under `=== 'f'` maps to 'f', a CASE-only change evaluateNpa reads as the SAME address, flaking this probe
+    // (~1/32 runs: last nibble value f AND checksummed uppercase). .toLowerCase() makes the flip always value-distinct.
+    const sub = (v: unknown) => (typeof v === 'string' ? v.replace('SELLER', seller.address).replace('BUYER', buyer.address).replace('ATTACKER', attacker.address).replace('FLIP', `${seller.address.slice(0, 41)}${seller.address[41].toLowerCase() === 'f' ? '0' : 'f'}`) : v);
     const req = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, sub(v)]));
     expect(codes(evalP(presOf(s, req)))).toContain(code);
   });
