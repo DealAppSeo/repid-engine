@@ -46,6 +46,10 @@ import { gateSettlementDeltas } from '../same-owner-settlement';
 
 const claim = (ownerKey: string): OwnerClaim =>
   ({ source: 'repid_agents.builder_id', assurance: 'administrative', ownerKey, ownerKeyKind: 'builder_id', capUsdcPerTx: null, capUsdcTotal: null });
+// A SIGNED owner claim (a binding) — the only kind that can establish a DIFFERENT owner (D-148).
+// An administrative builder_id (`claim` above) cannot: two different FKs are not two owners.
+const provenClaim = (ownerKey: string): OwnerClaim =>
+  ({ source: 'human_agent_bindings', assurance: 'proven_wallet', ownerKey, ownerKeyKind: 'builder_id', capUsdcPerTx: null, capUsdcTotal: null });
 const res = (agentId: string, ...claims: OwnerClaim[]): OwnerResolution =>
   ({ status: claims.length ? 'resolved' : 'unknown', agentId, owner: claims[0] ?? null, claims, conflicts: [], reason: null, probes: [] });
 
@@ -61,7 +65,11 @@ const bridge = () => mockOps.find((o) => o.table === 'repid_events')?.payload;
 const owners = (buyer: OwnerResolution, provider: OwnerResolution) =>
   resolve.mockImplementation(async (ref) => (ref.id === 'buy' ? buyer : provider));
 const SAME = () => owners(res('buy', claim(FLEET)), res('prov', claim(FLEET)));
-const STRANGERS = () => owners(res('buy', claim(FLEET)), res('prov', claim(OTHER)));
+// Genuine independence: two DIFFERENT owners each established by a signed binding.
+const STRANGERS = () => owners(res('buy', provenClaim(FLEET)), res('prov', provenClaim(OTHER)));
+// D-148: both sides have ONLY an administrative builder_id. Different values are NOT different
+// owners — this must resolve owner_unknown (not independent), so enforce withholds.
+const ADMIN_STRANGERS = () => owners(res('buy', claim(FLEET)), res('prov', claim(OTHER)));
 const PROVIDER_UNKNOWN = () => owners(res('buy', claim(FLEET)), res('prov'));
 
 /** [agent, event, delta, metadata.same_owner_settlement] for every canonical row written. */
@@ -158,7 +166,7 @@ describe('enforce: same owner or unknown owner earns no canonical RepID', () => 
     expect(rows().every((r) => r[3]?.would_not_count === 'owner_unknown')).toBe(true);
   });
 
-  test('a stranger (different owner) still earns in full: the gate does not refuse everything', async () => {
+  test('a stranger (different, SIGNED owner) still earns in full: the gate does not refuse everything', async () => {
     STRANGERS();
     await run();
     const tag = (d: number) => ({ mode: 'enforce', would_not_count: null, counted: true, ungated_delta: d });
@@ -168,6 +176,17 @@ describe('enforce: same owner or unknown owner earns no canonical RepID', () => 
       ['prov', 'SERVICE_SATISFIED', 30, tag(30)],
       ['buy', 'SERVICE_SATISFIED', 15, tag(15)],
     ]);
+  });
+
+  // D-148 regression: the false positive that started this. Both agents have ONLY an
+  // administrative builder_id, different values. Before the fix this read as independent and
+  // earned +60; it must now be owner_unknown and withhold, exactly like same_owner.
+  test('administrative-only different builder_ids are NOT independent: owner_unknown, withheld (D-148)', async () => {
+    ADMIN_STRANGERS();
+    await run();
+    expect(rows().map((r) => r[2])).toEqual([0, 0, 0, 0]);
+    expect(rows().every((r) => r[3]?.would_not_count === 'owner_unknown')).toBe(true);
+    expect(rows().every((r) => r[3]?.counted === false)).toBe(true);
   });
 
   test('a contract with the same agent on both sides is same_owner', async () => {
@@ -328,6 +347,12 @@ describe('owner-classes designation overlay', () => {
     (async (ref: { id: string }) => (ref.id === 'buy'
       ? (buyerKey ? res('buy', claim(buyerKey)) : res('buy'))
       : (provKey ? res('prov', claim(provKey)) : res('prov')))) as unknown as Parameters<typeof gateSettlementDeltas>[2];
+  // Same, but each side's owner is a SIGNED binding — the only evidence that can establish a
+  // different owner (D-148). Used where the test needs genuine evidence-independence.
+  const provenResolver = (buyerKey: string | null, provKey: string | null) =>
+    (async (ref: { id: string }) => (ref.id === 'buy'
+      ? (buyerKey ? res('buy', provenClaim(buyerKey)) : res('buy'))
+      : (provKey ? res('prov', provenClaim(provKey)) : res('prov')))) as unknown as Parameters<typeof gateSettlementDeltas>[2];
   const squadsOf = (buyer: string | null, provider: string | null) => (async () => ({ buyer, provider }));
 
   test('enforce: owner_unknown + two distinct designated squads => assurance "designated" but the delta is STILL withheld', async () => {
@@ -354,13 +379,26 @@ describe('owner-classes designation overlay', () => {
     expect(out.provider.meta.owner_assurance).toEqual({ assurance: 'none', reason: 'same_real_owner' });
   });
 
-  test('evidence-independent => verified, and no squad lookup is needed', async () => {
+  test('evidence-independent (SIGNED owners) => verified, and no squad lookup is needed', async () => {
+    process.env.SAME_OWNER_SETTLEMENT_MODE = 'shadow';
+    let squadsCalled = false;
+    const sq = (async () => { squadsCalled = true; return { buyer: ALPHA_SQUAD, provider: BETA_SQUAD }; });
+    const out = await gateSettlementDeltas(C, { provider: 10, buyer: 5 }, provenResolver(FLEET, OTHER), sq);
+    expect(out.provider.meta.owner_assurance?.assurance).toBe('verified');
+    expect(squadsCalled).toBe(false); // squads consulted only when the real verdict is owner_unknown
+  });
+
+  // D-148 × designation overlay: administrative-only owners are owner_unknown (not independent),
+  // so the squad-designation fiction IS consulted — the overlay cannot be shortcut by an
+  // unsigned FK masquerading as a distinct owner.
+  test('administrative-only different owners are owner_unknown, so squads ARE consulted (D-148)', async () => {
     process.env.SAME_OWNER_SETTLEMENT_MODE = 'shadow';
     let squadsCalled = false;
     const sq = (async () => { squadsCalled = true; return { buyer: ALPHA_SQUAD, provider: BETA_SQUAD }; });
     const out = await gateSettlementDeltas(C, { provider: 10, buyer: 5 }, resolver(FLEET, OTHER), sq);
-    expect(out.provider.meta.owner_assurance?.assurance).toBe('verified');
-    expect(squadsCalled).toBe(false); // squads consulted only when the real verdict is owner_unknown
+    expect(out.provider.meta.same_owner_settlement?.would_not_count).toBe('owner_unknown');
+    expect(squadsCalled).toBe(true);
+    expect(out.provider.meta.owner_assurance?.assurance).toBe('designated');
   });
 
   test('same designated squad on both sides => not independent (none), delta still withheld under enforce', async () => {

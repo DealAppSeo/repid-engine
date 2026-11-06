@@ -61,7 +61,31 @@
  */
 
 import { validateAgentApiKey } from '../auth/api-keys';
-import { resolveOwner, sameOwner, type AgentRef, type OwnerResolution } from './agent-owner-resolver';
+import { resolveOwner, sameOwner, ASSURANCE_RANK, type AgentRef, type OwnerResolution } from './agent-owner-resolver';
+
+/**
+ * The weakest owner evidence that can establish a DIFFERENT owner (D-148).
+ *
+ * Establishing independence needs POSITIVE proof of a distinct controller — a signed owner
+ * binding (proven_wallet / proven_human). Two weaker signals are deliberately insufficient:
+ *   - administrative (rank 1): a builder_id FK set as a side effect of agent creation —
+ *     "an administrative association nobody signed … NOT evidence of ownership". Two
+ *     different builder_ids are two unsigned associations, not two owners.
+ *   - attested_unverified (rank 3): a signature this resolver does NOT re-verify (a
+ *     custodianship link, or a read-time-unverified delegation). One attester can mint two
+ *     links naming different keys, so a difference between them is not proof of two
+ *     independent controllers (Grok review, #1516). The only live custodianship row today
+ *     is in fact a mock.
+ * So the bar is set ABOVE attested_unverified: independence requires proven_wallet or
+ * proven_human on BOTH sides, in a shared namespace. Weaker evidence can still prove
+ * SAMENESS (the sameOwner check below) — a shared FK or a shared attested key is a real
+ * shared link — it simply cannot, alone, prove a DIFFERENCE. Lower this to
+ * `ASSURANCE_RANK.administrative` to let an unverified signature count for independence.
+ */
+// Read lazily (call time), NOT at module load: dereferencing ASSURANCE_RANK at top level crashes when a
+// circular import leaves it undefined mid-initialization (tests/model-family-wiring loads the full app graph,
+// which can evaluate this module before agent-owner-resolver has defined ASSURANCE_RANK). Value is unchanged.
+const minIndependenceAssurance = (): number => ASSURANCE_RANK.attested_unverified; // strictly above → proven_wallet | proven_human only
 
 /**
  * The scope a key must carry to verify a bounty.
@@ -194,18 +218,32 @@ export async function verifierIndependence(
   if (v.claims.some((a) => c.claims.some((b) => sameOwner(a, b)))) {
     return { ok: false, reason: 'same_owner', detail: 'Verifier and claimant share an owner.' };
   }
-  // Different keys prove different owners only within ONE namespace. A builder id and an SBT
-  // token can name the same human (Strix, #1470), so with no namespace in common the owners
-  // cannot be compared, and that is not independence.
-  // 'opaque' (e.g. a KYA custodian tier) is not an owner identity, so it cannot show a difference.
-  const kinds = (r: OwnerResolution) =>
-    new Set(r.claims.filter((x) => x.ownerKey && x.ownerKeyKind !== 'opaque').map((x) => x.ownerKeyKind));
-  const vk = kinds(v);
-  if (![...kinds(c)].some((k) => vk.has(k))) {
+  // Different keys prove different owners only within ONE namespace AND only when the evidence
+  // is a proven binding (MIN_INDEPENDENCE_ASSURANCE — above an unverified claim). A builder id and
+  // an SBT token can name the same human (Strix, #1470), so with no namespace in common the owners
+  // cannot be compared. 'opaque' (a KYA custodian tier) is not an owner identity. Different
+  // administrative builder_ids — or different unverified attested keys from one attester — are not
+  // two owners (D-148; Grok #1516).
+  const distinctKinds = (r: OwnerResolution) =>
+    new Set(
+      r.claims
+        .filter(
+          (x) =>
+            x.ownerKey &&
+            x.ownerKeyKind !== 'opaque' &&
+            ASSURANCE_RANK[x.assurance] > minIndependenceAssurance(),
+        )
+        .map((x) => x.ownerKeyKind),
+    );
+  const vk = distinctKinds(v);
+  if (![...distinctKinds(c)].some((k) => vk.has(k))) {
     return {
       ok: false,
       reason: 'owner_not_established',
-      detail: 'Verifier and claimant owners are recorded in different namespaces, so they cannot be compared.',
+      detail:
+        'Independence not established: verifier and claimant each need a PROVEN owner binding ' +
+        '(signed wallet or human) in a shared namespace. An administrative builder_id or an ' +
+        'unverified attested claim is not proof of a distinct owner (D-148).',
     };
   }
   return { ok: true };

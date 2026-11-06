@@ -74,7 +74,7 @@ jest.mock('../src/engine/agent-log', () => ({ logAgentEvent: jest.fn().mockResol
 jest.mock('../src/services/agent-owner-resolver', () => ({
   ...jest.requireActual('../src/services/agent-owner-resolver'),
   resolveOwner: jest.fn(async (ref: { id?: string }) => {
-    const claim = { source: 'binding', assurance: 'onchain', ownerKey: `owner-of-${ref.id}`, ownerKeyKind: 'wallet', capUsdcPerTx: null, capUsdcTotal: null };
+    const claim = { source: 'binding', assurance: 'proven_wallet', ownerKey: `owner-of-${ref.id}`, ownerKeyKind: 'wallet', capUsdcPerTx: null, capUsdcTotal: null };
     return { status: 'resolved', agentId: ref.id ?? null, owner: claim, claims: [claim], conflicts: [], reason: null, probes: [] };
   }),
 }));
