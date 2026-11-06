@@ -152,4 +152,42 @@ describe('evidencePack', () => {
     const p = evidencePack([row({ evidence_id: '0xdeadbeef', evidence_ref: 'immune', evidence_hash: 'b'.repeat(64) })]);
     expect(p.signals.find((s) => s.name === 'task_existence_check_skipped')).toBeUndefined();
   });
+
+  // ── D-147: a COMPLETE claim requires the task-existence check to have ACTUALLY RUN ──
+  it('COMPLETENESS: task-citing rows with NO taskEvidence are ok (grounded) but NOT complete', () => {
+    const p = evidencePack([row({ evidence_id: 'trinity_tasks:t1' }), row({ evidence_id: 'trinity_tasks:t2' })]);
+    expect(p.ok).toBe(true);        // increment-1 grounding holds
+    expect(p.complete).toBe(false); // but existence was never verified → not a complete claim (D-147)
+    expect(p.signals.find((s) => s.name === 'task_existence_check_skipped')).toBeDefined();
+  });
+
+  it('COMPLETENESS: task-citing rows WITH a passing taskEvidence join are complete', () => {
+    const p = evidencePack([row({ evidence_id: 'trinity_tasks:t1' })], { existing: ['t1'], done: ['t1'] });
+    expect(p.ok).toBe(true);
+    expect(p.complete).toBe(true); // the existence/done join ran and passed
+  });
+
+  it('COMPLETENESS: a failing existence join is ok:false and complete:false', () => {
+    const p = evidencePack([row({ evidence_id: 'trinity_tasks:ghost' })], { existing: [], done: [] });
+    expect(p.ok).toBe(false);
+    expect(p.complete).toBe(false); // check ran but failed → neither ok nor complete
+  });
+
+  it('COMPLETENESS: a pack whose rows cite no tasks is complete when ok (nothing to verify)', () => {
+    const p = evidencePack([row({ evidence_id: '0xabc', evidence_ref: 'immune', evidence_hash: 'c'.repeat(64) })]);
+    expect(p.ok).toBe(true);
+    expect(p.complete).toBe(true); // no task citations → the existence check is vacuous, completeness holds
+  });
+
+  it('COMPLETENESS: an increment-1 invariant failure makes a non-task pack incomplete too', () => {
+    const p = evidencePack([row({ evidence_id: '0xabc', evidence_ref: 'immune', evidence_hash: 'c'.repeat(64), scoring_version: '' })]);
+    expect(p.ok).toBe(false);       // missing ruler
+    expect(p.complete).toBe(false); // complete can never exceed ok
+  });
+
+  it('COMPLETENESS: empty input is complete (ok, nothing cited)', () => {
+    const p = evidencePack([]);
+    expect(p.ok).toBe(true);
+    expect(p.complete).toBe(true);
+  });
 });

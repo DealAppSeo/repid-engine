@@ -88,6 +88,15 @@ export interface EvidencePack {
   citedTasks: { cited: number; existing: number; done: number; missingRows: number; notDoneRows: number } | null;
   /** true ⇒ every invariant held ⇒ safe to publish as same-controller shadow evidence, no independence claim. */
   ok: boolean;
+  /**
+   * true ⇒ this is a COMPLETE evidence claim: `ok` AND the task-existence check actually RAN for every cited task
+   * (D-147). A pack that cites `trinity_tasks:<id>` but was built without `taskEvidence` is grounded (increment-1)
+   * but NOT complete — existence was never verified (the `task_existence_check_skipped` signal). Kept distinct from
+   * `ok` so a legitimate non-task caller still gets `ok:true`; only a COMPLETENESS claim demands the join have run.
+   * When `taskEvidence` is supplied, `ok` already folds in cited_task_exists / cited_task_verified_done, so
+   * `complete === ok`; when no row cites a task there is nothing to verify, so `complete === ok` there too.
+   */
+  complete: boolean;
 }
 
 const emptyTally = (): DeltaTally => ({ n: 0, pos: 0, neg: 0, zero: 0, net: 0 });
@@ -231,6 +240,12 @@ export function evidencePack(rows: PackRow[], taskEvidence?: TaskEvidenceLookup)
     });
   }
 
+  const ok = invariants.every((i) => i.held);
+  // D-147: a COMPLETE evidence claim requires the task-existence check to have ACTUALLY RUN. A pack that cites
+  // trinity_tasks:<id> but was built without taskEvidence verified nothing about those tasks (the skipped-check
+  // signal above fires), so it is not complete even when grounded. `ok` stays true for a legitimate non-task
+  // caller; completeness is the stricter claim a task-bearing production consumer must check before publishing.
+  const taskExistenceCheckRan = !!taskEvidence || citedDistinct.size === 0;
   return {
     total: rows.length,
     byMode,
@@ -249,6 +264,7 @@ export function evidencePack(rows: PackRow[], taskEvidence?: TaskEvidenceLookup)
           notDoneRows: notDoneTaskRows,
         }
       : null,
-    ok: invariants.every((i) => i.held),
+    ok,
+    complete: ok && taskExistenceCheckRan,
   };
 }

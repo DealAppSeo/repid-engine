@@ -62,7 +62,10 @@ export function acceptanceThreshold(raw: string | undefined = process.env['LANE_
   const t = (raw ?? '').trim();
   if (t === '') return 1; // Number('') is 0, which would accept anything — default to "all criteria met".
   const n = Number(t);
-  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 1;
+  // A threshold of 0 is INVALID, not a valid "accept everything": `score >= 0` passes every deliverable,
+  // including one where no criterion was met, so a zero knob is an accept-anything footgun (D-147 /
+  // red-team #3). Reject it (and any out-of-range value) back to the default 1.0. Valid range is (0, 1].
+  return Number.isFinite(n) && n > 0 && n <= 1 ? n : 1;
 }
 
 /** Collapse a multi-criterion satisfaction score (0..1) to the receipt's binary verdict. Explicit on the output. */
