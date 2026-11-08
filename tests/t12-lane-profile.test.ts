@@ -424,6 +424,29 @@ describePg('the restricted database role, attacked', () => {
       }
     });
 
+    it('a role that owns a table is privileged, because an owner skips row policies, and the real CLI refuses it', async () => {
+      await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_owner_probe') THEN CREATE ROLE t12_owner_probe LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; END IF; END $$`);
+      const u = new URL(workerUrl);
+      u.username = 't12_owner_probe';
+      const probe = new Pool({ connectionString: u.toString() });
+      const dir = mkdtempSync(join(tmpdir(), 't12-owner-'));
+      try {
+        expect(await dbPrivilege(probe)).toEqual({ name: 't12_owner_probe', privileged: false });
+        await admin.query('CREATE TABLE t12_owner_probe_table (x int)');
+        await admin.query('ALTER TABLE t12_owner_probe_table OWNER TO t12_owner_probe');
+        expect(await dbPrivilege(probe)).toEqual({ name: 't12_owner_probe', privileged: true });
+        const specs = join(dir, 's.jsonl');
+        writeFileSync(specs, '');
+        const r = cli(['--specs', specs, '--repo', `DealAppSeo/trustshell=${dir}`, '--work-root', join(dir, 'w'), '--lanes', '1'], { T12_LANES_ENABLED: 'true', DATABASE_URL: u.toString() });
+        expect(r.status).toBe(2);
+        expect(r.stderr).toContain('bypass row security');
+      } finally {
+        await probe.end();
+        await admin.query('DROP TABLE IF EXISTS t12_owner_probe_table');
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 180_000);
+
     it('re-applying the migration strips a new membership and grant, and refuses a role that owns objects', async () => {
       const file = readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8');
       await admin.query('GRANT postgres TO t12_lane_worker');
