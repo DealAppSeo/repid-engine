@@ -1,7 +1,7 @@
--- The parts of production `trinity_tasks` the T12 lanes depend on, for tests/t12-lanes.test.ts.
--- Constraints, trigger functions and the reaper are copied from qnnpjhlxljtqyigedwkb on 2026-11-07
--- (pg_get_constraintdef / pg_get_functiondef), because the lanes are shaped by how those behave.
--- Refresh this file if any of them change in production.
+-- SYNTHETIC test schema for the T12 lane tests: table definitions and made-up rows, with no data
+-- from any real system. Its constraints, trigger functions and reaper match production's definitions
+-- as of 2026-11-07 (pg_get_constraintdef / pg_get_functiondef), because the lanes are shaped by how
+-- those behave. Update this file if those definitions change.
 
 DROP TABLE IF EXISTS trinity_tasks CASCADE;
 DROP TABLE IF EXISTS trinity_changelog CASCADE;
@@ -15,7 +15,7 @@ DROP TABLE IF EXISTS trinity_agent_logs CASCADE;
 DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF; END $$;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon;
 
--- Columns and constraints copied from production on 2026-11-08.
+-- Columns and constraints match production's definitions as of 2026-11-08.
 CREATE TABLE principal_grants (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   grantor_agent_id text NOT NULL,
@@ -58,7 +58,7 @@ CREATE TABLE trinity_system_config (id integer PRIMARY KEY, emergency_halt boole
 INSERT INTO trinity_system_config (id, emergency_halt) VALUES (1, false);
 -- Present only so a test can prove the restricted worker role cannot read it.
 CREATE TABLE repid_agents (id serial PRIMARY KEY, agent_name text, current_repid integer);
-INSERT INTO repid_agents (agent_name, current_repid) VALUES ('trinity-orch', 1000);
+INSERT INTO repid_agents (agent_name, current_repid) VALUES ('synthetic-agent', 1000);
 
 CREATE TABLE agent_resource_claims (
   id bigserial PRIMARY KEY,
