@@ -86,8 +86,11 @@ export interface T12WaveResult {
 export async function t12Wave(input: {
   env?: Record<string, string | undefined>;
   attempt: (host: string) => Promise<{ status: number; retryAfterMs?: number }>;
+  /** Hosts to try instead of the default order. The flag still decides whether any are. */
+  order?: readonly string[];
 }): Promise<T12WaveResult> {
-  const order = t12FreeWaveOrder(input.env ?? process.env);
+  const enabled = t12FreeWaveOrder(input.env ?? process.env);
+  const order = enabled.length === 0 ? enabled : input.order ?? enabled;
   const tried: string[] = [];
   for (const host of order) {
     tried.push(host);

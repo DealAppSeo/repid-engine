@@ -9,11 +9,11 @@
  * spec's `llama3.1-8b` 404s — no access on the key), and sambanova `Meta-Llama-3.1-8B-Instruct` (a
  * 3rd FAST free Llama family). Fireworks was RETIRED (account suspended 2026-06-04 → 100% fail); it
  * is kept in the FREE_PROVIDERS cost-classification set for historical ledger rows but is NOT routed
- * to. `together` IS configured (TOGETHER_API_KEY live) and counts as a free provider for cost
- * reporting, but has no adapter here yet — it is NOT in the routed WORKING set.
+ * to. `together` was listed here as free until 2026-11-08; it answers 402 and needs credit, so it is
+ * not. Membership of FREE_PROVIDERS is a claim that gates spend (routes/v1/dev-codegen.ts).
  */
 export const FREE_PROVIDERS = new Set<string>([
-  'groq', 'groq-llama', 'cerebras', 'sambanova', 'openrouter', 'fireworks', 'together', 'local_slm',
+  'groq', 'groq-llama', 'cerebras', 'sambanova', 'openrouter', 'fireworks', 'local_slm',
   // Z.AI direct — GLM-4.5-Flash / GLM-4.7 on the vendor's permanent free tier.
   'zai',
 ]);
