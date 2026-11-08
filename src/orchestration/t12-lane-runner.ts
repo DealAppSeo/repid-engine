@@ -1,0 +1,212 @@
+/**
+ * t12-lane-runner.ts — N concurrent lanes over the durable store: claim → make → check → integrate
+ * → replenish, then the next task. All state is in the database, so a fresh process continues where
+ * a dead one stopped; nothing here is remembered between runs.
+ *
+ * Each lane does whatever is due, in the order that frees capacity first: finish verified work,
+ * check someone else's, then start new work. It stops when nothing can move, when the stop switch
+ * is set, or at `maxSteps`. It does not schedule itself; arming a schedule is an owner decision.
+ */
+import {
+  claimMake, claimStage, heartbeat, recordIntegration, recordVerdict, recoverStages, releaseMake, replenish, submit,
+  type Handle, type LaneSpec, type ReplenishReport, type Submission, type TxDb, type Verdict,
+} from './t12-lane-store';
+import { HEARTBEAT_TTL_MS } from './write-lease';
+
+/** Read in one place so a flag cannot be spelled two ways. Each is off unless exactly `true`. */
+export function laneFlags(): { enabled: boolean; allowExec: boolean; publish: boolean } {
+  return {
+    enabled: process.env.T12_LANES_ENABLED === 'true',
+    allowExec: process.env.T12_LANES_ALLOW_EXEC === 'true',
+    publish: process.env.T12_LANES_PUBLISH === 'true',
+  };
+}
+
+export type MakeOutcome =
+  | { ok: true; submission: Submission }
+  | { ok: false; kind: 'rate_limited' | 'infra' | 'maker_failed'; reason: string };
+
+export interface LaneAdapters {
+  make(h: Handle, signal: AbortSignal): Promise<MakeOutcome>;
+  check(h: Handle): Promise<Verdict>;
+  /** Must be idempotent per branch: a crash after publishing re-runs this. */
+  publish(h: Handle): Promise<{ url: string }>;
+}
+
+export interface RunLanesOptions {
+  db: TxDb;
+  lanes: readonly string[];
+  adapters: LaneAdapters;
+  /** Without this, verified work waits at `approved` and nothing is published. */
+  publishEnabled: boolean;
+  /** False on a host that may not run model-written code: submissions wait for one that may. */
+  checkEnabled?: boolean;
+  idleMs?: number;
+  specs: () => readonly LaneSpec[];
+  readyTarget: number;
+  stop?: () => boolean;
+  log?: (line: string) => void;
+  heartbeatMs?: number;
+  dailyCap?: number;
+  maxSteps?: number;
+}
+
+export interface RunReport {
+  made: number;
+  approved: number;
+  rejected: number;
+  notChecked: number;
+  integrated: number;
+  fenceRefused: string[];
+  paused: string | null;
+  replenish: ReplenishReport | null;
+  stoppedBy: 'idle' | 'stop_switch' | 'max_steps';
+}
+
+type Did = 'worked' | 'idle';
+
+export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
+  const log = o.log ?? (() => {});
+  const report: RunReport = {
+    made: 0, approved: 0, rejected: 0, notChecked: 0, integrated: 0, fenceRefused: [], paused: null, replenish: null, stoppedBy: 'idle',
+  };
+  const maxSteps = o.maxSteps ?? 200;
+  let steps = 0;
+
+  const refused = (where: string, reason: string) => {
+    report.fenceRefused.push(`${where}: ${reason}`);
+    log(`fence refused ${where}: ${reason}`);
+  };
+
+  async function makeOne(h: Handle): Promise<void> {
+    const ac = new AbortController();
+    const beat = setInterval(() => {
+      heartbeat(o.db, h)
+        .then((r) => {
+          // Only a fence refusal stops the work: a transient database error is not a lost lease.
+          if (!r.ok && r.fenced) ac.abort();
+        })
+        .catch((e) => log(`heartbeat failed for ${h.taskId}: ${String(e)}`));
+    }, o.heartbeatMs ?? HEARTBEAT_TTL_MS / 3);
+    try {
+      let out: MakeOutcome;
+      try {
+        out = await o.adapters.make(h, ac.signal);
+      } catch (e) {
+        out = { ok: false, kind: 'infra', reason: `maker threw: ${e instanceof Error ? e.message : String(e)}` };
+      }
+      if (ac.signal.aborted) {
+        refused(`make ${h.taskId}`, 'lease lost during execution; output discarded');
+        return;
+      }
+      if (out.ok) {
+        const r = await submit(o.db, h, out.submission);
+        if (r.ok) report.made++;
+        else refused(`submit ${h.taskId}`, r.reason);
+        return;
+      }
+      if (out.kind === 'rate_limited') report.paused = `rate limited: ${out.reason}`;
+      const r = await releaseMake(o.db, h, out.reason, out.kind !== 'maker_failed');
+      if (!r.ok) refused(`release ${h.taskId}`, r.reason);
+    } finally {
+      clearInterval(beat);
+    }
+  }
+
+  async function checkOne(h: Handle): Promise<void> {
+    let v: Verdict;
+    try {
+      v = await o.adapters.check(h);
+    } catch (e) {
+      // A checker that could not run has said nothing about the work.
+      v = { outcome: 'not_checked', reason: `checker threw: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    const r = await recordVerdict(o.db, h, v);
+    if (!r.ok) return refused(`verdict ${h.taskId}`, r.reason);
+    if (v.outcome === 'approved') report.approved++;
+    else if (v.outcome === 'rejected') report.rejected++;
+    else report.notChecked++;
+  }
+
+  async function integrateOne(h: Handle): Promise<void> {
+    const { url } = await o.adapters.publish(h);
+    const r = await recordIntegration(o.db, h, url);
+    if (r.ok) report.integrated++;
+    else refused(`integrate ${h.taskId}`, r.reason);
+  }
+
+  async function step(lane: string): Promise<Did> {
+    await recoverStages(o.db);
+    if (o.publishEnabled) {
+      const h = await claimStage(o.db, 'approved', lane);
+      if (h) {
+        // A publish failure leaves the claim to recoverStages, so it retries instead of stranding.
+        await integrateOne(h).catch((e) => log(`publish failed for ${h.taskId}: ${String(e)}`));
+        return 'worked';
+      }
+    }
+    const check = o.checkEnabled === false ? null : await claimStage(o.db, 'awaiting_check', lane);
+    if (check) {
+      await checkOne(check);
+      return 'worked';
+    }
+    if (report.paused) return 'idle';
+    const claim = await claimMake(o.db, lane, { dailyCap: o.dailyCap });
+    if (claim.kind === 'paused') {
+      report.paused = claim.reason;
+      return 'idle';
+    }
+    if (claim.kind === 'claimed') {
+      await makeOne(claim.handle);
+      return 'worked';
+    }
+    return 'idle';
+  }
+
+  // A lane cannot check its own work, so it must not leave while another lane may still produce
+  // some. It exits only after a full idle pass in which nothing anywhere moved.
+  let progress = 0;
+  let busy = 0;
+
+  async function laneLoop(lane: string): Promise<void> {
+    let seen = -1;
+    for (;;) {
+      if (o.stop?.()) {
+        report.stoppedBy = 'stop_switch';
+        return;
+      }
+      if (steps >= maxSteps) {
+        report.stoppedBy = 'max_steps';
+        return;
+      }
+      busy++;
+      let did: Did;
+      try {
+        did = await step(lane);
+      } finally {
+        busy--;
+      }
+      if (did === 'worked') {
+        steps++;
+        progress++;
+        continue;
+      }
+      if (!report.paused) {
+        // Automatic continuation: nothing to do, so refill from vetted specs and go again.
+        const r = await replenish(o.db, o.specs(), o.readyTarget);
+        report.replenish = r;
+        if (r.underflow) log(r.underflow);
+        if (r.inserted.length > 0) {
+          progress++;
+          continue;
+        }
+      }
+      if (busy === 0 && seen === progress) return;
+      seen = progress;
+      await new Promise((resolve) => setTimeout(resolve, o.idleMs ?? 2000));
+    }
+  }
+
+  await Promise.all(o.lanes.map(laneLoop));
+  return report;
+}

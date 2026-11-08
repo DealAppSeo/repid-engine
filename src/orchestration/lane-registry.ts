@@ -96,7 +96,7 @@ export type Capability =
   /** Reasoning over text supplied in the prompt. The floor — every lane has it. */
   | 'reasoning';
 
-export type LaneId = 'CC' | 'GA' | 'XC' | 'T12' | 'SEAN';
+export type LaneId = 'CC' | 'GA' | 'XC' | 'T12' | 'SEAN' | 'HARNESS';
 
 /**
  * Cost tier. Lower is cheaper and is tried FIRST — the cost cascade of
@@ -186,6 +186,17 @@ export const LANES: readonly Lane[] = [
     source:
       'CLAUDE_RULES 7: CC has its own prod MCP and may self-apply additive DDL. ' +
       'NO merge (rule 9), NO chain_send, NO infra — those are SEAN by rule.',
+  },
+  {
+    id: 'HARNESS',
+    role: 'Deterministic re-run of a submitted commit in a fresh checkout. No model, no judgement.',
+    capabilities: ['repo_read', 'shell'],
+    costTier: 0,
+    handsTo: ['CC'],
+    source:
+      'src/orchestration/t12-lane-git.ts check(): it reads git and runs one test, so its voice is ' +
+      'an exit code. Named as its own lane so that a re-run is not recorded as a review by CC or ' +
+      'GA, neither of which looked. Not independent of the controller that runs the lanes.',
   },
   {
     id: 'SEAN',

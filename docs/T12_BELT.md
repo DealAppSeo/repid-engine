@@ -22,7 +22,7 @@ trustshell status
 
 Do not call Anthropic from this belt.
 
-## The call (`src/orchestration/t12-attempt.ts`, unwired)
+## The call (`src/orchestration/t12-attempt.ts`)
 
 `t12Ask(prompt)` runs the wave for real, one host at a time, through `providerFetch`:
 
@@ -41,4 +41,22 @@ Do not call Anthropic from this belt.
 - The boundary is on if ANY source says so (the `boundaryOn` option, the env passed in, or the
   process env); a caller can only tighten it, never switch a node's boundary off.
 - 20 s timeout per host, so a full wave can take up to ~60 s. `Retry-After` is capped at 1 h.
-- Nothing calls `t12Ask` yet, and it makes no call unless `T12_FREE_WAVE` is exactly `true`.
+- It makes no call unless `T12_FREE_WAVE` is exactly `true`. This line used to say nothing calls it; the B21 runner job and the coding lanes below both do.
+
+## Coding lanes (`src/orchestration/t12-lane-*.ts`, off by default)
+
+Claim, make, independently check, integrate, refill, on `trinity_tasks` with no new table.
+
+- **Rows.** `assigned_to = trinity-t12-lanes`, so the fleet's claim skips them. Making is `claimed`; everything after is `pending_validation`, with the real stage in `metadata.t12.stage`. The RepID bridge polls `done`, `verified` and `shadow_reject`, and a lane row never enters those.
+- **Leases.** `expires_at`, renewed by heartbeat, freed by the `trinity_reap_expired_claims` cron. `metadata.t12.epoch` is the fencing token, so a worker that lost its lease cannot write.
+- **Path locks.** Exact files, held from claim until the check passes, decided under one advisory lock.
+- **Check.** A different lane re-runs the test in a fresh checkout, then removes the deliverable and requires the same test to fail. The verdict is `same_controller_rerun`: it shows the test passes with the change and fails without it, not that the test is good.
+- **Integrate.** A draft PR at most. A human merges. `HIGH` risk is never published.
+- **Receipts.** Each decision appends to a hash chain in `metadata.t12.receipts`, in the same transaction as the state change.
+- **Cost.** The only model path is `t12Ask` (loopback, groq, cerebras). At most one call per claim, and `DAILY_CLAIM_CAP` claims a day.
+
+Run once with `scripts/t12/lanes.ts`. Nothing schedules it. `T12_LANES_ENABLED`, `T12_LANES_ALLOW_EXEC` and `T12_LANES_PUBLISH` are each off unless exactly `true`.
+
+**`T12_LANES_ALLOW_EXEC` runs model-written code.** The child gets a stripped environment and no install scripts, but that is not a sandbox: set it only on an ephemeral runner holding no secrets.
+
+`tests/t12-lanes.test.ts` needs a real Postgres for its store block and reports that block as skipped without one. Point `T12_LANES_PG_URL` at a throwaway database.
