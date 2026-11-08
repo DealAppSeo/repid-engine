@@ -59,4 +59,4 @@ Run once with `scripts/t12/lanes.ts`. Nothing schedules it. `T12_LANES_ENABLED`,
 
 **`T12_LANES_ALLOW_EXEC` runs model-written code.** The child gets a stripped environment and no install scripts, but that is not a sandbox: set it only on an ephemeral runner holding no secrets.
 
-`tests/t12-lanes.test.ts` needs a real Postgres for its store block and reports that block as skipped without one. Point `T12_LANES_PG_URL` at a throwaway database.
+`tests/t12-lanes.test.ts` needs a real Postgres for its store block and reports that block as skipped without one. The variable it reads is named at the top of that block; point it at a throwaway database.
