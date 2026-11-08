@@ -5,6 +5,9 @@
 -- by tests/t12-lane-profile.test.ts, which applies this file to a throwaway database and then tries
 -- to go past it.
 
+-- One transaction: run with psql -f, a refusal below would otherwise stop only its own block.
+BEGIN;
+
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_lane_worker') THEN
@@ -262,3 +265,5 @@ DROP POLICY IF EXISTS t12_lane_worker_halt ON public.trinity_system_config;
 CREATE POLICY t12_lane_worker_halt ON public.trinity_system_config
   FOR SELECT TO t12_lane_worker
   USING (true);
+
+COMMIT;

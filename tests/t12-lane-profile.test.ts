@@ -501,10 +501,51 @@ describePg('the restricted database role, attacked', () => {
       await expect(worker.query('SELECT * FROM principal_grants')).rejects.toThrow(/permission denied/);
       await admin.query('CREATE TABLE t12_owned_probe (x int)');
       await admin.query('ALTER TABLE t12_owned_probe OWNER TO t12_lane_worker');
+      const c = await admin.connect();
       try {
-        await expect(admin.query(file)).rejects.toThrow(/owns database objects/);
+        await expect(c.query(file)).rejects.toThrow(/owns database objects/);
+        await c.query('ROLLBACK');
+      } finally {
+        c.release();
+        await admin.query('DROP TABLE t12_owned_probe');
+      }
+    });
+
+    it('a refusal stops the whole file when statements run one at a time, as psql -f does', async () => {
+      const file = readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8');
+      // Split as psql would: on semicolons outside dollar-quoted bodies and comments.
+      const statements: string[] = [];
+      let current = '';
+      file.split('$$').forEach((segment, i) => {
+        if (i % 2 === 1) {
+          current += `$$${segment}$$`;
+          return;
+        }
+        const parts = segment.replace(/--[^\n]*/g, '').split(';');
+        current += parts[0];
+        for (const part of parts.slice(1)) {
+          statements.push(current);
+          current = part;
+        }
+      });
+      await admin.query('DROP POLICY t12_lane_worker_halt ON trinity_system_config');
+      await admin.query('CREATE TABLE t12_owned_probe (x int)');
+      await admin.query('ALTER TABLE t12_owned_probe OWNER TO t12_lane_worker');
+      const errors: string[] = [];
+      const c = await admin.connect();
+      try {
+        for (const s of statements) await c.query(s).catch((e: Error) => errors.push(e.message));
+      } finally {
+        c.release();
+      }
+      try {
+        expect(statements.length).toBeGreaterThan(20);
+        expect(errors[0]).toMatch(/owns database objects/);
+        const { rows } = await admin.query(`SELECT count(*)::int AS n FROM pg_policies WHERE policyname = 't12_lane_worker_halt'`);
+        expect(rows[0].n).toBe(0);
       } finally {
         await admin.query('DROP TABLE t12_owned_probe');
+        await admin.query(file);
       }
     });
 
