@@ -659,8 +659,9 @@ export async function recordVerdict(db: TxDb, h: Handle, v: Verdict): Promise<St
         producer: 'T12',
         requiredOutputs: CHECK_OUTPUTS,
         reported: { commit: v.commit, transcript: v.transcript },
-        voices: [{ lane: 'HARNESS', agrees: true }],
-        touchesLiveState: true,
+        // A re-run by the same controller is not a second voice, and the most this can open is a draft.
+        voices: [],
+        touchesLiveState: false,
       });
       if (!gate.advance) verdict = { outcome: 'not_checked', reason: gate.reason };
       else if (v.commit !== s.submission?.commit) {
@@ -672,7 +673,7 @@ export async function recordVerdict(db: TxDb, h: Handle, v: Verdict): Promise<St
       const next = step(row, s, h.actor, 'check_approved', 'approved', 'deterministic re-run passed', { ...verdict.evidence, independence: 'same_controller_rerun' });
       await persist(c, row.id, next, {
         status: 'pending_validation', claimedBy: null, verified: true,
-        columns: { verifier_verdict: 'approved', verifier_evidence: verdict.transcript.slice(-4000), final_verdict: 'verified_done', verification_method: 'fresh_checkout_rerun' },
+        columns: { verifier_verdict: 'approved', verifier_evidence: verdict.transcript.slice(-4000), final_verdict: 'unverified', verification_method: 'fresh_checkout_rerun' },
       });
     } else if (verdict.outcome === 'rejected') {
       const { next, p } = afterFailure(row, s, h.actor, 'check_rejected', verdict.reason);
@@ -684,6 +685,30 @@ export async function recordVerdict(db: TxDb, h: Handle, v: Verdict): Promise<St
       const next = { ...step(row, s, h.actor, 'check_not_checked', giveUp ? 'not_checked' : 'awaiting_check', verdict.reason), notChecked };
       await persist(c, row.id, next, { status: giveUp ? 'not_checked' : 'pending_validation', claimedBy: null, columns: { verifier_verdict: 'unclear', stuck_reason: verdict.reason.slice(0, 500) } });
     }
+  });
+}
+
+/** Thrown when a row names a ref it may not. Retrying cannot help, so the runner ends the task. */
+export class PublishRefused extends Error {}
+
+const OBJECT_ID = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** The row is worker-writable, so a ref read back from it is checked before git sees it. */
+export function submissionRefProblem(spec: LaneSpec, sub: Submission): string | null {
+  if (!OBJECT_ID.test(String(sub.commit))) return 'the submitted commit is not an object id';
+  if (!OBJECT_ID.test(String(sub.base))) return 'the submitted base is not an object id';
+  const prefix = `t12/${spec.id}-e`;
+  const branch = String(sub.branch);
+  if (!SPEC_ID.test(spec.id) || !branch.startsWith(prefix) || !/^[0-9]+$/.test(branch.slice(prefix.length))) {
+    return "the submitted branch is not this task's lane branch";
+  }
+  return null;
+}
+
+export async function refuseIntegration(db: TxDb, h: Handle, reason: string): Promise<StepResult> {
+  return fenced(db, h, 'pending_validation', 'integrating', async (c, row, s) => {
+    const next = step(row, s, h.actor, 'integration_refused', 'rejected', reason);
+    await persist(c, row.id, next, { status: 'cancelled', claimedBy: null, columns: { final_verdict: 'rejected', stuck_reason: reason.slice(0, 500) } });
   });
 }
 

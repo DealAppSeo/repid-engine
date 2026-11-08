@@ -32,21 +32,21 @@ describe('what a worker may hold', () => {
     'RAILWAY_API_TOKEN', 'RAILWAY_TOKEN', 'VERCEL_TOKEN', 'CLOUDFLARE_API_TOKEN', 'GITHUB_TOKEN', 'GH_TOKEN', 'LOOP_GH_PAT',
     'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SERVICE_KEY', 'SUPABASE_SECRET_KEY', 'SUPABASE_DB_URL', 'ADMIN_KEY', 'NEXT_PUBLIC_TRINITY_ADMIN_KEY',
   ])('refuses %s', (name) => expect(privilegedEnvPresent({ [name]: 'x' })).toEqual([name]));
-  it.each(['DATABASE_URL', 'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'NVIDIA_NIM_API_KEY', 'OPENROUTER_API_KEY', 'T12_FREE_WAVE', 'PATH'])('allows %s', (name) => {
+  it.each(['DATABASE_URL', 'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'NVIDIA_NIM_API_KEY', 'T12_FREE_WAVE', 'PATH'])('allows %s', (name) => {
     expect(privilegedEnvPresent({ [name]: 'x' })).toEqual([]);
   });
   it.each([
     'RECEIPT_SIGNING_KEY', 'KERNEL_RECEIPT_SIGNING_KEY', 'CONTROLLER_MASTER_KEY', 'AUDIT_MASTER_KEY', 'AUDIT_BINDING_KEY', 'KERNEL_COMMITMENT_KEY', 'SIGNING_KEY_DEV',
-    'FULL_ACCOUNT_JWT_SECRET', 'ORACLE_HMAC_SECRET', 'PROOF_SECRET', 'TELEGRAM_BOT_TOKEN', 'CRON_TRIGGER_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'ANTHROPIC_API_KEY', 'TOGETHER_API_KEY', 'DEEPSEEK_API_KEY',
+    'FULL_ACCOUNT_JWT_SECRET', 'ORACLE_HMAC_SECRET', 'PROOF_SECRET', 'TELEGRAM_BOT_TOKEN', 'CRON_TRIGGER_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'TOGETHER_API_KEY', 'DEEPSEEK_API_KEY',
   ])('refuses %s, which no fixed spelling named', (name) => expect(privilegedEnvPresent({ [name]: 'x' })).toEqual([name]));
   it('refuses every credential the engine registers, except the keys of the free routes', () => {
-    const free = new Set(Object.values(T12_ROUTES).flatMap((r) => [...r.keyEnv]));
+    const free = new Set(Object.values(T12_ROUTES).filter((r) => r.freeOnly).flatMap((r) => [...r.keyEnv]));
     const credentials = KNOWN_ENV_VARS.filter((n) => /_SECRET$|SIGNING_KEY|MASTER_KEY|_TOKEN$|_API_KEY$/.test(n) && !free.has(n));
     expect(credentials.length).toBeGreaterThan(20);
     expect(privilegedEnvPresent(Object.fromEntries(credentials.map((n) => [n, 'x'])))).toEqual([...credentials].sort());
   });
-  it('allows the key of every free route', () => {
-    const keys = Object.values(T12_ROUTES).flatMap((r) => [...r.keyEnv]);
+  it('allows the key of every route not known to hold paid credit', () => {
+    const keys = Object.values(T12_ROUTES).filter((r) => r.freeOnly).flatMap((r) => [...r.keyEnv]);
     expect(keys.length).toBeGreaterThan(3);
     expect(privilegedEnvPresent(Object.fromEntries(keys.map((n) => [n, 'x'])))).toEqual([]);
   });
@@ -138,9 +138,9 @@ describePg('the restricted database role, attacked', () => {
     const c = await claimMake(db, 'trinity-lane-1');
     if (c.kind !== 'claimed') throw new Error(c.reason);
     expect(await checkoutBelt(db, c.handle)).toMatchObject({ ok: true, belt: 'engineering' });
-    expect(await submit(db, c.handle, { branch: 'b', commit: 'c1', base: 'b0', files: c.handle.spec.paths, host: 'nvidia' })).toEqual({ ok: true });
+    expect(await submit(db, c.handle, { branch: `t12/ok-e${c.handle.epoch}`, commit: 'a'.repeat(40), base: 'b'.repeat(40), files: c.handle.spec.paths, host: 'nvidia' })).toEqual({ ok: true });
     const v = (await claimStage(db, 'awaiting_check', 'trinity-lane-2'))!;
-    await recordVerdict(db, v, { outcome: 'approved', commit: 'c1', transcript: 'node --test exited 0 and each control exited 1 as it should.', evidence: {} });
+    await recordVerdict(db, v, { outcome: 'approved', commit: 'a'.repeat(40), transcript: 'node --test exited 0 and each control exited 1 as it should.', evidence: {} });
     const i = (await claimStage(db, 'approved', 'trinity-lane-3'))!;
     expect(await recordIntegration(db, i, 'https://example.test/pr/1')).toEqual({ ok: true });
     expect((await readLaneState(worker, c.handle.taskId)).state.stage).toBe('integrated');
@@ -183,7 +183,7 @@ describePg('the restricted database role, attacked', () => {
       if (c.kind !== 'claimed' || c.handle.spec.id !== id) throw new Error(`did not claim ${id}`);
       return c.handle;
     }
-    const work = (h: Handle, files = h.spec.paths) => ({ branch: 'b', commit: 'c1', base: 'b0', files, host: 'nvidia' });
+    const work = (h: Handle, files = h.spec.paths) => ({ branch: `t12/${h.spec.id}-e${h.epoch}`, commit: 'a'.repeat(40), base: 'b'.repeat(40), files, host: 'nvidia' });
     const denials = async (h: Handle) => (await admin.query(`SELECT message FROM trinity_agent_logs WHERE task_id = $1 AND action = 'belt_denied'`, [h.taskId])).rows.map((r) => r.message);
     const events = async (h: Handle) => (await readLaneState(worker, h.taskId)).state.receipts.map((r) => r.event);
     const stage = async (h: Handle) => (await readLaneState(worker, h.taskId)).state.stage;
@@ -227,6 +227,23 @@ describePg('the restricted database role, attacked', () => {
       await admin.query(`UPDATE principal_grants SET revoked_at = now(), revoked_by = 'owner' WHERE idempotency_key = $1`, [key(h)]);
       await expect(rawSubmit(h, h.spec.paths)).rejects.toThrow(/row-level security/);
       expect(await checkoutBelt(db(), h)).toEqual({ ok: false, reason: 'the belt for this claim was revoked' });
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
+    it.each([
+      ['main', { branch: 'main' }],
+      ['a full ref', { branch: 'refs/heads/main' }],
+      ['another task', { branch: 't12/other-e1' }],
+      ['an option as the commit', { commit: '--force' }],
+      ['a symbolic commit', { commit: 'HEAD' }],
+      ['an option as the base', { base: '--output=/tmp/x' }],
+    ])('with a live belt, cannot submit %s', async (_n, over) => {
+      const h = await claimed();
+      await checkoutBelt(db(), h);
+      await expect(worker.query(
+        `UPDATE trinity_tasks SET metadata = jsonb_set(jsonb_set(metadata, '{t12,submission}', $2::jsonb), '{t12,stage}', '"awaiting_check"') WHERE id = $1`,
+        [h.taskId, JSON.stringify({ ...work(h), ...over })],
+      )).rejects.toThrow(/row-level security/);
       await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
     });
 

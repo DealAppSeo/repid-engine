@@ -176,6 +176,13 @@ BEGIN
   IF o ->> 'stage' IS DISTINCT FROM 'making' OR n ->> 'stage' IS DISTINCT FROM 'awaiting_check' OR n ->> 'epoch' IS DISTINCT FROM o ->> 'epoch' THEN
     RETURN false;
   END IF;
+  -- The integrator pushes this ref and the checker hands these ids to git, so they must be exact.
+  IF n #>> '{submission,branch}' IS DISTINCT FROM format('t12/%s-e%s', o #>> '{spec,id}', o ->> 'epoch')
+     OR n #>> '{submission,branch}' !~ '^t12/[A-Za-z0-9_.-]{1,64}-e[0-9]+$'
+     OR COALESCE(n #>> '{submission,commit}', '') !~ '^([0-9a-f]{40}|[0-9a-f]{64})$'
+     OR COALESCE(n #>> '{submission,base}', '') !~ '^([0-9a-f]{40}|[0-9a-f]{64})$' THEN
+    RETURN false;
+  END IF;
   SELECT role INTO g FROM public.principal_grants
    WHERE idempotency_key = format('t12:%s:%s', p_id, o ->> 'epoch')
      AND grantor_agent_id = 't12-belt-issuer' AND grantee_agent_id = holder

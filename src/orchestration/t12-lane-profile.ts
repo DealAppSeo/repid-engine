@@ -14,8 +14,8 @@ import { T12_ROUTES } from './t12-attempt';
 /** Any credential-shaped name. A list of spellings fails open for each new one, so this matches the family. */
 const CREDENTIAL_NAME = /(^|_)(KEY|KEYS|SECRET|SECRETS|TOKEN|PASSWORD|PASSWD|PAT|CREDS|CREDENTIALS|HMAC)(_|$)/;
 
-/** The one exception to the family rule: the keys for the free routes the worker is allowed to call. */
-const FREE_ROUTE_KEYS: ReadonlySet<string> = new Set(Object.values(T12_ROUTES).flatMap((r) => [...r.keyEnv]));
+/** The one exception to the family rule: the keys of routes whose accounts are not known to hold paid credit. */
+const FREE_ROUTE_KEYS: ReadonlySet<string> = new Set(Object.values(T12_ROUTES).filter((r) => r.freeOnly).flatMap((r) => [...r.keyEnv]));
 
 const PRIVILEGED: readonly RegExp[] = [
   /PRIVATE_KEY/,

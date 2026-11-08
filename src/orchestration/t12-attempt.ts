@@ -56,6 +56,8 @@ interface T12Route {
   url: string;
   keyEnv: readonly string[];
   model: string;
+  /** May a lane worker hold this route's key? False when the account behind it is known to hold paid credit. */
+  freeOnly: boolean;
   body?: Record<string, unknown>;
 }
 
@@ -73,15 +75,17 @@ const BOUNDED_LOW_EFFORT = { ...BOUNDED, reasoning_effort: 'low' };
  * A model id here used to come from WORKING_FREE_PROVIDERS, whose Cerebras entry is archived (404).
  */
 export const T12_ROUTES: Readonly<Record<string, T12Route>> = {
-  groq: { url: PROVIDER_URLS.groqChatCompletions, keyEnv: ['GROQ_API_KEY'], model: 'openai/gpt-oss-20b', body: BOUNDED_LOW_EFFORT },
-  cerebras: { url: PROVIDER_URLS.cerebrasChatCompletions, keyEnv: ['CEREBRAS_API_KEY'], model: 'gpt-oss-120b', body: BOUNDED_LOW_EFFORT },
-  nvidia: { url: PROVIDER_URLS.nvidiaNimChatCompletions, keyEnv: ['NVIDIA_API_KEY', 'NVIDIA_NIM_API_KEY'], model: 'poolside/laguna-xs-2.1', body: BOUNDED },
+  groq: { url: PROVIDER_URLS.groqChatCompletions, keyEnv: ['GROQ_API_KEY'], model: 'openai/gpt-oss-20b', freeOnly: true, body: BOUNDED_LOW_EFFORT },
+  cerebras: { url: PROVIDER_URLS.cerebrasChatCompletions, keyEnv: ['CEREBRAS_API_KEY'], model: 'gpt-oss-120b', freeOnly: true, body: BOUNDED_LOW_EFFORT },
+  nvidia: { url: PROVIDER_URLS.nvidiaNimChatCompletions, keyEnv: ['NVIDIA_API_KEY', 'NVIDIA_NIM_API_KEY'], model: 'poolside/laguna-xs-2.1', freeOnly: true, body: BOUNDED },
   // This account holds paid credit, so a free id alone is not enough: the price cap makes OpenRouter
-  // refuse rather than bill if the free route ever changes.
+  // refuse rather than bill if the free route ever changes. The cap lives in this request body, so
+  // code calling the host directly would spend: the restricted lane worker may not hold this key.
   openrouter: {
     url: PROVIDER_URLS.openrouterChatCompletions,
     keyEnv: ['OPENROUTER_API_KEY'],
     model: 'cohere/north-mini-code:free',
+    freeOnly: false,
     body: { ...BOUNDED, response_format: { type: 'json_object' }, provider: { max_price: { prompt: 0, completion: 0 } } },
   },
 };

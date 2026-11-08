@@ -96,12 +96,7 @@ export type Capability =
   /** Reasoning over text supplied in the prompt. The floor — every lane has it. */
   | 'reasoning';
 
-/**
- * HARNESS names a deterministic re-run in a voice on a handoff (t12-lane-store.ts), so a re-run is
- * never recorded as a review by a lane that did not look. It is not in LANES: it does no reasoning,
- * cannot be assigned work, and is not independent of the controller running the lanes.
- */
-export type LaneId = 'CC' | 'GA' | 'XC' | 'T12' | 'SEAN' | 'HARNESS';
+export type LaneId = 'CC' | 'GA' | 'XC' | 'T12' | 'SEAN';
 
 /**
  * Cost tier. Lower is cheaper and is tried FIRST — the cost cascade of

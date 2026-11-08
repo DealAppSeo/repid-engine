@@ -9,18 +9,17 @@
  *    reported as skipped, which means NOT_CHECKED.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import {
-  appendReceipt, claimMake, claimStage, heartbeat, LANE_POOL, MAX_ATTEMPTS, MAX_NOT_CHECKED, MAX_TASK_CLAIMS,
+  PublishRefused, submissionRefProblem, appendReceipt, claimMake, claimStage, heartbeat, LANE_POOL, MAX_ATTEMPTS, MAX_NOT_CHECKED, MAX_TASK_CLAIMS,
   pickClaimable, poolDb, readLaneState, recordIntegration, recordVerdict, recoverStages, releaseMake, replenish, submit,
   validateSpec, verifyReceipts, type DecisionReceipt, type Handle, type LaneSpec, type Submission, type TxDb, type Verdict,
 } from '../src/orchestration/t12-lane-store';
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
 import { buildMakePrompt, createGitAdapters, readMakerFiles, scrubbedEnv, verifyArgs, type PrClient } from '../src/orchestration/t12-lane-git';
-import { canAssign } from '../src/orchestration/lane-registry';
 import { __resetEmergencyHaltState } from '../src/services/emergency-halt';
 
 const CONTROL = [{ file: 'src/thing.mjs', find: '42', replace: '41' }];
@@ -129,10 +128,21 @@ describe('maker output and environment', () => {
   });
 });
 
-describe('registry', () => {
-  it('the harness is a verifying voice, never a lane that can be given work', () => {
-    expect(canAssign('HARNESS', ['reasoning']).assignable).toBe(false);
-  });
+describe('a ref read back from the row', () => {
+  const s = spec('ref');
+  const good: Submission = { branch: 't12/ref-e3', commit: 'a'.repeat(40), base: 'b'.repeat(40), files: ['tests/ref.test.mjs'], host: 'nvidia' };
+  it('accepts this task\'s own branch and full object ids', () => expect(submissionRefProblem(s, good)).toBeNull());
+  it.each([
+    ['main', { branch: 'main' }],
+    ['a full ref', { branch: 'refs/heads/main' }],
+    ['another task', { branch: 't12/other-e3' }],
+    ['a suffix after the epoch', { branch: 't12/ref-e3/../../main' }],
+    ['no epoch', { branch: 't12/ref-e' }],
+    ['an option as the commit', { commit: '--force' }],
+    ['a symbolic commit', { commit: 'HEAD' }],
+    ['a short commit', { commit: 'abc1234' }],
+    ['an option as the base', { base: '--output=/tmp/x' }],
+  ])('refuses %s', (_n, over) => expect(submissionRefProblem(s, { ...good, ...over })).not.toBeNull());
 });
 
 describe('the bridge cannot see a lane row', () => {
@@ -269,13 +279,13 @@ describe('real git adapters', () => {
     git(canon, 'commit', '-q', '-m', 'stray');
     const commit = git(canon, 'rev-parse', 'HEAD');
     git(canon, 'checkout', '-q', 'main');
-    const v = await adapters().check(handle(s, 2, { branch: 'b', commit, base, files: ['tests/stray.test.mjs'], host: null }));
+    const v = await adapters().check(handle(s, 2, { branch: 't12/stray-e2', commit, base, files: ['tests/stray.test.mjs'], host: null }));
     expect(v).toMatchObject({ outcome: 'rejected', reason: expect.stringContaining('extra.md') });
   }, 60_000);
 
   it('a commit this host cannot see is NOT_CHECKED, never a failed check', async () => {
     const s = spec('ghost');
-    const v = await adapters().check(handle(s, 2, { branch: 'b', commit: 'a'.repeat(40), base: 'b'.repeat(40), files: [], host: null }));
+    const v = await adapters().check(handle(s, 2, { branch: 't12/ghost-e2', commit: 'a'.repeat(40), base: 'b'.repeat(40), files: [], host: null }));
     expect(v).toMatchObject({ outcome: 'not_checked', reason: expect.stringContaining('not available') });
   });
 
@@ -317,6 +327,20 @@ describe('real git adapters', () => {
     expect(second.url).toBe(first.url);
     expect(created).toBe(1);
     expect(git(canon, 'ls-remote', 'origin', submission.branch)).toContain(submission.commit);
+  }, 60_000);
+
+  it('a poisoned row reaches neither GitHub nor git, and the remote main does not move', async () => {
+    const s = spec('poison');
+    const submission = await makeWith(s, 1, PASS);
+    const before = git(canon, 'ls-remote', 'origin', 'refs/heads/main');
+    let asked = 0;
+    const pr: PrClient = { findByBranch: () => { asked++; return null; }, createDraft: () => { asked++; return 'https://example.test/pr/1'; } };
+    const a = adapters({ pr });
+    await expect(a.publish(handle(s, 3, { ...submission, branch: 'main' }))).rejects.toBeInstanceOf(PublishRefused);
+    expect(asked).toBe(0);
+    expect(git(canon, 'ls-remote', 'origin', 'refs/heads/main')).toBe(before);
+    expect(await a.check(handle(s, 3, { ...submission, base: '--output=poison.txt' }))).toMatchObject({ outcome: 'rejected', reason: expect.stringContaining('base') });
+    expect(existsSync(join(canon, 'poison.txt'))).toBe(false);
   }, 60_000);
 });
 
@@ -536,7 +560,7 @@ describePg('durable lanes on real Postgres', () => {
     const c = (await claimStage(db, 'awaiting_check', L2))!;
     expect(await recordVerdict(db, c, approve(c))).toEqual({ ok: true });
     const r = await row(m.taskId);
-    expect(r).toMatchObject({ status: 'pending_validation', verifier_verdict: 'approved', final_verdict: 'verified_done', verification_method: 'fresh_checkout_rerun', claimed_by: null, verify_count: 1 });
+    expect(r).toMatchObject({ status: 'pending_validation', verifier_verdict: 'approved', final_verdict: 'unverified', verification_method: 'fresh_checkout_rerun', claimed_by: null, verify_count: 1 });
     expect(r.verified_at).not.toBeNull();
     expect(r.artifact_url).toBe('git://DealAppSeo/trustshell@c0mm1t-ok');
     const { state } = await readLaneState(pool, m.taskId);
@@ -819,6 +843,17 @@ describePg('durable lanes on real Postgres', () => {
       for (let i = 1; i < MAX_NOT_CHECKED; i++) await runLanes(base(a, [spec('thrown')], { lanes: [L1, L2], publishEnabled: false }));
       expect((await pool.query(`SELECT final_verdict, status FROM trinity_tasks`)).rows[0]).toEqual({ final_verdict: null, status: 'not_checked' });
     }, 60_000);
+
+    it('a refused publish ends the task and is not retried', async () => {
+      let publishes = 0;
+      const a = fakeAdapters({ publish: async () => { publishes++; throw new PublishRefused('the submitted branch is not this task\'s lane branch'); } });
+      const report = await runLanes(base(a, [spec('refused')], { lanes: [L1, L2] }));
+      expect(publishes).toBe(1);
+      expect(report.integrated).toBe(0);
+      expect(report.fenceRefused.some((x) => x.includes('lane branch'))).toBe(true);
+      const { rows } = await pool.query(`SELECT status, final_verdict, metadata #>> '{t12,stage}' AS stage FROM trinity_tasks WHERE metadata #>> '{t12,spec,id}' = 'refused'`);
+      expect(rows[0]).toEqual({ status: 'cancelled', final_verdict: 'rejected', stage: 'rejected' });
+    });
 
     it('publishing off: verified work waits and nothing is published', async () => {
       const a = fakeAdapters();

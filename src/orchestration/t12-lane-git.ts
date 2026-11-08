@@ -25,7 +25,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { RoutedAnswer } from './t12-lane-route';
-import type { Handle, LaneSpec, Verdict } from './t12-lane-store';
+import { PublishRefused, submissionRefProblem, type Handle, type LaneSpec, type Verdict } from './t12-lane-store';
 import type { LaneAdapters, MakeOutcome } from './t12-lane-runner';
 
 export interface PrClient {
@@ -205,6 +205,8 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
   async function check(h: Handle): Promise<Verdict> {
     const sub = h.submission;
     if (!sub) return { outcome: 'not_checked', reason: 'no submission on the row' };
+    const refProblem = submissionRefProblem(h.spec, sub);
+    if (refProblem) return { outcome: 'rejected', reason: refProblem };
     const canon = canonDir(cfg, h.spec);
     try {
       git(canon, 'cat-file', '-e', `${sub.commit}^{commit}`);
@@ -277,6 +279,8 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
 
   async function publish(h: Handle): Promise<{ url: string }> {
     const sub = h.submission!;
+    const refProblem = submissionRefProblem(h.spec, sub);
+    if (refProblem) throw new PublishRefused(refProblem);
     const existing = cfg.pr.findByBranch(h.spec.repo, sub.branch);
     if (existing) return { url: existing };
     git(canonDir(cfg, h.spec), 'push', 'origin', `${sub.commit}:refs/heads/${sub.branch}`);

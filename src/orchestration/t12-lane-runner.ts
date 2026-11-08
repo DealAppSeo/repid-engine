@@ -8,7 +8,7 @@
  * is set, or at `maxSteps`. It does not schedule itself; arming a schedule is an owner decision.
  */
 import {
-  acquireWake, checkoutBelt, claimMake, claimStage, heartbeat, recordIntegration, recordVerdict, recoverStages, releaseMake, releaseWake, replenish, submit, waitForCapacity,
+  PublishRefused, acquireWake, checkoutBelt, claimMake, claimStage, heartbeat, recordIntegration, recordVerdict, recoverStages, refuseIntegration, releaseMake, releaseWake, replenish, submit, waitForCapacity,
   type Handle, type ReceiptOrigin, type LaneSpec, type ReplenishReport, type Submission, type TxDb, type Verdict,
 } from './t12-lane-store';
 import { randomUUID } from 'node:crypto';
@@ -173,7 +173,16 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
   }
 
   async function integrateOne(h: Handle): Promise<void> {
-    const { url } = await o.adapters.publish(h);
+    let url: string;
+    try {
+      ({ url } = await o.adapters.publish(h));
+    } catch (e) {
+      if (!(e instanceof PublishRefused)) throw e;
+      refused(`publish ${h.taskId}`, e.message);
+      const ended = await refuseIntegration(o.db, h, e.message);
+      if (!ended.ok) refused(`refuse ${h.taskId}`, ended.reason);
+      return;
+    }
     const r = await recordIntegration(o.db, h, url);
     if (r.ok) report.integrated++;
     else refused(`integrate ${h.taskId}`, r.reason);
