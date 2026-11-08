@@ -322,7 +322,7 @@ async function persist(c: SqlRunner, id: Row['id'], state: LaneState, p: Persist
       col.stuck_reason ?? null, !!p.verified, !!p.completed, !!p.refundClaim,
     ],
   );
-  // Row-level security hides a row from UPDATE without raising an error.
+  // A row policy or a trigger can skip the row without raising an error.
   if (written.rowCount === 0) throw new Error(`task ${String(id)} was not written`);
 }
 
