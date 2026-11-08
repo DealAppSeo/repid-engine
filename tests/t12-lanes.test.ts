@@ -19,7 +19,7 @@ import {
   validateSpec, verifyReceipts, type DecisionReceipt, type Handle, type LaneSpec, type Submission, type TxDb, type Verdict,
 } from '../src/orchestration/t12-lane-store';
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
-import { buildMakePrompt, createGitAdapters, parseMakerFiles, scrubbedEnv, verifyArgs, type PrClient } from '../src/orchestration/t12-lane-git';
+import { buildMakePrompt, createGitAdapters, readMakerFiles, scrubbedEnv, verifyArgs, type PrClient } from '../src/orchestration/t12-lane-git';
 import { canAssign } from '../src/orchestration/lane-registry';
 import { __resetEmergencyHaltState } from '../src/services/emergency-halt';
 
@@ -97,12 +97,21 @@ describe('path selection', () => {
 
 describe('maker output and environment', () => {
   it('reads a fenced answer', () => {
-    expect(parseMakerFiles('```json\n{"files":[{"path":"a.mjs","content":"x"}]}\n```', ['a.mjs'])).toEqual([{ path: 'a.mjs', content: 'x' }]);
+    expect(readMakerFiles('```json\n{"files":[{"path":"a.mjs","content":"x"}]}\n```', ['a.mjs'])).toEqual({ files: [{ path: 'a.mjs', content: 'x' }] });
   });
-  it('refuses a file outside the lease', () => {
-    expect(parseMakerFiles('{"files":[{"path":".github/workflows/x.yml","content":"x"}]}', ['a.mjs'])).toBeNull();
+  it('refuses a file outside the lease and names it', () => {
+    expect(readMakerFiles('{"files":[{"path":".github/workflows/x.yml","content":"x"}]}', ['a.mjs'])).toEqual({ reason: '.github/workflows/x.yml is outside the lease' });
   });
-  it('refuses prose', () => expect(parseMakerFiles('I could not do this.', ['a.mjs'])).toBeNull());
+  it('refuses prose and says so', () => expect(readMakerFiles('I could not do this.', ['a.mjs'])).toEqual({ reason: 'no JSON object in the reply' }));
+  it('accepts raw newlines and tabs inside strings, which free models emit', () => {
+    expect(readMakerFiles('{"files":[{"path":"a.mjs","content":"a\n\tb \\"q\\"\r\nc"}]}', ['a.mjs'])).toEqual({ files: [{ path: 'a.mjs', content: 'a\n\tb "q"\r\nc' }] });
+  });
+  it('a raw newline does not get a path past the lease', () => {
+    expect(readMakerFiles('{"files":[{"path":"a.mjs\n","content":"x"}]}', ['a.mjs'])).toEqual({ reason: 'a.mjs\n is outside the lease' });
+  });
+  it('names the JSON error when the reply is broken', () => {
+    expect(readMakerFiles('{"files":[{"path":"a.mjs","content":"x"}]}}', ['a.mjs'])).toMatchObject({ reason: expect.stringContaining('invalid JSON') });
+  });
   it('tells the maker why the last attempt failed', () => {
     expect(buildMakePrompt(spec('a'), {}, 'verify failed')).toContain('verify failed');
   });

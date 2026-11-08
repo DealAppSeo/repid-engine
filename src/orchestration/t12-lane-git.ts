@@ -91,23 +91,40 @@ export function buildMakePrompt(spec: LaneSpec, context: Record<string, string>,
   ].filter(Boolean).join('\n\n');
 }
 
-/** The model's files, or null. Tolerates a code fence; refuses any path outside the lease. */
-export function parseMakerFiles(text: string, allowed: readonly string[]): Array<{ path: string; content: string }> | null {
+/** Free models often leave raw newlines inside JSON strings. Escape those; touch nothing else. */
+function escapeRawControls(json: string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (const ch of json) {
+    out += inString && ch < ' ' ? JSON.stringify(ch).slice(1, -1) : ch;
+    if (escaped) escaped = false;
+    else if (ch === '\\') escaped = inString;
+    else if (ch === '"') inString = !inString;
+  }
+  return out;
+}
+
+type MakerFiles = Array<{ path: string; content: string }>;
+
+/** The model's files or why not. Tolerates a code fence; refuses any path outside the lease. */
+export function readMakerFiles(text: string, allowed: readonly string[]): { files: MakerFiles } | { reason: string } {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
-  if (start === -1 || end <= start) return null;
+  if (start === -1 || end <= start) return { reason: 'no JSON object in the reply' };
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return null;
+    parsed = JSON.parse(escapeRawControls(text.slice(start, end + 1)));
+  } catch (e) {
+    return { reason: `invalid JSON: ${(e as Error).message.slice(0, 100)}` };
   }
   const files = (parsed as { files?: unknown }).files;
-  if (!Array.isArray(files) || files.length === 0) return null;
+  if (!Array.isArray(files) || files.length === 0) return { reason: 'no files in the reply' };
   for (const f of files) {
-    if (typeof f?.path !== 'string' || typeof f?.content !== 'string' || !allowed.includes(f.path)) return null;
+    if (typeof f?.path !== 'string' || typeof f?.content !== 'string') return { reason: 'a file is missing its path or content' };
+    if (!allowed.includes(f.path)) return { reason: `${f.path.slice(0, 120)} is outside the lease` };
   }
-  return files as Array<{ path: string; content: string }>;
+  return { files: files as MakerFiles };
 }
 
 /** Only what a test runner needs. Every key and token in the parent environment stays behind. */
@@ -164,8 +181,9 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
       const failure = askFailure(answer);
       if (failure) return failure;
 
-      const files = parseMakerFiles(answer.text!, h.spec.paths);
-      if (!files) return { ok: false, kind: 'maker_failed', reason: 'model output was not a valid file set inside the lease' };
+      const read = readMakerFiles(answer.text!, h.spec.paths);
+      if ('reason' in read) return { ok: false, kind: 'maker_failed', reason: `model output was not a valid file set inside the lease: ${read.reason}` };
+      const { files } = read;
 
       for (const f of files) {
         const target = join(dir, f.path);
