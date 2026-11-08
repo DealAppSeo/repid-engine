@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { Client, Pool } from 'pg';
 import { KNOWN_ENV_VARS } from '../src/config/known-env-vars.generated';
 import { T12_ROUTES } from '../src/orchestration/t12-attempt';
-import { dbPrivilege, privilegedEnvPresent } from '../src/orchestration/t12-lane-profile';
+import { dbPrivilege, privilegedEnvPresent, reachableDefiners } from '../src/orchestration/t12-lane-profile';
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
 import {
   LANE_POOL, checkoutBelt, claimMake, claimStage, coolProvider, coolingProviders, pgHaltClient, poolDb, readLaneState, recordIntegration, recordVerdict, releaseMake, replenish, submit,
@@ -112,6 +112,10 @@ describePg('the restricted database role, attacked', () => {
     await admin.query('ALTER ROLE t12_lane_worker SUPERUSER BYPASSRLS CREATEDB CREATEROLE');
     await admin.query('GRANT postgres TO t12_lane_worker');
     await admin.query('GRANT ALL ON principal_grants, trinity_agent_logs, repid_agents TO t12_lane_worker');
+    // One definer function open to PUBLIC, as most start out, and one already closed to it.
+    await admin.query('CREATE OR REPLACE FUNCTION public.t12_probe_open() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$');
+    await admin.query('CREATE OR REPLACE FUNCTION public.t12_probe_closed() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$');
+    await admin.query('REVOKE ALL ON FUNCTION public.t12_probe_closed() FROM PUBLIC, anon');
     await admin.query(readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8'));
     u.username = 't12_lane_worker';
     workerUrl = u.toString();
@@ -289,6 +293,77 @@ describePg('the restricted database role, attacked', () => {
       await expect(worker.query('SELECT * FROM principal_grants')).rejects.toThrow(/permission denied/);
       await expect(worker.query('SELECT * FROM trinity_agent_logs')).rejects.toThrow(/permission denied/);
       await expect(worker.query('DELETE FROM trinity_agent_logs')).rejects.toThrow(/permission denied/);
+    });
+
+    const asAnon = async (sql: string) => {
+      const c = await admin.connect();
+      try {
+        await c.query('SET ROLE anon');
+        return await c.query(sql);
+      } finally {
+        await c.query('RESET ROLE');
+        c.release();
+      }
+    };
+
+    it('cannot call a definer function that was open to PUBLIC, and no other role loses or gains', async () => {
+      await expect(worker.query('SELECT public.t12_probe_open()')).rejects.toThrow(/permission denied/);
+      await expect(worker.query('SELECT public.t12_probe_closed()')).rejects.toThrow(/permission denied/);
+      expect((await asAnon('SELECT public.t12_probe_open() AS x')).rows[0].x).toBe(1);
+      await expect(asAnon('SELECT public.t12_probe_closed()')).rejects.toThrow(/permission denied/);
+      expect(await reachableDefiners(worker)).toEqual([]);
+    });
+
+    it('a definer function added later is seen, and the real CLI refuses to start', async () => {
+      await admin.query('CREATE FUNCTION public.t12_probe_late() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$');
+      const dir = mkdtempSync(join(tmpdir(), 't12-late-'));
+      try {
+        expect(await reachableDefiners(worker)).toEqual(['t12_probe_late()']);
+        const specs = join(dir, 's.jsonl');
+        writeFileSync(specs, '');
+        const r = cli(['--specs', specs, '--repo', `DealAppSeo/trustshell=${dir}`, '--work-root', join(dir, 'w'), '--lanes', '1'], { T12_LANES_ENABLED: 'true', DATABASE_URL: workerUrl });
+        expect(r.status).toBe(2);
+        expect(r.stderr).toContain('t12_probe_late()');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        await admin.query('DROP FUNCTION public.t12_probe_late()');
+      }
+    }, 180_000);
+
+    it('checkout locks nothing outside the pool and logs no denial there, and does lock a lane task', async () => {
+      const h = await claimed();
+      const outside = Number((await admin.query(`SELECT id FROM trinity_tasks WHERE assigned_to = 'trinity-orch'`)).rows[0].id);
+      const w = await worker.connect();
+      try {
+        await w.query('BEGIN');
+        await w.query('SELECT t12_belt_checkout($1, $2, $3)', [outside, h.actor, 1]);
+        await expect(admin.query('SELECT id FROM trinity_tasks WHERE id = $1 FOR UPDATE NOWAIT', [outside])).resolves.toBeDefined();
+        await w.query('SELECT t12_belt_checkout($1, $2, $3)', [h.taskId, 'trinity-lane-2', h.epoch]);
+        await expect(admin.query('SELECT id FROM trinity_tasks WHERE id = $1 FOR UPDATE NOWAIT', [h.taskId])).rejects.toThrow(/could not obtain lock/);
+      } finally {
+        await w.query('ROLLBACK');
+        w.release();
+      }
+      await worker.query('SELECT t12_belt_checkout($1, $2, $3)', [outside, h.actor, 1]);
+      expect((await admin.query(`SELECT count(*)::int AS n FROM trinity_agent_logs WHERE task_id = $1`, [outside])).rows[0].n).toBe(0);
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
+    it('repeated denials of one task and reason write one log row', async () => {
+      const h = await claimed({ belt: 'research' });
+      for (let i = 0; i < 4; i++) await worker.query('SELECT t12_belt_checkout($1, $2, $3)', [h.taskId, h.actor, h.epoch]);
+      expect(await denials(h)).toHaveLength(1);
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
+    it('cannot put a non-lane principal on a row or mint a belt for one', async () => {
+      const h = await claimed();
+      await expect(worker.query(`UPDATE trinity_tasks SET claimed_by = 'trinity-orch' WHERE id = $1`, [h.taskId])).rejects.toThrow(/row-level security/);
+      // The function refuses it on its own too, even if something else put that name on the row.
+      await admin.query(`UPDATE trinity_tasks SET claimed_by = 'trinity-orch' WHERE id = $1`, [h.taskId]);
+      expect((await worker.query('SELECT t12_belt_checkout($1, $2, $3) AS r', [h.taskId, 'trinity-orch', h.epoch])).rows[0].r).toEqual({ ok: false, reason: 'the grantee is not a lane' });
+      expect((await admin.query('SELECT count(*)::int AS n FROM principal_grants WHERE idempotency_key = $1', [key(h)])).rows[0].n).toBe(0);
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
     });
 
     it('cannot check out for another lane, an old claim, or a task outside the pool', async () => {

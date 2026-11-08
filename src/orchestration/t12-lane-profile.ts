@@ -61,3 +61,17 @@ export async function dbPrivilege(db: { query(sql: string, params?: unknown[]): 
   );
   return { name: rows[0].name, privileged: !!rows[0].privileged };
 }
+
+/**
+ * SECURITY DEFINER functions this connection can call, other than the belts. Each runs with its
+ * owner's rights, and a function added after the migration starts out callable, so this is read live.
+ */
+export async function reachableDefiners(db: { query(sql: string, params?: unknown[]): Promise<{ rows: any[] }> }): Promise<string[]> {
+  const { rows } = await db.query(
+    `SELECT p.oid::regprocedure::text AS fn FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE p.prosecdef AND p.proname !~ '^t12_belt_' AND n.nspname <> 'pg_catalog'
+        AND has_schema_privilege(current_user, n.oid, 'USAGE') AND has_function_privilege(current_user, p.oid, 'EXECUTE')
+      ORDER BY 1`,
+  );
+  return rows.map((r) => r.fn);
+}

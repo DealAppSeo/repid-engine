@@ -18,7 +18,7 @@ import { assertLocalDataStore } from '../../src/selfhost/egress-guard';
 import { createRoutedAsk } from '../../src/orchestration/t12-lane-route';
 import { createGitAdapters, ghPrClient } from '../../src/orchestration/t12-lane-git';
 import { laneFlags, runLanes } from '../../src/orchestration/t12-lane-runner';
-import { dbPrivilege, privilegedEnvPresent } from '../../src/orchestration/t12-lane-profile';
+import { dbPrivilege, privilegedEnvPresent, reachableDefiners } from '../../src/orchestration/t12-lane-profile';
 import { pgHaltClient, poolDb, type LaneSpec } from '../../src/orchestration/t12-lane-store';
 
 function arg(name: string): string | undefined {
@@ -68,6 +68,8 @@ async function main(): Promise<void> {
   const db = poolDb(new Pool({ connectionString, max: lanes.length + 3, connectionTimeoutMillis: 10_000, statement_timeout: 30_000, query_timeout: 30_000 }) as never);
   const role = await dbPrivilege(db);
   if (role.privileged && !flags.allowPrivilegedDb) notChecked(`database role ${role.name} can bypass row security; a worker must use the restricted role`);
+  const definers = await reachableDefiners(db);
+  if (definers.length && !flags.allowPrivilegedDb) notChecked(`database role ${role.name} can call SECURITY DEFINER functions outside the lane belts: ${definers.join(', ')}`);
   const report = await runLanes({
     db,
     haltClient: pgHaltClient(db) as never,

@@ -111,11 +111,12 @@ DECLARE
   idem text := format('t12:%s:%s', p_task, p_epoch);
 BEGIN
   SELECT id, assigned_to, status, claimed_by, expires_at, metadata -> 't12' AS t INTO r
-    FROM public.trinity_tasks WHERE id = p_task FOR UPDATE;
+    FROM public.trinity_tasks WHERE id = p_task AND assigned_to = 'trinity-t12-lanes' FOR UPDATE;
   belt := COALESCE(r.t #>> '{spec,belt}', 'engineering');
   reason := CASE
-    WHEN r.id IS NULL OR r.assigned_to IS DISTINCT FROM 'trinity-t12-lanes' THEN 'task is not in the lane pool'
+    WHEN r.id IS NULL THEN 'task is not in the lane pool'
     WHEN r.status IS DISTINCT FROM 'claimed' OR r.t ->> 'stage' IS DISTINCT FROM 'making' THEN 'task is not being made'
+    WHEN p_lane !~ '^trinity-lane-[a-z0-9][a-z0-9-]*$' THEN 'the grantee is not a lane'
     WHEN r.claimed_by IS DISTINCT FROM p_lane THEN 'another lane holds this task'
     WHEN r.t ->> 'epoch' IS DISTINCT FROM p_epoch::text THEN 'stale claim'
     WHEN r.expires_at IS NULL OR r.expires_at <= now() THEN 'the lease has expired'
@@ -138,8 +139,15 @@ BEGIN
   END IF;
 
   IF reason IS NOT NULL THEN
-    INSERT INTO public.trinity_agent_logs (agent, task_id, action, status, message, metadata)
-    VALUES ('t12-belt-issuer', p_task, 'belt_denied', 'denied', reason, jsonb_build_object('lane', left(p_lane, 80), 'epoch', p_epoch, 'belt', left(belt, 40)));
+    -- Lane tasks only, and one row per task and reason every 10 minutes, so the caller cannot flood
+    -- this log or pin a denial on a task outside the pool.
+    IF r.id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM public.trinity_agent_logs
+       WHERE task_id = p_task AND action = 'belt_denied' AND message = reason AND created_at > now() - interval '10 minutes'
+    ) THEN
+      INSERT INTO public.trinity_agent_logs (agent, task_id, action, status, message, metadata)
+      VALUES ('t12-belt-issuer', p_task, 'belt_denied', 'denied', reason, jsonb_build_object('lane', left(p_lane, 80), 'epoch', p_epoch, 'belt', left(belt, 40)));
+    END IF;
     RETURN jsonb_build_object('ok', false, 'reason', reason);
   END IF;
   RETURN jsonb_build_object('ok', true, 'grant_id', g.id, 'belt', g.role, 'expires_at', g.expires_at);
@@ -195,6 +203,28 @@ BEGIN
 END $$;
 GRANT EXECUTE ON FUNCTION public.t12_belt_checkout(bigint, text, integer), public.t12_belt_permits(bigint, jsonb) TO t12_lane_worker;
 
+-- A SECURITY DEFINER function runs with its owner's rights, and every function starts out executable
+-- by PUBLIC, which includes this role. PUBLIC cannot exclude one role, so for each such function
+-- still open to PUBLIC, this names every other role and then closes PUBLIC. No other role gains or
+-- loses anything, and a function already closed to PUBLIC is left alone. This does change the grants
+-- on functions the lanes do not own, which is why the owner reviews and applies this file.
+DO $$
+DECLARE
+  f regprocedure;
+  who text;
+BEGIN
+  FOR f IN
+    SELECT p.oid::regprocedure FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.prosecdef AND p.proname !~ '^t12_belt_'
+       AND (p.proacl IS NULL OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE'))
+  LOOP
+    FOR who IN SELECT rolname FROM pg_roles WHERE rolname <> 't12_lane_worker' AND rolname !~ '^pg_' LOOP
+      EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I', f, who);
+    END LOOP;
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC', f);
+  END LOOP;
+END $$;
+
 DROP POLICY IF EXISTS t12_lane_worker_pool ON public.trinity_tasks;
 CREATE POLICY t12_lane_worker_pool ON public.trinity_tasks
   FOR ALL TO t12_lane_worker
@@ -204,6 +234,8 @@ CREATE POLICY t12_lane_worker_pool ON public.trinity_tasks
     AND public.t12_belt_permits(id, metadata)
     -- Never done, verified or shadow_reject: trinity-task-bridge scores those with no pool filter.
     AND status IN ('pending', 'claimed', 'pending_validation', 'cancelled', 'not_checked')
+    -- A belt names its holder, so a row may only ever name a lane.
+    AND (claimed_by IS NULL OR claimed_by ~ '^trinity-lane-[a-z0-9][a-z0-9-]*$')
   );
 
 DROP POLICY IF EXISTS t12_lane_worker_claims ON public.agent_resource_claims;
