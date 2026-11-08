@@ -57,9 +57,10 @@ export interface DbPrivilege {
 export async function dbPrivilege(db: { query(sql: string, params?: unknown[]): Promise<{ rows: any[] }> }): Promise<DbPrivilege> {
   // Membership counts too: SET ROLE reaches a superuser role even from a NOINHERIT login.
   // So does owning a table: an owner skips its row policies unless they are forced, and a worker owns nothing.
+  // So does REPLICATION: decoding the write-ahead log applies neither row security nor table grants.
   const { rows } = await db.query(
     `SELECT current_user AS name,
-            EXISTS (SELECT 1 FROM pg_roles r WHERE (r.rolsuper OR r.rolbypassrls) AND pg_has_role(current_user, r.oid, 'member'))
+            EXISTS (SELECT 1 FROM pg_roles r WHERE (r.rolsuper OR r.rolbypassrls OR r.rolreplication) AND pg_has_role(current_user, r.oid, 'member'))
             OR EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind IN ('r', 'p') AND pg_has_role(current_user, c.relowner, 'member')) AS privileged`,
   );
   return { name: rows[0].name, privileged: !!rows[0].privileged };

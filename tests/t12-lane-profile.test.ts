@@ -109,7 +109,9 @@ describePg('the restricted database role, attacked', () => {
     await admin.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
     // The migration must strip a same-named role that already holds more than it should.
     await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_lane_worker') THEN CREATE ROLE t12_lane_worker LOGIN; END IF; END $$`);
-    await admin.query('ALTER ROLE t12_lane_worker SUPERUSER BYPASSRLS CREATEDB CREATEROLE');
+    await admin.query('ALTER ROLE t12_lane_worker SUPERUSER BYPASSRLS CREATEDB CREATEROLE REPLICATION');
+    await admin.query('ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO t12_lane_worker');
+    await admin.query('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO t12_lane_worker');
     await admin.query('GRANT postgres TO t12_lane_worker');
     await admin.query('GRANT ALL ON principal_grants, trinity_agent_logs, repid_agents TO t12_lane_worker');
     // One definer function open to PUBLIC, as most start out, and one already closed to it.
@@ -425,6 +427,32 @@ describePg('the restricted database role, attacked', () => {
       await expect(worker.query(`UPDATE trinity_tasks SET result = 'forged' WHERE id = $1`, [h.taskId])).rejects.toThrow(/permission denied/);
       await expect(worker.query(`INSERT INTO trinity_tasks (description, assigned_to, result) VALUES ('x', $1, 'forged')`, [LANE_POOL])).rejects.toThrow(/permission denied/);
       expect((await worker.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId])).rowCount).toBe(1);
+    });
+
+    it('the migration removes REPLICATION and any default privilege, so a table created later stays closed', async () => {
+      expect((await admin.query(`SELECT rolreplication FROM pg_roles WHERE rolname = 't12_lane_worker'`)).rows[0].rolreplication).toBe(false);
+      await admin.query('CREATE TABLE t12_created_later (x int)');
+      try {
+        await expect(worker.query('SELECT * FROM t12_created_later')).rejects.toThrow(/permission denied/);
+      } finally {
+        await admin.query('DROP TABLE t12_created_later');
+      }
+    });
+
+    it('a role with REPLICATION is privileged, because decoding the log skips row security', async () => {
+      await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_replication_probe') THEN CREATE ROLE t12_replication_probe LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; END IF; END $$`);
+      await admin.query('ALTER ROLE t12_replication_probe NOREPLICATION');
+      const u = new URL(workerUrl);
+      u.username = 't12_replication_probe';
+      const probe = new Pool({ connectionString: u.toString() });
+      try {
+        expect(await dbPrivilege(probe)).toEqual({ name: 't12_replication_probe', privileged: false });
+        await admin.query('ALTER ROLE t12_replication_probe REPLICATION');
+        expect(await dbPrivilege(probe)).toEqual({ name: 't12_replication_probe', privileged: true });
+      } finally {
+        await probe.end();
+        await admin.query('ALTER ROLE t12_replication_probe NOREPLICATION');
+      }
     });
 
     it('a role that holds a superuser by membership is reported as privileged', async () => {

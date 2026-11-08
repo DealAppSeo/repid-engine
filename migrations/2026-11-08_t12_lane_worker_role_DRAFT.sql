@@ -8,7 +8,7 @@
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_lane_worker') THEN
-    CREATE ROLE t12_lane_worker LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+    CREATE ROLE t12_lane_worker LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
   END IF;
 END $$;
 
@@ -34,6 +34,13 @@ BEGIN
     UNION
     SELECT format('REVOKE ALL ON SCHEMA %I FROM t12_lane_worker', n.nspname)
       FROM pg_namespace n, aclexplode(n.nspacl) a WHERE a.grantee = worker
+    UNION
+    -- A default privilege would grant the role every object created later.
+    SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %s %s REVOKE ALL ON %s FROM t12_lane_worker',
+                  d.defaclrole::regrole,
+                  CASE WHEN d.defaclnamespace = 0 THEN '' ELSE format('IN SCHEMA %s', d.defaclnamespace::regnamespace) END,
+                  CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS' WHEN 'T' THEN 'TYPES' WHEN 'n' THEN 'SCHEMAS' END)
+      FROM pg_default_acl d, aclexplode(d.defaclacl) a WHERE a.grantee = worker
   LOOP
     EXECUTE stmt;
   END LOOP;
@@ -45,7 +52,7 @@ BEGIN
   END IF;
 END $$;
 
-ALTER ROLE t12_lane_worker LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+ALTER ROLE t12_lane_worker LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
 
 GRANT USAGE ON SCHEMA public TO t12_lane_worker;
 
