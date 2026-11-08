@@ -20,7 +20,7 @@ import {
 } from '../src/orchestration/t12-lane-store';
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
 import { buildMakePrompt, createGitAdapters, parseMakerFiles, scrubbedEnv, verifyArgs, type PrClient } from '../src/orchestration/t12-lane-git';
-import { eligibleVerifiers } from '../src/orchestration/lane-registry';
+import { canAssign } from '../src/orchestration/lane-registry';
 
 const CONTROL = [{ file: 'src/thing.mjs', find: '42', replace: '41' }];
 const spec = (id: string, over: Partial<LaneSpec> = {}): LaneSpec => ({
@@ -116,10 +116,8 @@ describe('maker output and environment', () => {
 });
 
 describe('registry', () => {
-  it('the harness may verify T12 work, and T12 may not verify itself', () => {
-    const ids = eligibleVerifiers('T12', ['repo_read', 'shell']).map((l) => l.id);
-    expect(ids).toContain('HARNESS');
-    expect(ids).not.toContain('T12');
+  it('the harness is a verifying voice, never a lane that can be given work', () => {
+    expect(canAssign('HARNESS', ['reasoning']).assignable).toBe(false);
   });
 });
 

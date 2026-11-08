@@ -96,6 +96,11 @@ export type Capability =
   /** Reasoning over text supplied in the prompt. The floor — every lane has it. */
   | 'reasoning';
 
+/**
+ * HARNESS names a deterministic re-run in a voice on a handoff (t12-lane-store.ts), so a re-run is
+ * never recorded as a review by a lane that did not look. It is not in LANES: it does no reasoning,
+ * cannot be assigned work, and is not independent of the controller running the lanes.
+ */
 export type LaneId = 'CC' | 'GA' | 'XC' | 'T12' | 'SEAN' | 'HARNESS';
 
 /**
@@ -186,17 +191,6 @@ export const LANES: readonly Lane[] = [
     source:
       'CLAUDE_RULES 7: CC has its own prod MCP and may self-apply additive DDL. ' +
       'NO merge (rule 9), NO chain_send, NO infra — those are SEAN by rule.',
-  },
-  {
-    id: 'HARNESS',
-    role: 'Deterministic re-run of a submitted commit in a fresh checkout. No model, no judgement.',
-    capabilities: ['repo_read', 'shell'],
-    costTier: 0,
-    handsTo: ['CC'],
-    source:
-      'src/orchestration/t12-lane-git.ts check(): it reads git and runs one test, so its voice is ' +
-      'an exit code. Named as its own lane so that a re-run is not recorded as a review by CC or ' +
-      'GA, neither of which looked. Not independent of the controller that runs the lanes.',
   },
   {
     id: 'SEAN',
