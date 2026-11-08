@@ -199,6 +199,14 @@ describePg('the restricted database role, attacked', () => {
       await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
     });
 
+    it('a belt naming a different lane does not cover the holder', async () => {
+      const h = await claimed();
+      await checkoutBelt(db(), h);
+      await admin.query(`UPDATE principal_grants SET grantee_agent_id = 'trinity-lane-2' WHERE idempotency_key = $1`, [key(h)]);
+      await expect(rawSubmit(h, h.spec.paths)).rejects.toThrow(/row-level security/);
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
     it('a belt from an earlier claim does not carry over to a later one', async () => {
       const h = await claimed();
       await checkoutBelt(db(), h);
