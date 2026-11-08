@@ -11,7 +11,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { Pool } from 'pg';
 import {
   appendReceipt, claimMake, claimStage, heartbeat, LANE_POOL, MAX_ATTEMPTS, MAX_NOT_CHECKED, MAX_TASK_CLAIMS,
@@ -19,16 +19,17 @@ import {
   validateSpec, verifyReceipts, type DecisionReceipt, type Handle, type LaneSpec, type Submission, type TxDb, type Verdict,
 } from '../src/orchestration/t12-lane-store';
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
-import { buildMakePrompt, createGitAdapters, parseMakerFiles, scrubbedEnv, type PrClient } from '../src/orchestration/t12-lane-git';
+import { buildMakePrompt, createGitAdapters, parseMakerFiles, scrubbedEnv, verifyArgs, type PrClient } from '../src/orchestration/t12-lane-git';
 import { eligibleVerifiers } from '../src/orchestration/lane-registry';
 
+const CONTROL = [{ file: 'src/thing.mjs', find: '42', replace: '41' }];
 const spec = (id: string, over: Partial<LaneSpec> = {}): LaneSpec => ({
   id,
   repo: 'DealAppSeo/trustshell',
   title: `task ${id}`,
   prompt: 'Add a focused regression test for the behaviour described in this task.',
   paths: [`tests/${id}.test.mjs`],
-  verify: { runner: 'node-test', target: `tests/${id}.test.mjs` },
+  verify: { runner: 'node-test', target: `tests/${id}.test.mjs`, controls: CONTROL },
   risk: 'LOW',
   ...over,
 });
@@ -62,7 +63,15 @@ describe('spec vetting', () => {
     ['an absolute path', { paths: ['/etc/passwd'] }],
     ['the workflow directory', { paths: ['.github/workflows/ci.yml'] }],
     ['package.json', { paths: ['package.json'] }],
-    ['a verify target outside the paths', { verify: { runner: 'jest', target: 'other.test.ts' } }],
+    ['a verify target outside the paths', { verify: { runner: 'jest', target: 'other.test.ts', controls: CONTROL } }],
+    ['context that escapes the checkout', { context: ['../../../.env.master'] }],
+    ['an absolute context path', { context: ['C:/Users/someone/secret.txt'] }],
+    ['context that is a secrets file', { context: ['.env'] }],
+    ['a dependency it cannot be based on', { dependsOn: ['T12-001'] } as Partial<LaneSpec>],
+    ['a test-only task with no control', { verify: { runner: 'node-test', target: 'tests/a.test.mjs' } }],
+    ['a control on the deliverable itself', { verify: { runner: 'node-test', target: 'tests/a.test.mjs', controls: [{ file: 'tests/a.test.mjs', find: 'a', replace: 'b' }] } }],
+    ['a control that changes nothing', { verify: { runner: 'node-test', target: 'tests/a.test.mjs', controls: [{ file: 'src/x.ts', find: 'a', replace: 'a' }] } }],
+    ['too many controls', { verify: { runner: 'node-test', target: 'tests/a.test.mjs', controls: Array(6).fill(CONTROL[0]) } }],
     ['an unknown runner', { verify: { runner: 'bash', target: 'tests/a.test.mjs' } as never }],
   ])('refuses %s', (_n, over) => expect(validateSpec(spec('a', over as Partial<LaneSpec>)).length).toBeGreaterThan(0));
   it('refuses a prose-only task from the planning backlog', () => {
@@ -73,19 +82,14 @@ describe('spec vetting', () => {
 describe('path selection', () => {
   const c = (s: LaneSpec) => ({ spec: s });
   it('two new files in one directory do not conflict', () => {
-    expect(pickClaimable([c(spec('b'))], [spec('a')], new Set())?.spec.id).toBe('b');
+    expect(pickClaimable([c(spec('b'))], [spec('a')])?.spec.id).toBe('b');
   });
   it('the same file conflicts, whatever its case', () => {
-    expect(pickClaimable([c(spec('b', { paths: ['tests/A.test.mjs'], verify: { runner: 'jest', target: 'tests/A.test.mjs' } }))], [spec('A', { paths: ['tests/a.test.mjs'] })], new Set())).toBeUndefined();
+    expect(pickClaimable([c(spec('b', { paths: ['tests/A.test.mjs'], verify: { runner: 'jest', target: 'tests/A.test.mjs', controls: CONTROL } }))], [spec('A', { paths: ['tests/a.test.mjs'] })])).toBeUndefined();
   });
   it('the same path in another repo does not conflict at this layer', () => {
     const other = { ...spec('a'), repo: 'x/y' };
-    expect(pickClaimable([c(spec('a'))], [other], new Set())?.spec.id).toBe('a');
-  });
-  it('waits for a dependency', () => {
-    const blocked = c(spec('b', { dependsOn: ['a'] }));
-    expect(pickClaimable([blocked], [], new Set())).toBeUndefined();
-    expect(pickClaimable([blocked], [], new Set(['a']))?.spec.id).toBe('b');
+    expect(pickClaimable([c(spec('a'))], [other])?.spec.id).toBe('a');
   });
 });
 
@@ -99,6 +103,9 @@ describe('maker output and environment', () => {
   it('refuses prose', () => expect(parseMakerFiles('I could not do this.', ['a.mjs'])).toBeNull());
   it('tells the maker why the last attempt failed', () => {
     expect(buildMakePrompt(spec('a'), {}, 'verify failed')).toContain('verify failed');
+  });
+  it('forces passWithNoTests off, because a repo config can turn it on', () => {
+    expect(verifyArgs(spec('a', { verify: { runner: 'jest', target: 'tests/a.test.ts', controls: CONTROL }, paths: ['tests/a.test.ts'] }))).toContain('--passWithNoTests=false');
   });
   it('drops every credential from the child environment', () => {
     const env = scrubbedEnv('/h', { PATH: '/bin', GROQ_API_KEY: 'k', SUPABASE_SECRET_KEY: 's', GH_TOKEN: 't', DATABASE_URL: 'd' });
@@ -132,7 +139,8 @@ describe('real git adapters', () => {
   let canon: string;
   let work: string;
   const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  const PASS = "import test from 'node:test';\ntest('ok', () => {});\n";
+  const PASS = "import test from 'node:test';\nimport assert from 'node:assert';\nimport { answer } from '../src/thing.mjs';\ntest('answer', () => assert.equal(answer(), 42));\n";
+  const NOOP = "import test from 'node:test';\ntest('ok', () => {});\n";
   const FAIL = "import test from 'node:test';\nimport assert from 'node:assert';\ntest('no', () => assert.fail('nope'));\n";
   const handle = (s: LaneSpec, epoch: number, submission?: Submission): Handle => ({ taskId: 1, actor: 'trinity-lane-1', epoch, spec: s, attempts: 0, submission });
   const ask = (files: Array<{ path: string; content: string }>) => async () => ({ outcome: 'answered' as const, host: 'local', tried: ['local'], text: JSON.stringify({ files }) });
@@ -151,7 +159,9 @@ describe('real git adapters', () => {
     git(canon, 'config', 'user.name', 't');
     git(canon, 'checkout', '-q', '-b', 'main');
     mkdirSync(join(canon, 'tests'));
-    writeFileSync(join(canon, 'tests/existing.test.mjs'), PASS);
+    writeFileSync(join(canon, 'tests/existing.test.mjs'), NOOP);
+    mkdirSync(join(canon, 'src'));
+    writeFileSync(join(canon, 'src/thing.mjs'), 'export const answer = () => 42;\n');
     writeFileSync(join(canon, 'README.md'), 'x\n');
     git(canon, 'add', '.');
     git(canon, 'commit', '-q', '-m', 'seed');
@@ -166,12 +176,12 @@ describe('real git adapters', () => {
     return out.submission;
   }
 
-  it('approves real work: the test passes with the file and fails without it', async () => {
+  it('approves real work: the test passes, and fails when the code under test is broken', async () => {
     const s = spec('good');
     const submission = await makeWith(s, 1, PASS);
     const v = await adapters().check(handle(s, 2, submission));
     expect(v.outcome).toBe('approved');
-    if (v.outcome === 'approved') expect(v.evidence).toMatchObject({ commit: submission.commit, exit: 0 });
+    if (v.outcome === 'approved') expect(v.evidence).toMatchObject({ commit: submission.commit, exit: 0, controls: [{ control: 'src/thing.mjs deliberately broken' }] });
   }, 60_000);
 
   it('rejects a failing test', async () => {
@@ -180,11 +190,48 @@ describe('real git adapters', () => {
     expect(v).toMatchObject({ outcome: 'rejected' });
   }, 60_000);
 
-  it('rejects a vacuous deliverable that passes without the change', async () => {
-    const s = spec('existing');
-    const submission = await makeWith(s, 1, `${PASS}// a comment changes nothing\n`);
-    const v = await adapters().check(handle(s, 2, submission));
+  it('rejects a test that asserts nothing, even though deleting it would make the runner fail', async () => {
+    const s = spec('hollow');
+    const v = await adapters().check(handle(s, 2, await makeWith(s, 1, NOOP)));
     expect(v).toMatchObject({ outcome: 'rejected', reason: expect.stringContaining('vacuous') });
+  }, 60_000);
+
+  it('can approve a change to an existing test', async () => {
+    const s = spec('existing');
+    expect((await adapters().check(handle(s, 2, await makeWith(s, 1, PASS)))).outcome).toBe('approved');
+  }, 60_000);
+
+  it('a code change is controlled by reverting it', async () => {
+    const s: LaneSpec = { ...spec('feat'), paths: ['src/feat.mjs', 'tests/feat.test.mjs'], verify: { runner: 'node-test', target: 'tests/feat.test.mjs' } };
+    const test = "import test from 'node:test';\nimport assert from 'node:assert';\nimport { f } from '../src/feat.mjs';\ntest('f', () => assert.equal(f(), 1));\n";
+    const a = adapters({ ask: ask([{ path: 'src/feat.mjs', content: 'export const f = () => 1;\n' }, { path: 'tests/feat.test.mjs', content: test }]) });
+    const out = await a.make(handle(s, 1), new AbortController().signal);
+    if (!out.ok) throw new Error(out.reason);
+    const v = await adapters().check(handle(s, 2, out.submission));
+    expect(v.outcome).toBe('approved');
+    if (v.outcome === 'approved') expect(v.evidence).toMatchObject({ controls: [{ control: 'the code change reverted' }] });
+  }, 60_000);
+
+  it('a control that no longer applies is NOT_CHECKED, not a pass', async () => {
+    const s = spec('stale', { verify: { runner: 'node-test', target: 'tests/stale.test.mjs', controls: [{ file: 'src/thing.mjs', find: 'not in the file', replace: 'x' }] } });
+    expect(await adapters().check(handle(s, 2, await makeWith(s, 1, PASS)))).toMatchObject({ outcome: 'not_checked' });
+  }, 60_000);
+
+  it('a model that changes nothing has failed, and it is not an infrastructure error', async () => {
+    const s = spec('existing');
+    const out = await adapters({ ask: ask([{ path: 'tests/existing.test.mjs', content: NOOP }]) }).make(handle(s, 9), new AbortController().signal);
+    expect(out).toMatchObject({ ok: false, kind: 'maker_failed', reason: expect.stringContaining('no change') });
+  }, 60_000);
+
+  it('a running check does not stop other lanes from heartbeating', async () => {
+    const s = spec('slow');
+    const body = "import test from 'node:test';\nimport assert from 'node:assert';\nimport { answer } from '../src/thing.mjs';\ntest('slow', async () => { await new Promise((r) => setTimeout(r, 1500)); assert.equal(answer(), 42); });\n";
+    const submission = await makeWith(s, 1, body);
+    let ticks = 0;
+    const t = setInterval(() => ticks++, 100);
+    await adapters().check(handle(s, 2, submission));
+    clearInterval(t);
+    expect(ticks).toBeGreaterThan(10);
   }, 60_000);
 
   it('rejects a commit that strays outside its lease', async () => {
@@ -201,10 +248,10 @@ describe('real git adapters', () => {
     expect(v).toMatchObject({ outcome: 'rejected', reason: expect.stringContaining('README.md') });
   }, 60_000);
 
-  it('rejects a fabricated commit', async () => {
+  it('a commit this host cannot see is NOT_CHECKED, never a failed check', async () => {
     const s = spec('ghost');
     const v = await adapters().check(handle(s, 2, { branch: 'b', commit: 'a'.repeat(40), base: 'b'.repeat(40), files: [], host: null }));
-    expect(v).toMatchObject({ outcome: 'rejected', reason: expect.stringContaining('does not exist') });
+    expect(v).toMatchObject({ outcome: 'not_checked', reason: expect.stringContaining('not available') });
   });
 
   it('will not execute model-written code unless the host allows it', async () => {
@@ -217,7 +264,7 @@ describe('real git adapters', () => {
     process.env.T12_TEST_FAKE_SECRET = 'leak';
     try {
       const s = spec('env');
-      const body = "import test from 'node:test';\nimport assert from 'node:assert';\ntest('clean', () => assert.equal(process.env.T12_TEST_FAKE_SECRET, undefined));\n";
+      const body = "import test from 'node:test';\nimport assert from 'node:assert';\nimport { answer } from '../src/thing.mjs';\ntest('clean', () => { assert.equal(process.env.T12_TEST_FAKE_SECRET, undefined); assert.equal(answer(), 42); });\n";
       expect((await adapters().check(handle(s, 2, await makeWith(s, 1, body)))).outcome).toBe('approved');
     } finally {
       delete process.env.T12_TEST_FAKE_SECRET;
@@ -321,7 +368,7 @@ describePg('durable lanes on real Postgres', () => {
   }, 60_000);
 
   it('three lanes cannot hold the same file, and the lock lasts until the check passes', async () => {
-    const shared = { paths: ['tests/shared.test.mjs'], verify: { runner: 'node-test' as const, target: 'tests/shared.test.mjs' } };
+    const shared = { paths: ['tests/shared.test.mjs'], verify: { runner: 'node-test' as const, target: 'tests/shared.test.mjs', controls: CONTROL } };
     await seed(spec('s1', shared), spec('s2', shared), spec('s3', shared), spec('free'));
     const results = await Promise.all([L1, L2, L3].map((l) => claimMake(db, l)));
     const claimed = results.flatMap((r) => (r.kind === 'claimed' ? [r.handle] : []));
@@ -371,6 +418,12 @@ describePg('durable lanes on real Postgres', () => {
     const fresh = await claimOne(L1);
     expect(await submit(db, old, sub('restart'))).toMatchObject({ ok: false, reason: expect.stringContaining('epoch') });
     expect(await submit(db, fresh, sub('restart'))).toEqual({ ok: true });
+  });
+
+  it('a right epoch under the wrong name is refused', async () => {
+    await seed(spec('forged'));
+    const h = await claimOne(L1);
+    expect(await submit(db, { ...h, actor: L2 }, sub('forged'))).toMatchObject({ ok: false, reason: expect.stringContaining('held by') });
   });
 
   it('a live heartbeat holds the lease past the old expiry', async () => {
@@ -502,6 +555,17 @@ describePg('durable lanes on real Postgres', () => {
     expect((await readLaneState(pool, b.taskId)).state).toMatchObject({ attempts: 1, lastRejection: 'unparseable', stage: 'ready' });
   });
 
+  it('host outages never exhaust a task', async () => {
+    await seed(spec('outage'));
+    let id = 0;
+    for (let i = 0; i < MAX_TASK_CLAIMS * 2; i++) {
+      const h = await claimOne(L1);
+      id = h.taskId;
+      await releaseMake(db, h, 'host down', true);
+    }
+    expect((await row(id)).claim_count).toBe(0);
+  });
+
   it('a task that keeps crashing stops at the claim cap', async () => {
     await seed(spec('poison'));
     for (let i = 0; i < MAX_TASK_CLAIMS; i++) {
@@ -510,6 +574,21 @@ describePg('durable lanes on real Postgres', () => {
       await pool.query('SELECT trinity_reap_expired_claims()');
     }
     expect((await claimMake(db, L1)).kind).toBe('none');
+    const r = await row(1);
+    expect(r.status).toBe('not_checked');
+    expect(r.stuck_reason).toContain('claim limit');
+    expect(r.final_verdict).toBeNull();
+    const { state } = await readLaneState(pool, 1);
+    expect(state.receipts.slice(-2).map((x) => x.event)).toEqual(['lease_reaped', 'claim_limit']);
+    expect(verifyReceipts(state.receipts).ok).toBe(true);
+  });
+
+  it('a malformed row in the pool cannot take the lanes down', async () => {
+    await pool.query(`INSERT INTO trinity_tasks (description, status, assigned_to) VALUES ('no lane state', 'pending', $1)`, [LANE_POOL]);
+    await pool.query(`INSERT INTO trinity_tasks (description, status, assigned_to, claimed_by, claimed_at) VALUES ('no lane state', 'pending_validation', $1, 'trinity-x', now() - interval '2 hours')`, [LANE_POOL]);
+    await seed(spec('fine'));
+    expect(await recoverStages(db)).toBe(0);
+    expect((await claimOne(L1)).spec.id).toBe('fine');
   });
 
   it('a failure inside a transition leaves neither the state change nor a receipt', async () => {
@@ -675,13 +754,31 @@ describePg('durable lanes on real Postgres', () => {
       expect((await pool.query(`SELECT metadata #>> '{t12,attempts}' AS a, status FROM trinity_tasks`)).rows[0]).toEqual({ a: '0', status: 'pending' });
     }, 30_000);
 
+    it('a dead host stops the run after one call instead of looping on the same row', async () => {
+      let calls = 0;
+      const a = fakeAdapters({ make: async () => { calls++; return { ok: false, kind: 'infra', reason: 'no free host answered' }; } });
+      const report = await runLanes(base(a, [spec('dead')], { lanes: [L1] }));
+      expect(calls).toBe(1);
+      expect(report.paused).toContain('infra');
+      expect((await pool.query('SELECT claim_count, status FROM trinity_tasks')).rows[0]).toEqual({ claim_count: 0, status: 'pending' });
+    }, 30_000);
+
+    it('one dropped connection does not take the other lanes down', async () => {
+      let tripped = false;
+      const flaky: TxDb = { query: db.query, tx: (fn) => { if (!tripped) { tripped = true; return Promise.reject(new Error('connection dropped')); } return db.tx(fn); } };
+      const report = await runLanes({ ...base(fakeAdapters(), [spec('f1'), spec('f2'), spec('f3')]), db: flaky });
+      expect(report.errors).toEqual(['connection dropped']);
+      expect(report).toMatchObject({ made: 3, approved: 3, integrated: 3 });
+    }, 60_000);
+
     it('a checker that throws is NOT_CHECKED, never approved', async () => {
       const a = fakeAdapters({ check: async () => { throw new Error('runner died'); } });
       const report = await runLanes(base(a, [spec('thrown')], { lanes: [L1, L2], publishEnabled: false }));
       expect(report.approved).toBe(0);
-      expect(report.notChecked).toBe(MAX_NOT_CHECKED);
+      expect(report.notChecked).toBe(1);
+      for (let i = 1; i < MAX_NOT_CHECKED; i++) await runLanes(base(a, [spec('thrown')], { lanes: [L1, L2], publishEnabled: false }));
       expect((await pool.query(`SELECT final_verdict, status FROM trinity_tasks`)).rows[0]).toEqual({ final_verdict: null, status: 'not_checked' });
-    }, 30_000);
+    }, 60_000);
 
     it('publishing off: verified work waits and nothing is published', async () => {
       const a = fakeAdapters();
@@ -720,6 +817,5 @@ describePg('durable lanes on real Postgres', () => {
     await seed(spec('name'));
     expect((await pool.query('SELECT assigned_to FROM trinity_tasks')).rows[0].assigned_to).toBe(LANE_POOL);
     await expect(claimMake(db, 'Lane_1')).rejects.toThrow('invalid lane actor');
-    expect(dirname('a/b')).toBe('a');
   });
 });

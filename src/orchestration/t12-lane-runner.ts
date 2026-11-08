@@ -58,20 +58,25 @@ export interface RunReport {
   notChecked: number;
   integrated: number;
   fenceRefused: string[];
+  errors: string[];
   paused: string | null;
   replenish: ReplenishReport | null;
-  stoppedBy: 'idle' | 'stop_switch' | 'max_steps';
+  stoppedBy: 'idle' | 'stop_switch' | 'max_steps' | 'errors';
 }
 
 type Did = 'worked' | 'idle';
+const MAX_ERRORS = 10;
 
 export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
   const log = o.log ?? (() => {});
   const report: RunReport = {
-    made: 0, approved: 0, rejected: 0, notChecked: 0, integrated: 0, fenceRefused: [], paused: null, replenish: null, stoppedBy: 'idle',
+    made: 0, approved: 0, rejected: 0, notChecked: 0, integrated: 0, fenceRefused: [], errors: [], paused: null, replenish: null, stoppedBy: 'idle',
   };
   const maxSteps = o.maxSteps ?? 200;
   let steps = 0;
+  // A check that could not run says nothing about the work. Retrying at once would only burn the
+  // task's not-checked allowance on one outage, so checks wait for the next run.
+  let checksHeld = false;
 
   const refused = (where: string, reason: string) => {
     report.fenceRefused.push(`${where}: ${reason}`);
@@ -105,7 +110,8 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
         else refused(`submit ${h.taskId}`, r.reason);
         return;
       }
-      if (out.kind === 'rate_limited') report.paused = `rate limited: ${out.reason}`;
+      // Without this, a dead host loops straight back to the same row.
+      if (out.kind !== 'maker_failed') report.paused = `${out.kind === 'rate_limited' ? 'rate limited' : 'infra'}: ${out.reason}`;
       const r = await releaseMake(o.db, h, out.reason, out.kind !== 'maker_failed');
       if (!r.ok) refused(`release ${h.taskId}`, r.reason);
     } finally {
@@ -125,7 +131,10 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
     if (!r.ok) return refused(`verdict ${h.taskId}`, r.reason);
     if (v.outcome === 'approved') report.approved++;
     else if (v.outcome === 'rejected') report.rejected++;
-    else report.notChecked++;
+    else {
+      report.notChecked++;
+      checksHeld = true;
+    }
   }
 
   async function integrateOne(h: Handle): Promise<void> {
@@ -145,7 +154,7 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
         return 'worked';
       }
     }
-    const check = o.checkEnabled === false ? null : await claimStage(o.db, 'awaiting_check', lane);
+    const check = o.checkEnabled === false || checksHeld ? null : await claimStage(o.db, 'awaiting_check', lane);
     if (check) {
       await checkOne(check);
       return 'worked';
@@ -180,26 +189,32 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
         return;
       }
       busy++;
-      let did: Did;
       try {
-        did = await step(lane);
-      } finally {
-        busy--;
-      }
-      if (did === 'worked') {
-        steps++;
-        progress++;
-        continue;
-      }
-      if (!report.paused) {
-        // Automatic continuation: nothing to do, so refill from vetted specs and go again.
-        const r = await replenish(o.db, o.specs(), o.readyTarget);
-        report.replenish = r;
-        if (r.underflow) log(r.underflow);
-        if (r.inserted.length > 0) {
+        if ((await step(lane)) === 'worked') {
+          steps++;
           progress++;
           continue;
         }
+        if (!report.paused) {
+          // Automatic continuation: nothing to do, so refill from vetted specs and go again.
+          const r = await replenish(o.db, o.specs(), o.readyTarget);
+          report.replenish = r;
+          if (r.underflow) log(r.underflow);
+          if (r.inserted.length > 0) {
+            progress++;
+            continue;
+          }
+        }
+      } catch (e) {
+        // One dropped connection must not take the sibling lanes down mid-work.
+        report.errors.push(e instanceof Error ? e.message : String(e));
+        log(`lane ${lane}: ${report.errors.at(-1)}`);
+        if (report.errors.length >= MAX_ERRORS) {
+          report.stoppedBy = 'errors';
+          return;
+        }
+      } finally {
+        busy--;
       }
       if (busy === 0 && seen === progress) return;
       seen = progress;

@@ -50,7 +50,7 @@ Claim, make, independently check, integrate, refill, on `trinity_tasks` with no 
 - **Rows.** `assigned_to = trinity-t12-lanes`, so the fleet's claim skips them. Making is `claimed`; everything after is `pending_validation`, with the real stage in `metadata.t12.stage`. The RepID bridge polls `done`, `verified` and `shadow_reject`, and a lane row never enters those.
 - **Leases.** `expires_at`, renewed by heartbeat, freed by the `trinity_reap_expired_claims` cron. `metadata.t12.epoch` is the fencing token, so a worker that lost its lease cannot write.
 - **Path locks.** Exact files, held from claim until the check passes, decided under one advisory lock.
-- **Check.** A different lane re-runs the test in a fresh checkout, then removes the deliverable and requires the same test to fail. The verdict is `same_controller_rerun`: it shows the test passes with the change and fails without it, not that the test is good.
+- **Check.** A different lane re-runs the test in a fresh checkout. The test must then fail when the code change is reverted and when each break the task names is applied to the code under test. The verdict is `same_controller_rerun`: controls are only as strong as the breaks a task names, so a human still judges the test.
 - **Integrate.** A draft PR at most. A human merges. `HIGH` risk is never published.
 - **Receipts.** Each decision appends to a hash chain in `metadata.t12.receipts`, in the same transaction as the state change.
 - **Cost.** The only model path is `t12Ask` (loopback, groq, cerebras). At most one call per claim, and `DAILY_CLAIM_CAP` claims a day.

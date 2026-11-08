@@ -18,7 +18,7 @@
  * That reaper has no status guard, so every exit from making clears `expires_at`, and check and
  * integrate claims never set it (`recoverStages` frees those instead, back to the same stage rather
  * than back to the maker). `metadata.t12.epoch` is the fencing token: it rises on every claim and
- * recovery and is never refunded, so a stale worker cannot write after losing its lease.
+ * is never refunded, so a stale worker cannot write after losing its lease.
  *
  * CLOCK. Every expiry compares against the database clock, so lanes on different hosts cannot
  * disagree about whether a lease is live.
@@ -29,11 +29,13 @@ import { evaluateHandoff, type RequiredOutput } from './handoff-gate';
 import { HEARTBEAT_TTL_MS, MAX_LEASE_AGE_MS } from './write-lease';
 
 export const LANE_POOL = 'trinity-t12-lanes';
-/** Above MAX_ATTEMPTS because a crash also spends a claim: the reaper does not refund one. */
+/** Above MAX_ATTEMPTS because a crash also spends a claim: the reaper does not refund one. A blameless release does. */
 export const MAX_TASK_CLAIMS = 6;
 export const MAX_ATTEMPTS = 3;
 export const MAX_NOT_CHECKED = 3;
-export const STAGE_TTL_SECONDS = 15 * 60;
+/** Longer than a check's worst case (install, the test, then each control), so a slow check is not taken from under itself. */
+export const STAGE_TTL_SECONDS = 45 * 60;
+export const MAX_CONTROLS = 5;
 /** One claim is at most one model call, so this bounds unattended free-tier use per UTC day. */
 export const DAILY_CLAIM_CAP = 60;
 const LEASE_SECONDS = HEARTBEAT_TTL_MS / 1000;
@@ -83,12 +85,21 @@ export interface LaneSpec {
   /** Exact repo-relative files the maker may write. These are the path locks. */
   paths: string[];
   /** A runner name and one target, never a command: nothing executable is read from a task row. */
-  verify: { runner: 'jest' | 'node-test'; target: string };
+  verify: { runner: 'jest' | 'node-test'; target: string; controls?: Control[] };
   risk: Risk;
   priority?: number;
-  dependsOn?: string[];
   /** Files handed to the model as supplied evidence. */
   context?: string[];
+}
+
+/**
+ * A deliberate break in the code under test. The test must fail once it is applied. This is the
+ * negative control for a test-only task: removing the test proves only that the file went missing.
+ */
+export interface Control {
+  file: string;
+  find: string;
+  replace: string;
 }
 
 export type Stage =
@@ -174,6 +185,8 @@ export function verifyReceipts(receipts: readonly DecisionReceipt[]): { ok: bool
 
 const PROTECTED_PATH = /^(\.github\/|\.claude\/|\.husky\/|package(-lock)?\.json$|.*\.npmrc$|.*\.env(\..*)?$)/i;
 const SPEC_ID = /^[A-Za-z0-9_.-]{1,64}$/;
+const badPath = (p: unknown): boolean =>
+  typeof p !== 'string' || !p || /[*?\\]/.test(p) || p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..');
 
 /** Why a lane may not take this spec. Empty means eligible. */
 export function validateSpec(s: Partial<LaneSpec> | null | undefined): string[] {
@@ -186,13 +199,30 @@ export function validateSpec(s: Partial<LaneSpec> | null | undefined): string[] 
   if (!Array.isArray(s.paths) || s.paths.length === 0) out.push('names no paths');
   else {
     for (const p of s.paths) {
-      if (typeof p !== 'string' || !p || /[*?\\]/.test(p) || p.startsWith('/') || p.split('/').includes('..')) {
-        out.push(`path ${String(p)} is not an exact repo-relative file`);
-      } else if (PROTECTED_PATH.test(p)) out.push(`path ${p} is protected`);
+      if (badPath(p)) out.push(`path ${String(p)} is not an exact repo-relative file`);
+      else if (PROTECTED_PATH.test(p)) out.push(`path ${p} is protected`);
     }
   }
+  // Context is read from disk and sent to a model, so it gets the same fence as a write.
+  for (const p of Array.isArray(s.context) ? s.context : []) {
+    if (badPath(p) || PROTECTED_PATH.test(p)) out.push(`context ${String(p)} may not be read`);
+  }
+  if (s.context !== undefined && !Array.isArray(s.context)) out.push('context is not a list');
+  // A maker bases on origin/main, which does not hold a dependency until a human merges it.
+  if ((s as { dependsOn?: unknown[] }).dependsOn?.length) out.push('dependsOn is not supported until merges are tracked');
   if (!s.verify || !['jest', 'node-test'].includes(s.verify.runner)) out.push('has no machine-checkable verify runner');
   else if (!Array.isArray(s.paths) || !s.paths.includes(s.verify.target)) out.push('verify target is not one of its paths');
+  else {
+    const controls = Array.isArray(s.verify.controls) ? s.verify.controls : [];
+    if (controls.length > MAX_CONTROLS) out.push(`more than ${MAX_CONTROLS} controls`);
+    for (const c of controls) {
+      if (badPath(c?.file) || PROTECTED_PATH.test(c.file) || s.paths.includes(c.file)) out.push(`control file ${String(c?.file)} must be code outside the deliverable`);
+      else if (typeof c.find !== 'string' || !c.find || typeof c.replace !== 'string' || c.find === c.replace) out.push(`control on ${c.file} changes nothing`);
+    }
+    if (controls.length === 0 && s.paths.every((p) => p === s.verify!.target)) {
+      out.push('a test-only task needs a control that breaks the code under test');
+    }
+  }
   if (!['LOW', 'MEDIUM', 'HIGH'].includes(String(s.risk))) out.push('risk is not LOW, MEDIUM or HIGH');
   return out;
 }
@@ -200,20 +230,18 @@ export function validateSpec(s: Partial<LaneSpec> | null | undefined): string[] 
 const lockKey = (s: LaneSpec, p: string) => `${s.repo}\0${p.toLowerCase()}`;
 
 /**
- * The first candidate that conflicts with no held path and has its dependencies met. Paths are
+ * The first candidate that conflicts with no held path. Paths are
  * exact files, so conflict is equality; `patternsMayOverlap` compares directory prefixes and would
  * make every pair of new tests under `tests/` collide. Lower-cased for Windows and macOS checkouts.
  */
 export function pickClaimable<T extends { spec: LaneSpec }>(
   candidates: readonly T[],
   held: readonly LaneSpec[],
-  satisfied: ReadonlySet<string>,
 ): T | undefined {
   const locked = new Set(held.flatMap((s) => s.paths.map((p) => lockKey(s, p))));
   return candidates.find(
     (c) =>
       validateSpec(c.spec).length === 0 &&
-      (c.spec.dependsOn ?? []).every((d) => satisfied.has(d)) &&
       !c.spec.paths.some((p) => locked.has(lockKey(c.spec, p))),
   );
 }
@@ -245,6 +273,7 @@ interface Persist {
   claimedBy: string | null;
   leaseSeconds?: number | null;
   newClaim?: boolean;
+  refundClaim?: boolean;
   columns?: Partial<Record<'artifact_url' | 'external_artifact_url' | 'verifier_verdict' | 'verifier_evidence' | 'final_verdict' | 'verification_method' | 'stuck_reason', string>>;
   verified?: boolean;
   completed?: boolean;
@@ -259,7 +288,7 @@ async function persist(c: SqlRunner, id: Row['id'], state: LaneState, p: Persist
        claimed_at = CASE WHEN $3::text IS NULL THEN NULL WHEN $5 THEN now() ELSE claimed_at END,
        started_at = CASE WHEN $5 AND status = 'pending' THEN now() ELSE started_at END,
        expires_at = CASE WHEN $4::int IS NULL THEN NULL ELSE now() + make_interval(secs => $4::int) END,
-       claim_count = claim_count + CASE WHEN $5 AND status = 'pending' THEN 1 ELSE 0 END,
+       claim_count = GREATEST(claim_count + CASE WHEN $5 AND status = 'pending' THEN 1 ELSE 0 END - CASE WHEN $16 THEN 1 ELSE 0 END, 0),
        metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{t12}', $6::jsonb),
        artifact_url = COALESCE($7, artifact_url),
        external_artifact_url = COALESCE($8, external_artifact_url),
@@ -276,7 +305,7 @@ async function persist(c: SqlRunner, id: Row['id'], state: LaneState, p: Persist
       id, p.status, p.claimedBy, p.leaseSeconds ?? null, !!p.newClaim, JSON.stringify(state),
       col.artifact_url ?? null, col.external_artifact_url ?? null, col.verifier_verdict ?? null,
       col.verifier_evidence ?? null, col.final_verdict ?? null, col.verification_method ?? null,
-      col.stuck_reason ?? null, !!p.verified, !!p.completed,
+      col.stuck_reason ?? null, !!p.verified, !!p.completed, !!p.refundClaim,
     ],
   );
 }
@@ -306,6 +335,11 @@ function fenceProblem(row: Row | undefined, h: Handle, status: string, stage: St
 
 function step(row: Row, s: LaneState, actor: string, event: string, to: Stage, reason: string, evidence: unknown = null): LaneState {
   return { ...s, stage: to, receipts: appendReceipt(s.receipts, { at: row.db_now, actor, event, from: s.stage, to, epoch: s.epoch, reason, evidence }) };
+}
+
+/** The cron frees a lease without writing a receipt, so the next reader of the row records it. */
+function noteReap(row: Row, s: LaneState): LaneState {
+  return s.stage === 'making' ? step(row, s, 'trinity_reap_expired_claims', 'lease_reaped', 'ready', 'the previous maker lost its lease') : s;
 }
 
 async function fenced(
@@ -340,9 +374,24 @@ export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: numbe
     );
     if (used[0].n >= cap) return { kind: 'paused', reason: `QUOTA_PAUSED: ${used[0].n}/${cap} claims today` };
 
+    // A task out of claims gets a terminal state and a reason instead of sitting pending, unservable.
+    const { rows: spent } = await c.query(
+      `SELECT ${ROW_COLUMNS} FROM trinity_tasks
+        WHERE assigned_to = $1 AND status = 'pending' AND claimed_by IS NULL AND claim_count >= $2
+          AND metadata #> '{t12,spec}' IS NOT NULL FOR UPDATE SKIP LOCKED`,
+      [LANE_POOL, MAX_TASK_CLAIMS],
+    );
+    for (const row of spent as Row[]) {
+      const reason = `claim limit of ${MAX_TASK_CLAIMS} reached without a checked result`;
+      await persist(c, row.id, step(row, noteReap(row, stateOf(row)), 'claimMake', 'claim_limit', 'not_checked', reason), {
+        status: 'not_checked', claimedBy: null, columns: { stuck_reason: reason },
+      });
+    }
+
     const { rows } = await c.query(
       `SELECT ${ROW_COLUMNS} FROM trinity_tasks
         WHERE assigned_to = $1 AND status = 'pending' AND claimed_by IS NULL AND claim_count < $2
+          AND metadata #> '{t12,spec}' IS NOT NULL
         ORDER BY priority DESC NULLS LAST, created_at ASC LIMIT 100 FOR UPDATE SKIP LOCKED`,
       [LANE_POOL, MAX_TASK_CLAIMS],
     );
@@ -355,19 +404,10 @@ export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: numbe
           AND metadata #>> '{t12,stage}' IN ('making', 'awaiting_check', 'checking')`,
       [LANE_POOL],
     );
-    const { rows: met } = await c.query(
-      `SELECT metadata #>> '{t12,spec,id}' AS id FROM trinity_tasks
-        WHERE assigned_to = $1 AND metadata #>> '{t12,stage}' IN ('approved', 'integrating', 'integrated')
-          AND status = 'pending_validation'`,
-      [LANE_POOL],
-    );
-    const pick = pickClaimable(candidates, held.map((h: any) => h.spec), new Set(met.map((m: any) => m.id)));
-    if (!pick) return { kind: 'none', reason: 'every ready task is blocked by a held path or a dependency' };
+    const pick = pickClaimable(candidates, held.map((h: any) => h.spec));
+    if (!pick) return { kind: 'none', reason: 'every ready task is blocked by a held path' };
 
-    let s = stateOf(pick.row);
-    if (s.stage === 'making') {
-      s = step(pick.row, s, 'trinity_reap_expired_claims', 'lease_reaped', 'ready', 'the previous maker lost its lease');
-    }
+    let s = noteReap(pick.row, stateOf(pick.row));
     s = { ...s, epoch: s.epoch + 1 };
     s = step(pick.row, s, lane, 'claimed', 'making', `attempt ${s.attempts + 1}`);
     await persist(c, pick.row.id, s, { status: 'claimed', claimedBy: lane, leaseSeconds: LEASE_SECONDS, newClaim: true });
@@ -415,7 +455,7 @@ function afterFailure(row: Row, s: LaneState, actor: string, event: string, reas
 export async function releaseMake(db: TxDb, h: Handle, reason: string, blameless: boolean): Promise<StepResult> {
   return fenced(db, h, 'claimed', 'making', async (c, row, s) => {
     if (blameless) {
-      await persist(c, row.id, step(row, s, h.actor, 'released', 'ready', reason), { status: 'pending', claimedBy: null });
+      await persist(c, row.id, step(row, s, h.actor, 'released', 'ready', reason), { status: 'pending', claimedBy: null, refundClaim: true });
       return;
     }
     const { next, p } = afterFailure(row, s, h.actor, 'maker_failed', reason);
@@ -446,19 +486,20 @@ export async function claimStage(db: TxDb, stage: 'awaiting_check' | 'approved',
   });
 }
 
-/** Free check and integrate claims whose holder went away, back to the same stage, with the epoch raised. */
+/** Free check and integrate claims whose holder went away, back to the same stage. */
 export async function recoverStages(db: TxDb, ttlSeconds: number = STAGE_TTL_SECONDS): Promise<number> {
   return db.tx(async (c) => {
     const { rows } = await c.query(
       `SELECT ${ROW_COLUMNS} FROM trinity_tasks
         WHERE assigned_to = $1 AND status = 'pending_validation' AND claimed_by IS NOT NULL
-          AND claimed_at <= now() - make_interval(secs => $2::int) FOR UPDATE SKIP LOCKED`,
+          AND claimed_at <= now() - make_interval(secs => $2::int)
+          AND metadata #> '{t12,spec}' IS NOT NULL FOR UPDATE SKIP LOCKED`,
       [LANE_POOL, ttlSeconds],
     );
     for (const row of rows as Row[]) {
       const s = stateOf(row);
       const to: Stage = s.stage === 'integrating' ? 'approved' : 'awaiting_check';
-      const next = step(row, { ...s, epoch: s.epoch + 1 }, 'recoverStages', 'stage_lease_expired', to, `${row.claimed_by} went silent`);
+      const next = step(row, s, 'recoverStages', 'stage_lease_expired', to, `${row.claimed_by} went silent`);
       await persist(c, row.id, next, { status: 'pending_validation', claimedBy: null });
     }
     return rows.length;
@@ -539,7 +580,7 @@ export async function replenish(db: TxDb, specs: readonly LaneSpec[], target: nu
       [LANE_POOL],
     );
     const seen = new Set(all.map((r: any) => r.id));
-    let eligible = all.filter((r: any) => r.status === 'pending' && r.claim_count < MAX_TASK_CLAIMS).length;
+    let eligible = all.filter((r: any) => r.id && r.status === 'pending' && r.claim_count < MAX_TASK_CLAIMS).length;
     const { rows: nowRow } = await c.query(`SELECT now()::text AS db_now`);
     const inserted: string[] = [];
     const invalid: ReplenishReport['invalid'] = [];

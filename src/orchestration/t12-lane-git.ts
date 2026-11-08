@@ -8,15 +8,20 @@
  * reasoning-only lane can do this at all, and it writes nothing outside the task's leased paths.
  *
  * THE CHECK SAYS NOTHING ABOUT THE MAKER'S CLAIMS. It re-derives everything from git: the commit
- * exists, the diff stays inside the lease, the test passes in a fresh checkout, and the same test
- * FAILS without the deliverable, so a test that passes on nothing cannot approve itself. It does
- * not prove the test is good; that is what the draft PR's human reviewer is for.
+ * exists, the diff stays inside the lease, and the test passes in a fresh checkout. Then come the
+ * negative controls: the test must FAIL when the non-test part of the change is reverted, and when
+ * each of the task's deliberate breaks is applied to the code under test. Deleting the test would
+ * only prove the file went missing. Controls are only as strong as the breaks a task names; the
+ * draft PR's human reviewer is still the judge of whether the test is good.
+ *
+ * ONE CLONE. A commit exists only in the maker's clone until publish, so makers and checkers share
+ * one until something pushes earlier. A check that cannot find the commit reports NOT_CHECKED.
  *
  * EXECUTION IS THE RISK. `check` runs model-written code. It is refused unless `allowExec` is set,
  * runs with a stripped environment and never runs install scripts, but that is not a sandbox: arm
  * it only on an ephemeral runner holding no secrets.
  */
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { T12AskResult } from './t12-attempt';
@@ -42,7 +47,21 @@ const MAX_CONTEXT_CHARS = 20_000;
 const MAX_OUTPUT_CHARS = 8_000;
 
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 }).trim();
+
+/**
+ * Asynchronous on purpose: lanes share one event loop, and a blocking run here would stop every
+ * other lane's heartbeat until its lease expired.
+ */
+function run(cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; shell?: boolean }) {
+  return new Promise<{ code: number | null; ranOut: boolean; reason: string | null; output: string }>((resolve) => {
+    execFile(cmd, args, { cwd: opts.cwd, env: opts.env, timeout: opts.timeoutMs, maxBuffer: 16 * 1024 * 1024, shell: opts.shell, encoding: 'utf8' }, (err, stdout, stderr) => {
+      const raw = err ? (err as { code?: unknown }).code : 0;
+      const code = typeof raw === 'number' ? raw : null;
+      resolve({ code, ranOut: code === null, reason: code === null && err ? err.message : null, output: `${stdout}\n${stderr}`.slice(-MAX_OUTPUT_CHARS) });
+    });
+  });
+}
 
 function discard(canon: string, dir: string): void {
   // A real directory tree only: nothing here is ever a junction, so removal cannot escape it.
@@ -100,16 +119,19 @@ export function scrubbedEnv(home: string, parent: NodeJS.ProcessEnv = process.en
   return out;
 }
 
-function runVerify(dir: string, spec: LaneSpec, env: NodeJS.ProcessEnv, timeoutMs: number) {
+/** No shell and no free-form command. passWithNoTests is forced off because a repo config can turn it on. */
+export function verifyArgs(spec: LaneSpec): string[] {
   const { runner, target } = spec.verify;
-  const args = runner === 'jest' ? ['node_modules/jest/bin/jest.js', '--ci', '--runInBand', target] : ['--test', target];
-  const r = spawnSync(process.execPath, args, { cwd: dir, env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
-  const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`.slice(-MAX_OUTPUT_CHARS);
-  return { cmd: `node ${args.join(' ')}`, code: r.status, ranOut: !!r.error || r.status === null, reason: r.error?.message ?? null, output };
+  return runner === 'jest' ? ['node_modules/jest/bin/jest.js', '--ci', '--runInBand', '--passWithNoTests=false', target] : ['--test', target];
+}
+
+async function runVerify(dir: string, spec: LaneSpec, env: NodeJS.ProcessEnv, timeoutMs: number) {
+  const args = verifyArgs(spec);
+  return { cmd: `node ${args.join(' ')}`, ...(await run(process.execPath, args, { cwd: dir, env, timeoutMs })) };
 }
 
 export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
-  const timeoutMs = cfg.timeoutMs ?? 10 * 60 * 1000;
+  const timeoutMs = cfg.timeoutMs ?? 5 * 60 * 1000;
 
   async function make(h: Handle, signal: AbortSignal): Promise<MakeOutcome> {
     const canon = canonDir(cfg, h.spec);
@@ -139,6 +161,7 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
         writeFileSync(target, f.content, 'utf8');
       }
       git(dir, 'add', '--', ...files.map((f) => f.path));
+      if (!git(dir, 'diff', '--cached', '--name-only')) return { ok: false, kind: 'maker_failed', reason: 'the model produced no change' };
       git(dir, '-c', 'user.name=t12-lane', '-c', 'user.email=t12-lane@users.noreply.github.com',
         'commit', '-q', '-m', `t12(${h.spec.id}): ${h.spec.title}`);
       return { ok: true, submission: { branch, commit: git(dir, 'rev-parse', 'HEAD'), base, files: files.map((f) => f.path), host: answer.host } };
@@ -154,7 +177,7 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
     try {
       git(canon, 'cat-file', '-e', `${sub.commit}^{commit}`);
     } catch {
-      return { outcome: 'rejected', reason: `commit ${sub.commit} does not exist` };
+      return { outcome: 'not_checked', reason: `commit ${sub.commit} is not available on this host` };
     }
     const changed = git(canon, 'diff', '--name-only', sub.base, sub.commit).split('\n').filter(Boolean);
     const outside = changed.filter((f) => !h.spec.paths.includes(f));
@@ -169,25 +192,47 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
     try {
       const env = scrubbedEnv(home);
       if (existsSync(join(dir, 'package-lock.json'))) {
-        const npm = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'],
-          { cwd: dir, env, encoding: 'utf8', timeout: timeoutMs, shell: process.platform === 'win32' });
-        if (npm.status !== 0) return { outcome: 'not_checked', reason: `npm ci failed: ${String(npm.stderr).slice(-300)}` };
+        const npm = await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'],
+          { cwd: dir, env, timeoutMs, shell: process.platform === 'win32' });
+        if (npm.code !== 0) return { outcome: 'not_checked', reason: `npm ci failed: ${npm.output.slice(-300)}` };
       }
-      const pass = runVerify(dir, h.spec, env, timeoutMs);
+      const pass = await runVerify(dir, h.spec, env, timeoutMs);
       if (pass.ranOut) return { outcome: 'not_checked', reason: `verify did not finish: ${pass.reason ?? 'timed out'}` };
       if (pass.code !== 0) return { outcome: 'rejected', reason: `verify failed with exit ${pass.code}: ${pass.output.slice(-600)}` };
 
-      // Negative control: the same check, with the deliverable removed.
-      for (const f of sub.files) {
-        if (git(dir, 'ls-tree', '--name-only', sub.base, '--', f)) git(dir, 'checkout', '-q', sub.base, '--', f);
-        else rmSync(join(dir, f), { force: true });
-      }
-      const control = runVerify(dir, h.spec, env, timeoutMs);
-      if (control.ranOut) return { outcome: 'not_checked', reason: `negative control did not finish: ${control.reason ?? 'timed out'}` };
-      if (control.code === 0) return { outcome: 'rejected', reason: 'vacuous: verify also passes without the deliverable' };
+      // Negative controls: each must turn the same test red.
+      const controls: Array<{ control: string; exit: number | null }> = [];
+      const expectRed = async (label: string): Promise<Verdict | null> => {
+        const c = await runVerify(dir, h.spec, env, timeoutMs);
+        if (c.ranOut) return { outcome: 'not_checked', reason: `control "${label}" did not finish: ${c.reason ?? 'timed out'}` };
+        if (c.code === 0) return { outcome: 'rejected', reason: `vacuous: the test still passes with ${label}` };
+        controls.push({ control: label, exit: c.code });
+        return null;
+      };
 
-      const transcript = `${pass.cmd} at ${sub.commit} exited 0; without the deliverable it exited ${control.code}.\n${pass.output}`;
-      return { outcome: 'approved', commit: sub.commit, transcript, evidence: { commit: sub.commit, cmd: pass.cmd, exit: pass.code, control_exit: control.code } };
+      const code = sub.files.filter((f) => f !== h.spec.verify.target);
+      if (code.length > 0) {
+        for (const f of code) {
+          if (git(dir, 'ls-tree', '--name-only', sub.base, '--', f)) git(dir, 'checkout', '-q', sub.base, '--', f);
+          else rmSync(join(dir, f), { force: true });
+        }
+        const failed = await expectRed('the code change reverted');
+        if (failed) return failed;
+        git(dir, 'checkout', '-q', sub.commit, '--', ...code);
+      }
+      for (const c of h.spec.verify.controls ?? []) {
+        const f = join(dir, c.file);
+        const original = existsSync(f) ? readFileSync(f, 'utf8') : '';
+        if (!original.includes(c.find)) return { outcome: 'not_checked', reason: `control on ${c.file} no longer applies` };
+        writeFileSync(f, original.split(c.find).join(c.replace), 'utf8');
+        const failed = await expectRed(`${c.file} deliberately broken`);
+        if (failed) return failed;
+        writeFileSync(f, original, 'utf8');
+      }
+      if (controls.length === 0) return { outcome: 'not_checked', reason: 'no negative control ran' };
+
+      const transcript = `${pass.cmd} at ${sub.commit} exited 0. Controls: ${controls.map((c) => `${c.control} exited ${c.exit}`).join('; ')}.\n${pass.output}`;
+      return { outcome: 'approved', commit: sub.commit, transcript, evidence: { commit: sub.commit, cmd: pass.cmd, exit: pass.code, controls } };
     } finally {
       discard(canon, dir);
       rmSync(home, { recursive: true, force: true });
