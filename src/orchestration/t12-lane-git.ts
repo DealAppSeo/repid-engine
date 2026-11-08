@@ -179,9 +179,13 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
     } catch {
       return { outcome: 'not_checked', reason: `commit ${sub.commit} is not available on this host` };
     }
-    const changed = git(canon, 'diff', '--name-only', sub.base, sub.commit).split('\n').filter(Boolean);
+    const statuses = git(canon, 'diff', '--name-status', '--no-renames', sub.base, sub.commit).split('\n').filter(Boolean).map((l) => l.split('\t'));
+    const changed = statuses.map(([, f]) => f!);
     const outside = changed.filter((f) => !h.spec.paths.includes(f));
     if (outside.length) return { outcome: 'rejected', reason: `wrote outside its lease: ${outside.join(', ')}` };
+    // A green test proves nothing about what a replaced file used to cover.
+    const replaced = statuses.filter(([st, f]) => st !== 'A' && !(h.spec.overwrites ?? []).includes(f!)).map(([, f]) => f);
+    if (replaced.length) return { outcome: 'rejected', reason: `replaced existing work the task did not name: ${replaced.join(', ')}` };
     if (!changed.includes(h.spec.verify.target)) return { outcome: 'rejected', reason: `verify target ${h.spec.verify.target} is not in the diff` };
     if (!cfg.allowExec) return { outcome: 'not_checked', reason: 'execution of model-written code is not allowed on this host' };
 

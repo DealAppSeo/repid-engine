@@ -84,6 +84,8 @@ export interface LaneSpec {
   prompt: string;
   /** Exact repo-relative files the maker may write. These are the path locks. */
   paths: string[];
+  /** Which of `paths` already exist and may be changed. Anything else must be a new file. */
+  overwrites?: string[];
   /** A runner name and one target, never a command: nothing executable is read from a task row. */
   verify: { runner: 'jest' | 'node-test'; target: string; controls?: Control[] };
   risk: Risk;
@@ -202,6 +204,9 @@ export function validateSpec(s: Partial<LaneSpec> | null | undefined): string[] 
       if (badPath(p)) out.push(`path ${String(p)} is not an exact repo-relative file`);
       else if (PROTECTED_PATH.test(p)) out.push(`path ${p} is protected`);
     }
+  }
+  if (s.overwrites !== undefined && (!Array.isArray(s.overwrites) || !s.overwrites.every((p) => s.paths?.includes(p)))) {
+    out.push('overwrites must be a subset of its paths');
   }
   // Context is read from disk and sent to a model, so it gets the same fence as a write.
   for (const p of Array.isArray(s.context) ? s.context : []) {

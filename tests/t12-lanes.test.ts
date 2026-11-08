@@ -70,6 +70,7 @@ describe('spec vetting', () => {
     ['a dependency it cannot be based on', { dependsOn: ['T12-001'] } as Partial<LaneSpec>],
     ['a test-only task with no control', { verify: { runner: 'node-test', target: 'tests/a.test.mjs' } }],
     ['a control on the deliverable itself', { verify: { runner: 'node-test', target: 'tests/a.test.mjs', controls: [{ file: 'tests/a.test.mjs', find: 'a', replace: 'b' }] } }],
+    ['overwrites outside its paths', { overwrites: ['src/other.ts'] }],
     ['a control that changes nothing', { verify: { runner: 'node-test', target: 'tests/a.test.mjs', controls: [{ file: 'src/x.ts', find: 'a', replace: 'a' }] } }],
     ['too many controls', { verify: { runner: 'node-test', target: 'tests/a.test.mjs', controls: Array(6).fill(CONTROL[0]) } }],
     ['an unknown runner', { verify: { runner: 'bash', target: 'tests/a.test.mjs' } as never }],
@@ -197,8 +198,14 @@ describe('real git adapters', () => {
   }, 60_000);
 
   it('can approve a change to an existing test', async () => {
-    const s = spec('existing');
+    const s = spec('existing', { overwrites: ['tests/existing.test.mjs'] });
     expect((await adapters().check(handle(s, 2, await makeWith(s, 1, PASS)))).outcome).toBe('approved');
+  }, 60_000);
+
+  it('rejects replacing an existing file the task did not name, even when the new test passes', async () => {
+    const s = spec('existing');
+    const v = await adapters().check(handle(s, 3, await makeWith(s, 2, PASS)));
+    expect(v).toMatchObject({ outcome: 'rejected', reason: expect.stringContaining('tests/existing.test.mjs') });
   }, 60_000);
 
   it('a code change is controlled by reverting it', async () => {
