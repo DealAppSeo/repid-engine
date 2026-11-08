@@ -55,6 +55,10 @@ describe('decision receipts', () => {
 
 describe('spec vetting', () => {
   it('accepts a falsifiable spec', () => expect(validateSpec(spec('a'))).toEqual([]));
+  it('accepts the two belts and refuses any other', () => {
+    expect(validateSpec(spec('a', { belt: 'research' }))).toEqual([]);
+    expect(validateSpec(spec('a', { belt: 'finance' as never }))).toContain('belt must be engineering or research');
+  });
   it.each([
     ['another repo', { repo: 'DealAppSeo/repid-engine' }],
     ['a thin prompt', { prompt: 'fix it' }],
@@ -372,6 +376,18 @@ describePg('durable lanes on real Postgres', () => {
     expect(await submit(db, h, sub(id))).toEqual({ ok: true });
     return h;
   };
+
+  it('a write that changes no row is an error, not a success', async () => {
+    await seed(spec('skipped'));
+    const h = await claimOne(L1);
+    await pool.query(`CREATE FUNCTION t12_skip_row() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$`);
+    await pool.query('CREATE TRIGGER t12_skip BEFORE UPDATE ON trinity_tasks FOR EACH ROW EXECUTE FUNCTION t12_skip_row()');
+    try {
+      await expect(submit(db, h, sub('skipped'))).rejects.toThrow('was not written');
+    } finally {
+      await pool.query('DROP TRIGGER t12_skip ON trinity_tasks; DROP FUNCTION t12_skip_row()');
+    }
+  });
 
   it('three lanes racing over 30 tasks never double-claim', async () => {
     const specs = Array.from({ length: 30 }, (_, i) => spec(`race-${i}`));

@@ -53,7 +53,8 @@ Claim, make, independently check, integrate, refill, on `trinity_tasks` with no 
 - **Check.** A different lane re-runs the test in a fresh checkout. The test must then fail when the code change is reverted and when each break the task names is applied to the code under test. The verdict is `same_controller_rerun`: controls are only as strong as the breaks a task names, so a human still judges the test.
 - **Integrate.** A draft PR at most. A human merges. `HIGH` risk is never published.
 - **Receipts.** Each decision appends to a hash chain in `metadata.t12.receipts`, in the same transaction as the state change.
-- **Cost.** The only model path is `t12Ask` (loopback, groq, cerebras). At most one call per claim, and `DAILY_CLAIM_CAP` claims a day.
+- **Belts.** A lane needs a live belt for this task and this claim before it can submit, and a denied belt never reaches a model. The grant is a `principal_grants` row minted by `t12_belt_checkout`. Postgres enforces it through the worker role's row policy, and that role has no privilege on the grants or on the denial log in `trinity_agent_logs`. Engineering covers `src/`, `tests/`, `test/`, `lib/` and `docs/`. Research covers `reports/` and `docs/`. It does not gate model calls, because the worker holds its free provider keys. Maker and checker share one database role, so a compromised worker could still forge a verdict on work already submitted. The human merge is the gate for that.
+- **Cost.** The only model path is `t12Ask` on the free routes in `T12_ROUTES`. Each claim asks at most two hosts, and `DAILY_CLAIM_CAP` limits claims per day.
 
 Run once with `scripts/t12/lanes.ts`. Nothing schedules it. `T12_LANES_ENABLED`, `T12_LANES_ALLOW_EXEC` and `T12_LANES_PUBLISH` are each off unless exactly `true`.
 
