@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import { T12_ROUTES, t12Target } from '../src/orchestration/t12-attempt';
+import { t12Wave } from '../src/orchestration/t12-free-wave';
 import { askFailure } from '../src/orchestration/t12-lane-git';
 import { COOLDOWN_SECONDS, MAX_HOSTS_PER_ASK, T12_LANE_ROUTE_ORDER, cooldownFor, createRoutedAsk } from '../src/orchestration/t12-lane-route';
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
@@ -64,6 +65,14 @@ describe('the free-only route table', () => {
     expect(t12Target('nvidia', ALL_KEYS)).toMatchObject({ key: 'nim-k' });
     expect(t12Target('groq', ALL_KEYS)).toMatchObject({ key: 'gq-k' });
     expect(t12Target('nvidia', { NVIDIA_API_KEY: 'a', NVIDIA_NIM_API_KEY: 'b' })).toMatchObject({ key: 'a' });
+  });
+});
+
+describe('the flag gates a custom order too', () => {
+  it('with the flag off a caller-supplied order calls no host', async () => {
+    const attempt = jest.fn(async () => ({ status: 200 }));
+    expect(await t12Wave({ env: {}, attempt, order: ['groq'] })).toEqual({ outcome: 'NOT_CHECKED', host: null, tried: [] });
+    expect(attempt).not.toHaveBeenCalled();
   });
 });
 
