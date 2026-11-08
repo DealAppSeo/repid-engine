@@ -9,6 +9,14 @@
  * This is a boot refusal, not a filter: a worker launched with a privileged credential in its
  * environment has already been misconfigured, and stripping the variable would hide that.
  */
+import { T12_ROUTES } from './t12-attempt';
+
+/** Any credential-shaped name. A list of spellings fails open for each new one, so this matches the family. */
+const CREDENTIAL_NAME = /(^|_)(KEY|KEYS|SECRET|SECRETS|TOKEN|PASSWORD|PASSWD|PAT|CREDS|CREDENTIALS|HMAC)(_|$)/;
+
+/** The one exception to the family rule: the keys for the free routes the worker is allowed to call. */
+const FREE_ROUTE_KEYS: ReadonlySet<string> = new Set(Object.values(T12_ROUTES).flatMap((r) => [...r.keyEnv]));
+
 const PRIVILEGED: readonly RegExp[] = [
   /PRIVATE_KEY/,
   /(^|_)SIGNER_KEY$/,
@@ -35,7 +43,7 @@ const INTEGRATOR_MAY_HOLD: readonly RegExp[] = [/^(GITHUB_TOKEN|GH_TOKEN)$/];
 /** Credential names present that this profile may not hold. Names only: a value is never read. */
 export function privilegedEnvPresent(env: Record<string, string | undefined>, role: 'worker' | 'integrator' = 'worker'): string[] {
   return Object.keys(env)
-    .filter((name) => !!env[name] && PRIVILEGED.some((p) => p.test(name)))
+    .filter((name) => !!env[name] && (PRIVILEGED.some((p) => p.test(name)) || (CREDENTIAL_NAME.test(name) && !FREE_ROUTE_KEYS.has(name))))
     .filter((name) => !(role === 'integrator' && INTEGRATOR_MAY_HOLD.some((p) => p.test(name))))
     .sort();
 }
@@ -47,6 +55,9 @@ export interface DbPrivilege {
 
 /** Is this connection able to go past row security? A worker's must not be. */
 export async function dbPrivilege(db: { query(sql: string, params?: unknown[]): Promise<{ rows: any[] }> }): Promise<DbPrivilege> {
-  const { rows } = await db.query(`SELECT rolname AS name, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`);
-  return { name: rows[0].name, privileged: !!(rows[0].rolsuper || rows[0].rolbypassrls) };
+  // Membership counts too: SET ROLE reaches a superuser role even from a NOINHERIT login.
+  const { rows } = await db.query(
+    `SELECT current_user AS name, EXISTS (SELECT 1 FROM pg_roles r WHERE (r.rolsuper OR r.rolbypassrls) AND pg_has_role(current_user, r.oid, 'member')) AS privileged`,
+  );
+  return { name: rows[0].name, privileged: !!rows[0].privileged };
 }

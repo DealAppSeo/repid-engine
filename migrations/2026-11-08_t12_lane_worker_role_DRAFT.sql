@@ -12,12 +12,49 @@ BEGIN
   END IF;
 END $$;
 
--- A role of this name may already exist with more power; IF NOT EXISTS would keep it.
+-- A role of this name may already exist with more power. ALTER ROLE resets attributes only, and
+-- NOINHERIT does not stop SET ROLE, so memberships and object grants are removed here too. Each
+-- REVOKE targets a grant the role actually holds, because a blanket REVOKE fails on any object the
+-- applying role cannot administer.
+DO $$
+DECLARE
+  worker oid := 't12_lane_worker'::regrole;
+  stmt text;
+BEGIN
+  FOR stmt IN
+    SELECT format('REVOKE %s FROM t12_lane_worker', roleid::regrole) FROM pg_auth_members WHERE member = worker
+    UNION ALL
+    SELECT format('REVOKE ALL ON %s %s FROM t12_lane_worker', CASE c.relkind WHEN 'S' THEN 'SEQUENCE' ELSE 'TABLE' END, c.oid::regclass)
+      FROM pg_class c
+     WHERE EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.grantee = worker)
+        OR EXISTS (SELECT 1 FROM pg_attribute t, aclexplode(t.attacl) a WHERE t.attrelid = c.oid AND a.grantee = worker)
+    UNION
+    SELECT format('REVOKE ALL ON FUNCTION %s FROM t12_lane_worker', p.oid::regprocedure)
+      FROM pg_proc p, aclexplode(p.proacl) a WHERE a.grantee = worker
+    UNION
+    SELECT format('REVOKE ALL ON SCHEMA %I FROM t12_lane_worker', n.nspname)
+      FROM pg_namespace n, aclexplode(n.nspacl) a WHERE a.grantee = worker
+  LOOP
+    EXECUTE stmt;
+  END LOOP;
+  -- Ownership cannot be revoked, and dropping someone's objects is not this file's call.
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relowner = worker)
+     OR EXISTS (SELECT 1 FROM pg_proc WHERE proowner = worker)
+     OR EXISTS (SELECT 1 FROM pg_namespace WHERE nspowner = worker) THEN
+    RAISE EXCEPTION 't12_lane_worker owns database objects; reassign them before applying this file';
+  END IF;
+END $$;
+
 ALTER ROLE t12_lane_worker LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
 
 GRANT USAGE ON SCHEMA public TO t12_lane_worker;
 
-GRANT SELECT, INSERT, UPDATE ON public.trinity_tasks TO t12_lane_worker;
+-- Only the columns a lane writes. `result` is the column the RepID bridge scores, and it is not here.
+GRANT SELECT ON public.trinity_tasks TO t12_lane_worker;
+GRANT INSERT (title, description, task_type, task_category, status, assigned_to, priority, insert_source, metadata) ON public.trinity_tasks TO t12_lane_worker;
+GRANT UPDATE (status, claimed_by, claimed_at, started_at, expires_at, claim_count, metadata, artifact_url, external_artifact_url,
+              verifier_verdict, verifier_evidence, final_verdict, verification_method, stuck_reason, verified_at, verify_count, completed_at)
+  ON public.trinity_tasks TO t12_lane_worker;
 GRANT SELECT, INSERT, UPDATE ON public.agent_resource_claims TO t12_lane_worker;
 GRANT SELECT ON public.trinity_system_config TO t12_lane_worker;
 
@@ -162,7 +199,12 @@ DROP POLICY IF EXISTS t12_lane_worker_pool ON public.trinity_tasks;
 CREATE POLICY t12_lane_worker_pool ON public.trinity_tasks
   FOR ALL TO t12_lane_worker
   USING (assigned_to = 'trinity-t12-lanes')
-  WITH CHECK (assigned_to = 'trinity-t12-lanes' AND public.t12_belt_permits(id, metadata));
+  WITH CHECK (
+    assigned_to = 'trinity-t12-lanes'
+    AND public.t12_belt_permits(id, metadata)
+    -- Never done, verified or shadow_reject: trinity-task-bridge scores those with no pool filter.
+    AND status IN ('pending', 'claimed', 'pending_validation', 'cancelled', 'not_checked')
+  );
 
 DROP POLICY IF EXISTS t12_lane_worker_claims ON public.agent_resource_claims;
 CREATE POLICY t12_lane_worker_claims ON public.agent_resource_claims

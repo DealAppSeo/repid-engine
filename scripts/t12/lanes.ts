@@ -38,6 +38,7 @@ function notChecked(why: string): never {
 async function main(): Promise<void> {
   const flags = laneFlags();
   if (!flags.enabled) notChecked('T12_LANES_ENABLED is not exactly true; nothing was claimed.');
+  if (flags.publish && flags.allowExec) notChecked('T12_LANES_PUBLISH and T12_LANES_ALLOW_EXEC must not be set together: the publisher holds a push credential that model-written code could read. Check on a host with no secrets.');
   const forbidden = privilegedEnvPresent(process.env, flags.publish ? 'integrator' : 'worker');
   if (forbidden.length) notChecked(`refusing to start with privileged credentials in the environment: ${forbidden.join(', ')}`);
   const specsPath = arg('specs');

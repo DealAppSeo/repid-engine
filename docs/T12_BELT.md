@@ -47,7 +47,7 @@ Do not call Anthropic from this belt.
 
 Claim, make, independently check, integrate, refill, on `trinity_tasks` with no new table.
 
-- **Rows.** `assigned_to = trinity-t12-lanes`, so the fleet's claim skips them. Making is `claimed`; everything after is `pending_validation`, with the real stage in `metadata.t12.stage`. The RepID bridge polls `done`, `verified` and `shadow_reject`, and a lane row never enters those.
+- **Rows.** `assigned_to = trinity-t12-lanes`, so the fleet's claim skips them. Making is `claimed`; everything after is `pending_validation`, with the real stage in `metadata.t12.stage`. The RepID bridge polls `done`, `verified` and `shadow_reject` with no pool filter, and a lane row never enters those. Once the worker role is applied, its row policy refuses those statuses and it cannot write `result` at all, so this holds against a compromised worker too.
 - **Leases.** `expires_at`, renewed by heartbeat, freed by the `trinity_reap_expired_claims` cron. `metadata.t12.epoch` is the fencing token, so a worker that lost its lease cannot write.
 - **Path locks.** Exact files, held from claim until the check passes, decided under one advisory lock.
 - **Check.** A different lane re-runs the test in a fresh checkout. The test must then fail when the code change is reverted and when each break the task names is applied to the code under test. The verdict is `same_controller_rerun`: controls are only as strong as the breaks a task names, so a human still judges the test.

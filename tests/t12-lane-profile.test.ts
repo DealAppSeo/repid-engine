@@ -7,6 +7,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client, Pool } from 'pg';
+import { KNOWN_ENV_VARS } from '../src/config/known-env-vars.generated';
+import { T12_ROUTES } from '../src/orchestration/t12-attempt';
 import { dbPrivilege, privilegedEnvPresent } from '../src/orchestration/t12-lane-profile';
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
 import {
@@ -33,6 +35,21 @@ describe('what a worker may hold', () => {
   it.each(['DATABASE_URL', 'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'NVIDIA_NIM_API_KEY', 'OPENROUTER_API_KEY', 'T12_FREE_WAVE', 'PATH'])('allows %s', (name) => {
     expect(privilegedEnvPresent({ [name]: 'x' })).toEqual([]);
   });
+  it.each([
+    'RECEIPT_SIGNING_KEY', 'KERNEL_RECEIPT_SIGNING_KEY', 'CONTROLLER_MASTER_KEY', 'AUDIT_MASTER_KEY', 'AUDIT_BINDING_KEY', 'KERNEL_COMMITMENT_KEY', 'SIGNING_KEY_DEV',
+    'FULL_ACCOUNT_JWT_SECRET', 'ORACLE_HMAC_SECRET', 'PROOF_SECRET', 'TELEGRAM_BOT_TOKEN', 'CRON_TRIGGER_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'ANTHROPIC_API_KEY', 'TOGETHER_API_KEY', 'DEEPSEEK_API_KEY',
+  ])('refuses %s, which no fixed spelling named', (name) => expect(privilegedEnvPresent({ [name]: 'x' })).toEqual([name]));
+  it('refuses every credential the engine registers, except the keys of the free routes', () => {
+    const free = new Set(Object.values(T12_ROUTES).flatMap((r) => [...r.keyEnv]));
+    const credentials = KNOWN_ENV_VARS.filter((n) => /_SECRET$|SIGNING_KEY|MASTER_KEY|_TOKEN$|_API_KEY$/.test(n) && !free.has(n));
+    expect(credentials.length).toBeGreaterThan(20);
+    expect(privilegedEnvPresent(Object.fromEntries(credentials.map((n) => [n, 'x'])))).toEqual([...credentials].sort());
+  });
+  it('allows the key of every free route', () => {
+    const keys = Object.values(T12_ROUTES).flatMap((r) => [...r.keyEnv]);
+    expect(keys.length).toBeGreaterThan(3);
+    expect(privilegedEnvPresent(Object.fromEntries(keys.map((n) => [n, 'x'])))).toEqual([]);
+  });
   it('an empty variable holds nothing', () => expect(privilegedEnvPresent({ STRIPE_SECRET_KEY: '' })).toEqual([]));
   it('an integrator may hold a GitHub token and nothing else from the list', () => {
     expect(privilegedEnvPresent({ GH_TOKEN: 'x' }, 'integrator')).toEqual([]);
@@ -48,6 +65,11 @@ describe('the real CLI refuses a privileged environment', () => {
     expect(r.stderr).toContain('RAILWAY_API_TOKEN');
     expect(r.stderr).toContain('STRIPE_SECRET_KEY');
     expect(`${r.stdout}${r.stderr}`).not.toContain(secret);
+  }, 120_000);
+  it('refuses to publish and run model-written code in one process', () => {
+    const r = cli(['--specs', 'x', '--work-root', 'y'], { T12_LANES_ENABLED: 'true', T12_LANES_PUBLISH: 'true', T12_LANES_ALLOW_EXEC: 'true', DATABASE_URL: 'postgres://nobody@127.0.0.1:1/x' });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('must not be set together');
   }, 120_000);
   it('boots with no Supabase service key at all', () => {
     const r = cli(['--work-root', 'y'], { T12_LANES_ENABLED: 'true', DATABASE_URL: 'postgres://nobody@127.0.0.1:1/x' });
@@ -88,6 +110,8 @@ describePg('the restricted database role, attacked', () => {
     // The migration must strip a same-named role that already holds more than it should.
     await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_lane_worker') THEN CREATE ROLE t12_lane_worker LOGIN; END IF; END $$`);
     await admin.query('ALTER ROLE t12_lane_worker SUPERUSER BYPASSRLS CREATEDB CREATEROLE');
+    await admin.query('GRANT postgres TO t12_lane_worker');
+    await admin.query('GRANT ALL ON principal_grants, trinity_agent_logs, repid_agents TO t12_lane_worker');
     await admin.query(readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8'));
     u.username = 't12_lane_worker';
     workerUrl = u.toString();
@@ -124,7 +148,7 @@ describePg('the restricted database role, attacked', () => {
   });
 
   it('cannot move a task out of the pool or create one outside it', async () => {
-    await expect(worker.query(`UPDATE trinity_tasks SET assigned_to = 'trinity-orch' WHERE assigned_to = $1`, [LANE_POOL])).rejects.toThrow(/row-level security/);
+    await expect(worker.query(`UPDATE trinity_tasks SET assigned_to = 'trinity-orch' WHERE assigned_to = $1`, [LANE_POOL])).rejects.toThrow(/permission denied/);
     await expect(worker.query(`INSERT INTO trinity_tasks (description, assigned_to) VALUES ('x', 'trinity-orch')`)).rejects.toThrow(/row-level security/);
   });
 
@@ -288,6 +312,51 @@ describePg('the restricted database role, attacked', () => {
       } finally {
         await c.query('RESET ROLE');
         c.release();
+      }
+    });
+
+    it.each(['done', 'verified', 'shadow_reject'])('cannot move a task to %s, the status the RepID bridge scores', async (status) => {
+      const h = await claimed();
+      await expect(worker.query('UPDATE trinity_tasks SET status = $2 WHERE id = $1', [h.taskId, status])).rejects.toThrow(/row-level security/);
+      await expect(worker.query(`INSERT INTO trinity_tasks (description, status, assigned_to) VALUES ('x', $1, $2)`, [status, LANE_POOL])).rejects.toThrow(/row-level security/);
+      expect((await admin.query('SELECT status FROM trinity_tasks WHERE id = $1', [h.taskId])).rows[0].status).toBe('claimed');
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
+    it('cannot write the result column, and can write a lane status, as a positive control', async () => {
+      const h = await claimed();
+      await expect(worker.query(`UPDATE trinity_tasks SET result = 'forged' WHERE id = $1`, [h.taskId])).rejects.toThrow(/permission denied/);
+      await expect(worker.query(`INSERT INTO trinity_tasks (description, assigned_to, result) VALUES ('x', $1, 'forged')`, [LANE_POOL])).rejects.toThrow(/permission denied/);
+      expect((await worker.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId])).rowCount).toBe(1);
+    });
+
+    it('a role that holds a superuser by membership is reported as privileged', async () => {
+      await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_member_probe') THEN CREATE ROLE t12_member_probe LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; END IF; END $$`);
+      await admin.query('GRANT postgres TO t12_member_probe');
+      const u = new URL(workerUrl);
+      u.username = 't12_member_probe';
+      const probe = new Pool({ connectionString: u.toString() });
+      try {
+        expect(await dbPrivilege(probe)).toEqual({ name: 't12_member_probe', privileged: true });
+      } finally {
+        await probe.end();
+        await admin.query('REVOKE postgres FROM t12_member_probe');
+      }
+    });
+
+    it('re-applying the migration strips a new membership and grant, and refuses a role that owns objects', async () => {
+      const file = readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8');
+      await admin.query('GRANT postgres TO t12_lane_worker');
+      await admin.query('GRANT SELECT ON principal_grants TO t12_lane_worker');
+      await admin.query(file);
+      await expect(worker.query('SET ROLE postgres')).rejects.toThrow(/permission denied|must be member/);
+      await expect(worker.query('SELECT * FROM principal_grants')).rejects.toThrow(/permission denied/);
+      await admin.query('CREATE TABLE t12_owned_probe (x int)');
+      await admin.query('ALTER TABLE t12_owned_probe OWNER TO t12_lane_worker');
+      try {
+        await expect(admin.query(file)).rejects.toThrow(/owns database objects/);
+      } finally {
+        await admin.query('DROP TABLE t12_owned_probe');
       }
     });
 
