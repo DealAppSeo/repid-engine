@@ -36,7 +36,7 @@ export const MAX_NOT_CHECKED = 3;
 /** Longer than a check's worst case (install, the test, then each control), so a slow check is not taken from under itself. */
 export const STAGE_TTL_SECONDS = 45 * 60;
 export const MAX_CONTROLS = 5;
-/** One claim is at most one model call, so this bounds unattended free-tier use per UTC day. */
+/** One claim is at most MAX_HOSTS_PER_ASK model calls, so this bounds unattended free-tier use per UTC day. */
 export const DAILY_CLAIM_CAP = 60;
 const LEASE_SECONDS = HEARTBEAT_TTL_MS / 1000;
 const MAX_LEASE_AGE_SECONDS = MAX_LEASE_AGE_MS / 1000;
@@ -106,7 +106,7 @@ export interface Control {
 
 export type Stage =
   | 'ready' | 'making' | 'awaiting_check' | 'checking' | 'approved' | 'integrating' | 'integrated'
-  | 'rejected' | 'not_checked';
+  | 'rejected' | 'not_checked' | 'waiting_for_capacity';
 
 export interface Submission {
   branch: string;
@@ -139,6 +139,8 @@ export interface LaneState {
   producer?: string;
   submission?: Submission;
   lastRejection?: string;
+  /** Not claimable before this time: every free route was cooling when it last ran. */
+  notBefore?: string;
   integrated?: { url: string; commit: string };
   receipts: DecisionReceipt[];
 }
@@ -301,7 +303,7 @@ async function persist(c: SqlRunner, id: Row['id'], state: LaneState, p: Persist
        verifier_evidence = COALESCE($10, verifier_evidence),
        final_verdict = COALESCE($11, final_verdict),
        verification_method = COALESCE($12, verification_method),
-       stuck_reason = COALESCE($13, stuck_reason),
+       stuck_reason = CASE WHEN $5 AND status = 'pending' THEN NULL ELSE COALESCE($13, stuck_reason) END,
        verified_at = CASE WHEN $14 THEN now() ELSE verified_at END,
        verify_count = COALESCE(verify_count, 0) + CASE WHEN $14 THEN 1 ELSE 0 END,
        completed_at = CASE WHEN $15 THEN now() ELSE completed_at END
@@ -397,6 +399,7 @@ export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: numbe
       `SELECT ${ROW_COLUMNS} FROM trinity_tasks
         WHERE assigned_to = $1 AND status = 'pending' AND claimed_by IS NULL AND claim_count < $2
           AND metadata #> '{t12,spec}' IS NOT NULL
+          AND (metadata #>> '{t12,notBefore}' IS NULL OR (metadata #>> '{t12,notBefore}')::timestamptz <= now())
         ORDER BY priority DESC NULLS LAST, created_at ASC LIMIT 100 FOR UPDATE SKIP LOCKED`,
       [LANE_POOL, MAX_TASK_CLAIMS],
     );
@@ -413,7 +416,7 @@ export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: numbe
     if (!pick) return { kind: 'none', reason: 'every ready task is blocked by a held path' };
 
     let s = noteReap(pick.row, stateOf(pick.row));
-    s = { ...s, epoch: s.epoch + 1 };
+    s = { ...s, epoch: s.epoch + 1, notBefore: undefined };
     s = step(pick.row, s, lane, 'claimed', 'making', `attempt ${s.attempts + 1}`);
     await persist(c, pick.row.id, s, { status: 'claimed', claimedBy: lane, leaseSeconds: LEASE_SECONDS, newClaim: true });
     return {
@@ -465,6 +468,53 @@ export async function releaseMake(db: TxDb, h: Handle, reason: string, blameless
     }
     const { next, p } = afterFailure(row, s, h.actor, 'maker_failed', reason);
     await persist(c, row.id, next, p);
+  });
+}
+
+/** No free route can take this now. Costs nothing, and the task is not offered again until `until`. */
+export async function waitForCapacity(db: TxDb, h: Handle, until: string, reason: string): Promise<StepResult> {
+  return fenced(db, h, 'claimed', 'making', async (c, row, s) => {
+    const next = { ...step(row, s, h.actor, 'waiting_for_capacity', 'waiting_for_capacity', reason, { until }), notBefore: until };
+    await persist(c, row.id, next, { status: 'pending', claimedBy: null, refundClaim: true, columns: { stuck_reason: `WAITING_FOR_CAPACITY until ${until}: ${reason}`.slice(0, 500) } });
+  });
+}
+
+const COOLDOWN_PREFIX = 'llm_cooldown:';
+
+/** Keep `host` out of rotation for `seconds`. Durable, so a new process or another lane honours it. */
+export async function coolProvider(db: SqlRunner, host: string, seconds: number, reason: string): Promise<string> {
+  const { rows } = await db.query(
+    `INSERT INTO agent_resource_claims (resource_kind, resource_id, claimed_by, purpose, expires_at)
+     VALUES ('other', $1, 'trinity-lane-router', $2, now() + make_interval(secs => $3::int))
+     ON CONFLICT (resource_kind, resource_id) WHERE released_at IS NULL
+     DO UPDATE SET expires_at = GREATEST(agent_resource_claims.expires_at, EXCLUDED.expires_at), purpose = EXCLUDED.purpose
+     RETURNING expires_at::text AS until`,
+    [COOLDOWN_PREFIX + host, reason.slice(0, 200), seconds],
+  );
+  return rows[0].until;
+}
+
+/** Hosts cooling right now, with the time each comes back. */
+export async function coolingProviders(db: SqlRunner): Promise<Map<string, string>> {
+  const { rows } = await db.query(
+    `SELECT resource_id, expires_at::text AS until FROM agent_resource_claims
+      WHERE resource_kind = 'other' AND resource_id LIKE $1 AND released_at IS NULL AND expires_at > now()`,
+    [`${COOLDOWN_PREFIX}%`],
+  );
+  return new Map(rows.map((r: { resource_id: string; until: string }) => [r.resource_id.slice(COOLDOWN_PREFIX.length), r.until]));
+}
+
+/** Append one route attempt to the task's receipts. Fenced, so a stale worker cannot add to the record. */
+export async function recordRouteAttempt(
+  db: TxDb,
+  h: Handle,
+  a: { host: string; model: string; status: number | null; reason: string },
+  cooldownUntil: string | null,
+): Promise<StepResult> {
+  return fenced(db, h, 'claimed', 'making', async (c, row, s) => {
+    const evidence = { provider: a.host, model: a.model, reason: a.reason, status: a.status, cooldown_until: cooldownUntil, task_id: h.taskId };
+    const next = step(row, s, h.actor, 'route_attempt', 'making', a.reason, evidence);
+    await c.query(`UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12}', $2::jsonb) WHERE id = $1`, [row.id, JSON.stringify(next)]);
   });
 }
 

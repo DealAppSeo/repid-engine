@@ -12,7 +12,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { getPgPool } from '../../src/db/direct-pg';
-import { t12Ask } from '../../src/orchestration/t12-attempt';
+import { createRoutedAsk } from '../../src/orchestration/t12-lane-route';
 import { createGitAdapters, ghPrClient } from '../../src/orchestration/t12-lane-git';
 import { laneFlags, runLanes } from '../../src/orchestration/t12-lane-runner';
 import { poolDb, type LaneSpec } from '../../src/orchestration/t12-lane-store';
@@ -51,10 +51,11 @@ async function main(): Promise<void> {
     readFileSync(specsPath, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as LaneSpec);
 
   const lanes = Array.from({ length: Number(arg('lanes') ?? 3) }, (_, i) => `trinity-lane-${i + 1}`);
+  const db = poolDb(getPgPool() as never);
   const report = await runLanes({
-    db: poolDb(getPgPool() as never),
+    db,
     lanes,
-    adapters: createGitAdapters({ repoDirs, workRoot, ask: (p) => t12Ask(p), allowExec: flags.allowExec, pr: ghPrClient }),
+    adapters: createGitAdapters({ repoDirs, workRoot, ask: createRoutedAsk(db), allowExec: flags.allowExec, pr: ghPrClient }),
     publishEnabled: flags.publish,
     checkEnabled: flags.allowExec,
     specs,

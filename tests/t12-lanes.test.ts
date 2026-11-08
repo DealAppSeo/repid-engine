@@ -219,6 +219,12 @@ describe('real git adapters', () => {
     if (v.outcome === 'approved') expect(v.evidence).toMatchObject({ controls: [{ control: 'the code change reverted' }] });
   }, 60_000);
 
+  it('a row with no control at all can never be approved, even if it bypassed vetting', async () => {
+    const s: LaneSpec = { ...spec('nocontrol'), verify: { runner: 'node-test', target: 'tests/nocontrol.test.mjs' } };
+    const v = await adapters().check(handle(s, 2, await makeWith(s, 1, PASS)));
+    expect(v).toMatchObject({ outcome: 'not_checked', reason: expect.stringContaining('no negative control') });
+  }, 60_000);
+
   it('a control that no longer applies is NOT_CHECKED, not a pass', async () => {
     const s = spec('stale', { verify: { runner: 'node-test', target: 'tests/stale.test.mjs', controls: [{ file: 'src/thing.mjs', find: 'not in the file', replace: 'x' }] } });
     expect(await adapters().check(handle(s, 2, await makeWith(s, 1, PASS)))).toMatchObject({ outcome: 'not_checked' });
@@ -246,13 +252,13 @@ describe('real git adapters', () => {
     const base = git(canon, 'rev-parse', 'origin/main');
     git(canon, 'checkout', '-q', '--detach', base);
     writeFileSync(join(canon, 'tests/stray.test.mjs'), PASS);
-    writeFileSync(join(canon, 'README.md'), 'tampered\n');
+    writeFileSync(join(canon, 'extra.md'), 'a new file outside the lease\n');
     git(canon, 'add', '.');
     git(canon, 'commit', '-q', '-m', 'stray');
     const commit = git(canon, 'rev-parse', 'HEAD');
     git(canon, 'checkout', '-q', 'main');
     const v = await adapters().check(handle(s, 2, { branch: 'b', commit, base, files: ['tests/stray.test.mjs'], host: null }));
-    expect(v).toMatchObject({ outcome: 'rejected', reason: expect.stringContaining('README.md') });
+    expect(v).toMatchObject({ outcome: 'rejected', reason: expect.stringContaining('extra.md') });
   }, 60_000);
 
   it('a commit this host cannot see is NOT_CHECKED, never a failed check', async () => {
@@ -754,10 +760,10 @@ describePg('durable lanes on real Postgres', () => {
       }
     }, 30_000);
 
-    it('a rate limit stops new work, costs no attempt, and still lets checks finish', async () => {
+    it('a route that never cools is bounded, and costs no attempt', async () => {
       const a = fakeAdapters({ make: async () => ({ ok: false, kind: 'rate_limited', reason: 'groq 429' }) });
       const report = await runLanes(base(a, [spec('rl')], { lanes: [L1, L2] }));
-      expect(report.paused).toContain('rate limited');
+      expect(report.paused).toContain('route retries exhausted');
       expect(a.calls.filter((c) => c.startsWith('make'))).toHaveLength(0);
       expect((await pool.query(`SELECT metadata #>> '{t12,attempts}' AS a, status FROM trinity_tasks`)).rows[0]).toEqual({ a: '0', status: 'pending' });
     }, 30_000);

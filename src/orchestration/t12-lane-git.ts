@@ -24,7 +24,7 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { T12AskResult } from './t12-attempt';
+import type { RoutedAnswer } from './t12-lane-route';
 import type { Handle, LaneSpec, Verdict } from './t12-lane-store';
 import type { LaneAdapters, MakeOutcome } from './t12-lane-runner';
 
@@ -37,7 +37,7 @@ export interface GitAdapterConfig {
   /** `owner/name` to a local clone whose `origin` is that repo. */
   repoDirs: Record<string, string>;
   workRoot: string;
-  ask: (prompt: string) => Promise<T12AskResult>;
+  ask: (prompt: string, h: Handle) => Promise<RoutedAnswer>;
   allowExec: boolean;
   pr: PrClient;
   timeoutMs?: number;
@@ -130,6 +130,17 @@ async function runVerify(dir: string, spec: LaneSpec, env: NodeJS.ProcessEnv, ti
   return { cmd: `node ${args.join(' ')}`, ...(await run(process.execPath, args, { cwd: dir, env, timeoutMs })) };
 }
 
+/** What a non-answer means to the runner. Null when the model did answer. */
+export function askFailure(answer: RoutedAnswer): Extract<MakeOutcome, { ok: false }> | null {
+  if (answer.outcome === 'no_capacity') return { ok: false, kind: 'no_capacity', until: answer.until, reason: answer.reason };
+  if (answer.outcome === 'rate_limited') return { ok: false, kind: 'rate_limited', reason: `host ${answer.host ?? 'unknown'}` };
+  if (answer.outcome === 'answered' && answer.text !== null) return null;
+  // No host tried at all means configuration, which no amount of rerouting can fix.
+  return answer.tried.length
+    ? { ok: false, kind: 'route_failed', reason: `NOT_CHECKED: tried ${answer.tried.join(', ')}` }
+    : { ok: false, kind: 'infra', reason: 'NOT_CHECKED: no free host is configured' };
+}
+
 export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
   const timeoutMs = cfg.timeoutMs ?? 5 * 60 * 1000;
 
@@ -148,12 +159,12 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
         const f = join(dir, p);
         if (existsSync(f)) context[p] = readFileSync(f, 'utf8').slice(0, MAX_CONTEXT_CHARS);
       }
-      const answer = await cfg.ask(buildMakePrompt(h.spec, context, h.lastRejection));
+      const answer = await cfg.ask(buildMakePrompt(h.spec, context, h.lastRejection), h);
       if (signal.aborted) return { ok: false, kind: 'infra', reason: 'lease lost while the model was answering' };
-      if (answer.outcome === 'rate_limited') return { ok: false, kind: 'rate_limited', reason: `host ${answer.host ?? 'unknown'}` };
-      if (answer.outcome !== 'answered' || answer.text === null) return { ok: false, kind: 'infra', reason: 'NOT_CHECKED: no free host answered' };
+      const failure = askFailure(answer);
+      if (failure) return failure;
 
-      const files = parseMakerFiles(answer.text, h.spec.paths);
+      const files = parseMakerFiles(answer.text!, h.spec.paths);
       if (!files) return { ok: false, kind: 'maker_failed', reason: 'model output was not a valid file set inside the lease' };
 
       for (const f of files) {

@@ -5,6 +5,21 @@
 
 DROP TABLE IF EXISTS trinity_tasks CASCADE;
 DROP TABLE IF EXISTS trinity_changelog CASCADE;
+DROP TABLE IF EXISTS agent_resource_claims CASCADE;
+
+CREATE TABLE agent_resource_claims (
+  id bigserial PRIMARY KEY,
+  resource_kind text NOT NULL CHECK (resource_kind = ANY (ARRAY['repo','git_branch','supabase_table','supabase_migration','railway_service','env_var','other'])),
+  resource_id text NOT NULL,
+  claimed_by text NOT NULL,
+  session_id text,
+  purpose text NOT NULL,
+  claimed_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  released_at timestamptz,
+  CONSTRAINT claim_expires_after_it_starts CHECK (expires_at > claimed_at)
+);
+CREATE UNIQUE INDEX uniq_active_claim ON agent_resource_claims (resource_kind, resource_id) WHERE released_at IS NULL;
 
 CREATE TABLE trinity_changelog (
   id bigserial PRIMARY KEY, change_date timestamptz, change_type text, description text, changed_by text

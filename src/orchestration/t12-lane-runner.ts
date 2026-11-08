@@ -8,7 +8,7 @@
  * is set, or at `maxSteps`. It does not schedule itself; arming a schedule is an owner decision.
  */
 import {
-  claimMake, claimStage, heartbeat, recordIntegration, recordVerdict, recoverStages, releaseMake, replenish, submit,
+  claimMake, claimStage, heartbeat, recordIntegration, recordVerdict, recoverStages, releaseMake, replenish, submit, waitForCapacity,
   type Handle, type LaneSpec, type ReplenishReport, type Submission, type TxDb, type Verdict,
 } from './t12-lane-store';
 import { HEARTBEAT_TTL_MS } from './write-lease';
@@ -24,7 +24,8 @@ export function laneFlags(): { enabled: boolean; allowExec: boolean; publish: bo
 
 export type MakeOutcome =
   | { ok: true; submission: Submission }
-  | { ok: false; kind: 'rate_limited' | 'infra' | 'maker_failed'; reason: string };
+  | { ok: false; kind: 'rate_limited' | 'route_failed' | 'infra' | 'maker_failed'; reason: string }
+  | { ok: false; kind: 'no_capacity'; until: string; reason: string };
 
 export interface LaneAdapters {
   make(h: Handle, signal: AbortSignal): Promise<MakeOutcome>;
@@ -57,6 +58,7 @@ export interface RunReport {
   rejected: number;
   notChecked: number;
   integrated: number;
+  waiting: number;
   fenceRefused: string[];
   errors: string[];
   paused: string | null;
@@ -66,17 +68,20 @@ export interface RunReport {
 
 type Did = 'worked' | 'idle';
 const MAX_ERRORS = 10;
+/** A route that keeps failing without cooling would otherwise loop. Real routes cool, so this is the backstop. */
+const MAX_ROUTE_RETRIES = 12;
 
 export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
   const log = o.log ?? (() => {});
   const report: RunReport = {
-    made: 0, approved: 0, rejected: 0, notChecked: 0, integrated: 0, fenceRefused: [], errors: [], paused: null, replenish: null, stoppedBy: 'idle',
+    made: 0, approved: 0, rejected: 0, notChecked: 0, integrated: 0, waiting: 0, fenceRefused: [], errors: [], paused: null, replenish: null, stoppedBy: 'idle',
   };
   const maxSteps = o.maxSteps ?? 200;
   let steps = 0;
   // A check that could not run says nothing about the work. Retrying at once would only burn the
   // task's not-checked allowance on one outage, so checks wait for the next run.
   let checksHeld = false;
+  let routeRetries = 0;
 
   const refused = (where: string, reason: string) => {
     report.fenceRefused.push(`${where}: ${reason}`);
@@ -110,8 +115,20 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
         else refused(`submit ${h.taskId}`, r.reason);
         return;
       }
-      // Without this, a dead host loops straight back to the same row.
-      if (out.kind !== 'maker_failed') report.paused = `${out.kind === 'rate_limited' ? 'rate limited' : 'infra'}: ${out.reason}`;
+      if (out.kind === 'no_capacity') {
+        const w = await waitForCapacity(o.db, h, out.until, out.reason);
+        if (w.ok) report.waiting++;
+        else refused(`wait ${h.taskId}`, w.reason);
+        // Stops new makes only. Checks and publishes need no model and carry on.
+        report.paused = `WAITING_FOR_CAPACITY until ${out.until}`;
+        return;
+      }
+      // Without this, a broken host-independent fault loops straight back to the same row.
+      if (out.kind === 'infra') report.paused = `infra: ${out.reason}`;
+      // A rate limit is not a reason to stop: the route has cooled, so the next claim goes elsewhere.
+      if ((out.kind === 'rate_limited' || out.kind === 'route_failed') && ++routeRetries >= MAX_ROUTE_RETRIES) {
+        report.paused = `route retries exhausted: ${out.reason}`;
+      }
       const r = await releaseMake(o.db, h, out.reason, out.kind !== 'maker_failed');
       if (!r.ok) refused(`release ${h.taskId}`, r.reason);
     } finally {
