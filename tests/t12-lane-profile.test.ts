@@ -83,6 +83,9 @@ describePg('the restricted database role, attacked', () => {
     u.pathname = `/${DB}`;
     admin = new Pool({ connectionString: u.toString() });
     await admin.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
+    // The migration must strip a same-named role that already holds more than it should.
+    await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_lane_worker') THEN CREATE ROLE t12_lane_worker LOGIN; END IF; END $$`);
+    await admin.query('ALTER ROLE t12_lane_worker SUPERUSER BYPASSRLS CREATEDB CREATEROLE');
     await admin.query(readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8'));
     u.username = 't12_lane_worker';
     workerUrl = u.toString();

@@ -12,6 +12,9 @@ BEGIN
   END IF;
 END $$;
 
+-- A role of this name may already exist with more power; IF NOT EXISTS would keep it.
+ALTER ROLE t12_lane_worker LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+
 GRANT USAGE ON SCHEMA public TO t12_lane_worker;
 
 GRANT SELECT, INSERT, UPDATE ON public.trinity_tasks TO t12_lane_worker;
