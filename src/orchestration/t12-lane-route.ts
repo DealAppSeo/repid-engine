@@ -25,6 +25,8 @@ import { coolProvider, coolingProviders, recordRouteAttempt, type Handle, type T
 /** Least-contended first: all twelve fleet agents share the Groq key, so it goes last. */
 export const T12_LANE_ROUTE_ORDER = ['nvidia', 'openrouter', 'cerebras', 'groq'] as const;
 export const MAX_HOSTS_PER_ASK = 2;
+/** A code answer takes longer than the default wave's one-word check. Bounded per host. */
+export const LANE_ASK_TIMEOUT_MS = 60_000;
 
 export const COOLDOWN_SECONDS = {
   /** A 429 with no Retry-After. */
@@ -71,7 +73,7 @@ export function createRoutedAsk(
     return t12Ask(prompt, {
       env,
       fetchImpl: options.fetchImpl,
-      timeoutMs: options.timeoutMs,
+      timeoutMs: options.timeoutMs ?? LANE_ASK_TIMEOUT_MS,
       order: open.slice(0, MAX_HOSTS_PER_ASK),
       onAttempt: async (a) => {
         const seconds = cooldownFor(a);

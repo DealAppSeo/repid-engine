@@ -52,7 +52,10 @@ describe('the free-only route table', () => {
   it('OpenRouter is a free id with a zero price cap, so a paid model is refused rather than billed', () => {
     const t = t12Target('openrouter', ALL_KEYS)!;
     expect(t.model).toMatch(/:free$/);
-    expect(t.body).toEqual({ provider: { max_price: { prompt: 0, completion: 0 } } });
+    expect(t.body).toMatchObject({ provider: { max_price: { prompt: 0, completion: 0 } } });
+  });
+  it('every route bounds its output, so one answer cannot take a whole shared token budget', () => {
+    for (const host of Object.keys(T12_ROUTES)) expect(T12_ROUTES[host]!.body).toMatchObject({ max_tokens: expect.any(Number) });
   });
   it('does not route the Cerebras model that is archived', () => {
     expect(t12Target('cerebras', ALL_KEYS)!.model).not.toBe('zai-glm-4.7');

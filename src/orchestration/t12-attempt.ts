@@ -60,21 +60,29 @@ interface T12Route {
 }
 
 /**
+ * Reasoning models spend their whole output budget thinking unless told not to: measured 2026-11-08,
+ * gpt-oss-20b stopped at length with no content, and took 2048 tokens of a limit the whole Groq
+ * organization shares. Low effort returned a valid answer in 702.
+ */
+const BOUNDED = { max_tokens: 3000 };
+const BOUNDED_LOW_EFFORT = { ...BOUNDED, reasoning_effort: 'low' };
+
+/**
  * The only cloud routes T12 can reach, each measured answering on 2026-11-08 (t12-lane-route.ts).
  * Adding a provider means adding it here, so a key being present never makes a host eligible.
  * A model id here used to come from WORKING_FREE_PROVIDERS, whose Cerebras entry is archived (404).
  */
 export const T12_ROUTES: Readonly<Record<string, T12Route>> = {
-  groq: { url: PROVIDER_URLS.groqChatCompletions, keyEnv: ['GROQ_API_KEY'], model: 'openai/gpt-oss-20b' },
-  cerebras: { url: PROVIDER_URLS.cerebrasChatCompletions, keyEnv: ['CEREBRAS_API_KEY'], model: 'gpt-oss-120b' },
-  nvidia: { url: PROVIDER_URLS.nvidiaNimChatCompletions, keyEnv: ['NVIDIA_API_KEY', 'NVIDIA_NIM_API_KEY'], model: 'poolside/laguna-xs-2.1' },
+  groq: { url: PROVIDER_URLS.groqChatCompletions, keyEnv: ['GROQ_API_KEY'], model: 'openai/gpt-oss-20b', body: BOUNDED_LOW_EFFORT },
+  cerebras: { url: PROVIDER_URLS.cerebrasChatCompletions, keyEnv: ['CEREBRAS_API_KEY'], model: 'gpt-oss-120b', body: BOUNDED_LOW_EFFORT },
+  nvidia: { url: PROVIDER_URLS.nvidiaNimChatCompletions, keyEnv: ['NVIDIA_API_KEY', 'NVIDIA_NIM_API_KEY'], model: 'poolside/laguna-xs-2.1', body: BOUNDED },
   // This account holds paid credit, so a free id alone is not enough: the price cap makes OpenRouter
   // refuse rather than bill if the free route ever changes.
   openrouter: {
     url: PROVIDER_URLS.openrouterChatCompletions,
     keyEnv: ['OPENROUTER_API_KEY'],
-    model: 'nvidia/nemotron-3.5-lightning:free',
-    body: { provider: { max_price: { prompt: 0, completion: 0 } } },
+    model: 'cohere/north-mini-code:free',
+    body: { ...BOUNDED, response_format: { type: 'json_object' }, provider: { max_price: { prompt: 0, completion: 0 } } },
   },
 };
 
