@@ -7,16 +7,19 @@
  * Off unless T12_LANES_ENABLED is exactly `true`. Model calls also need T12_FREE_WAVE exactly `true`.
  * T12_LANES_ALLOW_EXEC runs model-written code in the checker: set it only on an ephemeral runner
  * with no secrets. T12_LANES_PUBLISH pushes branches and opens draft PRs. Each is off when unset.
+ * A worker refuses to start with a signing, finance or admin credential in its environment, or on a
+ * database role that bypasses row security. T12_LANES_ALLOW_PRIVILEGED_DB is for throwaway databases.
  *
  * Exit: 0 ran, 2 NOT_CHECKED (not armed, or a bad argument), 1 failed.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { db as supabase } from '../../src/db';
-import { getPgPool } from '../../src/db/direct-pg';
+import { Pool } from 'pg';
+import { assertLocalDataStore } from '../../src/selfhost/egress-guard';
 import { createRoutedAsk } from '../../src/orchestration/t12-lane-route';
 import { createGitAdapters, ghPrClient } from '../../src/orchestration/t12-lane-git';
 import { laneFlags, runLanes } from '../../src/orchestration/t12-lane-runner';
-import { poolDb, type LaneSpec } from '../../src/orchestration/t12-lane-store';
+import { dbPrivilege, privilegedEnvPresent } from '../../src/orchestration/t12-lane-profile';
+import { pgHaltClient, poolDb, type LaneSpec } from '../../src/orchestration/t12-lane-store';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -35,6 +38,8 @@ function notChecked(why: string): never {
 async function main(): Promise<void> {
   const flags = laneFlags();
   if (!flags.enabled) notChecked('T12_LANES_ENABLED is not exactly true; nothing was claimed.');
+  const forbidden = privilegedEnvPresent(process.env, flags.publish ? 'integrator' : 'worker');
+  if (forbidden.length) notChecked(`refusing to start with privileged credentials in the environment: ${forbidden.join(', ')}`);
   const specsPath = arg('specs');
   const workRoot = arg('work-root');
   if (!specsPath || !existsSync(specsPath)) notChecked('--specs must name a JSONL file of lane specs.');
@@ -51,11 +56,21 @@ async function main(): Promise<void> {
   const specs = (): LaneSpec[] =>
     readFileSync(specsPath, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as LaneSpec);
 
-  const lanes = Array.from({ length: Number(arg('lanes') ?? 3) }, (_, i) => `trinity-lane-${i + 1}`);
-  const db = poolDb(getPgPool() as never);
+  const one = arg('lane-name');
+  const lanes = one ? [one] : Array.from({ length: Number(arg('lanes') ?? 3) }, (_, i) => `trinity-lane-${i + 1}`);
+  const wake = arg('wake') === 'scheduled' ? ('scheduled' as const) : ('human_prompt' as const);
+  // Not direct-pg: it loads the operator pager, and so the whole engine config, which demands a
+  // service key this worker must not hold. Same data-locality guard, its own bounded pool.
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) notChecked('DATABASE_URL is not set.');
+  assertLocalDataStore(connectionString, 'DATABASE_URL');
+  const db = poolDb(new Pool({ connectionString, max: lanes.length + 3, connectionTimeoutMillis: 10_000, statement_timeout: 30_000, query_timeout: 30_000 }) as never);
+  const role = await dbPrivilege(db);
+  if (role.privileged && !flags.allowPrivilegedDb) notChecked(`database role ${role.name} can bypass row security; a worker must use the restricted role`);
   const report = await runLanes({
     db,
-    haltClient: supabase,
+    haltClient: pgHaltClient(db) as never,
+    wake,
     lanes,
     adapters: createGitAdapters({ repoDirs, workRoot, ask: createRoutedAsk(db), allowExec: flags.allowExec, pr: ghPrClient }),
     publishEnabled: flags.publish,

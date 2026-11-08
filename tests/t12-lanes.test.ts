@@ -39,7 +39,7 @@ const TRANSCRIPT = 'node --test tests/x.test.mjs exited 0; without the deliverab
 const approve = (h: Handle): Verdict => ({ outcome: 'approved', commit: h.submission!.commit, transcript: TRANSCRIPT, evidence: { exit: 0 } });
 
 describe('decision receipts', () => {
-  const r: Omit<DecisionReceipt, 'seq' | 'prev' | 'hash'> = { at: 't', actor: 'a', event: 'e', from: 'x', to: 'y', epoch: 1, reason: 'r', evidence: { b: 1, a: 2 } };
+  const r: Omit<DecisionReceipt, 'seq' | 'prev' | 'hash'> = { at: 't', actor: 'a', origin: 'autonomous', event: 'e', from: 'x', to: 'y', epoch: 1, reason: 'r', evidence: { b: 1, a: 2 } };
   const chain = appendReceipt(appendReceipt([], r), { ...r, event: 'f' });
 
   it('verifies an intact chain', () => expect(verifyReceipts(chain)).toEqual({ ok: true }));
@@ -344,7 +344,7 @@ describePg('durable lanes on real Postgres', () => {
     await pool.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
   });
   afterAll(async () => pool.end());
-  beforeEach(async () => pool.query('TRUNCATE trinity_tasks RESTART IDENTITY'));
+  beforeEach(async () => pool.query('TRUNCATE trinity_tasks RESTART IDENTITY; TRUNCATE agent_resource_claims RESTART IDENTITY'));
 
   const seed = (...specs: LaneSpec[]) => replenish(db, specs, specs.length);
   const row = async (id: number) => (await pool.query('SELECT * FROM trinity_tasks WHERE id = $1', [id])).rows[0];

@@ -116,10 +116,14 @@ export interface Submission {
   host: string | null;
 }
 
+/** Why this decision happened: a person asked, a schedule fired, the system chose, or it was repairing itself. */
+export type ReceiptOrigin = 'human_prompt' | 'scheduled' | 'autonomous' | 'recovery';
+
 export interface DecisionReceipt {
   seq: number;
   at: string;
   actor: string;
+  origin: ReceiptOrigin;
   event: string;
   from: string;
   to: string;
@@ -340,13 +344,13 @@ function fenceProblem(row: Row | undefined, h: Handle, status: string, stage: St
   return null;
 }
 
-function step(row: Row, s: LaneState, actor: string, event: string, to: Stage, reason: string, evidence: unknown = null): LaneState {
-  return { ...s, stage: to, receipts: appendReceipt(s.receipts, { at: row.db_now, actor, event, from: s.stage, to, epoch: s.epoch, reason, evidence }) };
+function step(row: Row, s: LaneState, actor: string, event: string, to: Stage, reason: string, evidence: unknown = null, origin: ReceiptOrigin = 'autonomous'): LaneState {
+  return { ...s, stage: to, receipts: appendReceipt(s.receipts, { at: row.db_now, actor, origin, event, from: s.stage, to, epoch: s.epoch, reason, evidence }) };
 }
 
 /** The cron frees a lease without writing a receipt, so the next reader of the row records it. */
 function noteReap(row: Row, s: LaneState): LaneState {
-  return s.stage === 'making' ? step(row, s, 'trinity_reap_expired_claims', 'lease_reaped', 'ready', 'the previous maker lost its lease') : s;
+  return s.stage === 'making' ? step(row, s, 'trinity_reap_expired_claims', 'lease_reaped', 'ready', 'the previous maker lost its lease', null, 'recovery') : s;
 }
 
 async function fenced(
@@ -366,7 +370,7 @@ async function fenced(
 }
 
 /** Take the next task whose paths are free. One lane at a time holds the advisory lock while deciding. */
-export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: number } = {}): Promise<ClaimResult> {
+export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: number; origin?: ReceiptOrigin } = {}): Promise<ClaimResult> {
   assertActor(lane);
   const cap = opts.dailyCap ?? DAILY_CLAIM_CAP;
   return db.tx(async (c): Promise<ClaimResult> => {
@@ -390,7 +394,7 @@ export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: numbe
     );
     for (const row of spent as Row[]) {
       const reason = `claim limit of ${MAX_TASK_CLAIMS} reached without a checked result`;
-      await persist(c, row.id, step(row, noteReap(row, stateOf(row)), 'claimMake', 'claim_limit', 'not_checked', reason), {
+      await persist(c, row.id, step(row, noteReap(row, stateOf(row)), 'claimMake', 'claim_limit', 'not_checked', reason, null, 'recovery'), {
         status: 'not_checked', claimedBy: null, columns: { stuck_reason: reason },
       });
     }
@@ -417,7 +421,7 @@ export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: numbe
 
     let s = noteReap(pick.row, stateOf(pick.row));
     s = { ...s, epoch: s.epoch + 1, notBefore: undefined };
-    s = step(pick.row, s, lane, 'claimed', 'making', `attempt ${s.attempts + 1}`);
+    s = step(pick.row, s, lane, 'claimed', 'making', `attempt ${s.attempts + 1}`, null, opts.origin ?? 'autonomous');
     await persist(c, pick.row.id, s, { status: 'claimed', claimedBy: lane, leaseSeconds: LEASE_SECONDS, newClaim: true });
     return {
       kind: 'claimed',
@@ -494,6 +498,53 @@ export async function coolProvider(db: SqlRunner, host: string, seconds: number,
   return rows[0].until;
 }
 
+const WAKE_PREFIX = 'lane_wake:';
+
+/**
+ * Take the single live run slot for this lane. A second wake of the same lane, from a double-fired
+ * schedule or a manual run, gets false and leaves. A crashed holder's slot opens when it expires.
+ */
+export async function acquireWake(db: SqlRunner, lane: string, wakeId: string, ttlSeconds: number): Promise<boolean> {
+  const { rows } = await db.query(
+    `INSERT INTO agent_resource_claims (resource_kind, resource_id, claimed_by, session_id, purpose, expires_at)
+     VALUES ('other', $1, 'trinity-lane-router', $2, 'lane run', now() + make_interval(secs => $3::int))
+     ON CONFLICT (resource_kind, resource_id) WHERE released_at IS NULL
+     DO UPDATE SET session_id = EXCLUDED.session_id, expires_at = EXCLUDED.expires_at
+       WHERE agent_resource_claims.expires_at < now() OR agent_resource_claims.session_id = EXCLUDED.session_id
+     RETURNING session_id`,
+    [WAKE_PREFIX + lane, wakeId, ttlSeconds],
+  );
+  return rows.length === 1;
+}
+
+export async function releaseWake(db: SqlRunner, lane: string, wakeId: string): Promise<void> {
+  await db.query(
+    `UPDATE agent_resource_claims SET released_at = now()
+      WHERE resource_kind = 'other' AND resource_id = $1 AND session_id = $2 AND released_at IS NULL`,
+    [WAKE_PREFIX + lane, wakeId],
+  );
+}
+
+/** The emergency halt read over the worker's own connection, so a worker needs no service key. */
+export function pgHaltClient(db: SqlRunner): { from: (table: string) => any } {
+  return {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => {
+            try {
+              const { rows } = await db.query('SELECT emergency_halt FROM trinity_system_config WHERE id = 1');
+              return { data: rows[0] ?? null, error: null };
+            } catch (e) {
+              return { data: null, error: { message: e instanceof Error ? e.message : String(e) } };
+            }
+          },
+        }),
+      }),
+    }),
+  };
+}
+
 /** Hosts cooling right now, with the time each comes back. */
 export async function coolingProviders(db: SqlRunner): Promise<Map<string, string>> {
   const { rows } = await db.query(
@@ -519,7 +570,7 @@ export async function recordRouteAttempt(
 }
 
 /** Claim a post-make stage. Checking can never be taken by the lane that produced the work. */
-export async function claimStage(db: TxDb, stage: 'awaiting_check' | 'approved', actor: string): Promise<Handle | null> {
+export async function claimStage(db: TxDb, stage: 'awaiting_check' | 'approved', actor: string, origin: ReceiptOrigin = 'autonomous'): Promise<Handle | null> {
   assertActor(actor);
   return db.tx(async (c) => {
     const { rows } = await c.query(
@@ -535,7 +586,7 @@ export async function claimStage(db: TxDb, stage: 'awaiting_check' | 'approved',
     if (!row) return null;
     let s = stateOf(row);
     s = { ...s, epoch: s.epoch + 1 };
-    s = step(row, s, actor, 'stage_claimed', stage === 'approved' ? 'integrating' : 'checking', stage);
+    s = step(row, s, actor, 'stage_claimed', stage === 'approved' ? 'integrating' : 'checking', stage, null, origin);
     await persist(c, row.id, s, { status: 'pending_validation', claimedBy: actor, newClaim: true });
     return { taskId: Number(row.id), actor, epoch: s.epoch, spec: s.spec, attempts: s.attempts, submission: s.submission };
   });
@@ -554,7 +605,7 @@ export async function recoverStages(db: TxDb, ttlSeconds: number = STAGE_TTL_SEC
     for (const row of rows as Row[]) {
       const s = stateOf(row);
       const to: Stage = s.stage === 'integrating' ? 'approved' : 'awaiting_check';
-      const next = step(row, s, 'recoverStages', 'stage_lease_expired', to, `${row.claimed_by} went silent`);
+      const next = step(row, s, 'recoverStages', 'stage_lease_expired', to, `${row.claimed_by} went silent`, null, 'recovery');
       await persist(c, row.id, next, { status: 'pending_validation', claimedBy: null });
     }
     return rows.length;
@@ -648,7 +699,7 @@ export async function replenish(db: TxDb, specs: readonly LaneSpec[], target: nu
       if (seen.has(spec.id) || eligible >= target) continue;
       const state: LaneState = {
         spec, stage: 'ready', epoch: 0, attempts: 0, notChecked: 0,
-        receipts: appendReceipt([], { at: nowRow[0].db_now, actor: 'replenish', event: 'enqueued', from: 'none', to: 'ready', epoch: 0, reason: 'vetted spec', evidence: null }),
+        receipts: appendReceipt([], { at: nowRow[0].db_now, actor: 'replenish', origin: 'autonomous', event: 'enqueued', from: 'none', to: 'ready', epoch: 0, reason: 'vetted spec', evidence: null }),
       };
       await c.query(
         `INSERT INTO trinity_tasks (title, description, task_type, task_category, status, assigned_to, priority, insert_source, metadata)

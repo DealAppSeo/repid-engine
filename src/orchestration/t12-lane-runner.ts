@@ -8,16 +8,18 @@
  * is set, or at `maxSteps`. It does not schedule itself; arming a schedule is an owner decision.
  */
 import {
-  claimMake, claimStage, heartbeat, recordIntegration, recordVerdict, recoverStages, releaseMake, replenish, submit, waitForCapacity,
-  type Handle, type LaneSpec, type ReplenishReport, type Submission, type TxDb, type Verdict,
+  acquireWake, claimMake, claimStage, heartbeat, recordIntegration, recordVerdict, recoverStages, releaseMake, releaseWake, replenish, submit, waitForCapacity,
+  type Handle, type ReceiptOrigin, type LaneSpec, type ReplenishReport, type Submission, type TxDb, type Verdict,
 } from './t12-lane-store';
+import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { shouldParkForHalt } from '../services/emergency-halt';
 import { HEARTBEAT_TTL_MS } from './write-lease';
 
 /** Read in one place so a flag cannot be spelled two ways. Each is off unless exactly `true`. */
-export function laneFlags(): { enabled: boolean; allowExec: boolean; publish: boolean } {
+export function laneFlags(): { enabled: boolean; allowExec: boolean; publish: boolean; allowPrivilegedDb: boolean } {
   return {
+    allowPrivilegedDb: process.env.T12_LANES_ALLOW_PRIVILEGED_DB === 'true',
     enabled: process.env.T12_LANES_ENABLED === 'true',
     allowExec: process.env.T12_LANES_ALLOW_EXEC === 'true',
     publish: process.env.T12_LANES_PUBLISH === 'true',
@@ -40,6 +42,8 @@ export interface RunLanesOptions {
   db: TxDb;
   /** Reads the global emergency halt, which every lane obeys before taking any step. */
   haltClient: Pick<SupabaseClient, 'from'>;
+  /** What started this run. The first decision each lane makes is attributed to it. */
+  wake?: Extract<ReceiptOrigin, 'human_prompt' | 'scheduled'>;
   lanes: readonly string[];
   adapters: LaneAdapters;
   /** Without this, verified work waits at `approved` and nothing is published. */
@@ -64,6 +68,7 @@ export interface RunReport {
   integrated: number;
   waiting: number;
   fenceRefused: string[];
+  duplicateWakes: string[];
   errors: string[];
   paused: string | null;
   replenish: ReplenishReport | null;
@@ -74,11 +79,13 @@ type Did = 'worked' | 'idle';
 const MAX_ERRORS = 10;
 /** A route that keeps failing without cooling would otherwise loop. Real routes cool, so this is the backstop. */
 const MAX_ROUTE_RETRIES = 12;
+const WAKE_TTL_SECONDS = 180;
+const WAKE_RENEW_MS = 60_000;
 
 export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
   const log = o.log ?? (() => {});
   const report: RunReport = {
-    made: 0, approved: 0, rejected: 0, notChecked: 0, integrated: 0, waiting: 0, fenceRefused: [], errors: [], paused: null, replenish: null, stoppedBy: 'idle',
+    made: 0, approved: 0, rejected: 0, notChecked: 0, integrated: 0, waiting: 0, fenceRefused: [], duplicateWakes: [], errors: [], paused: null, replenish: null, stoppedBy: 'idle',
   };
   const maxSteps = o.maxSteps ?? 200;
   let steps = 0;
@@ -86,6 +93,11 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
   // task's not-checked allowance on one outage, so checks wait for the next run.
   let checksHeld = false;
   let routeRetries = 0;
+  const wakeId = randomUUID();
+  const wake = o.wake ?? 'human_prompt';
+  const firstStepDone = new Set<string>();
+  /** The wake gets credit for each lane's first decision. Everything after, the lane chose itself. */
+  const originFor = (lane: string): ReceiptOrigin => (firstStepDone.has(lane) ? 'autonomous' : wake);
 
   const refused = (where: string, reason: string) => {
     report.fenceRefused.push(`${where}: ${reason}`);
@@ -168,20 +180,20 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
   async function step(lane: string): Promise<Did> {
     await recoverStages(o.db);
     if (o.publishEnabled) {
-      const h = await claimStage(o.db, 'approved', lane);
+      const h = await claimStage(o.db, 'approved', lane, originFor(lane));
       if (h) {
         // A publish failure leaves the claim to recoverStages, so it retries instead of stranding.
         await integrateOne(h).catch((e) => log(`publish failed for ${h.taskId}: ${String(e)}`));
         return 'worked';
       }
     }
-    const check = o.checkEnabled === false || checksHeld ? null : await claimStage(o.db, 'awaiting_check', lane);
+    const check = o.checkEnabled === false || checksHeld ? null : await claimStage(o.db, 'awaiting_check', lane, originFor(lane));
     if (check) {
       await checkOne(check);
       return 'worked';
     }
     if (report.paused) return 'idle';
-    const claim = await claimMake(o.db, lane, { dailyCap: o.dailyCap });
+    const claim = await claimMake(o.db, lane, { dailyCap: o.dailyCap, origin: originFor(lane) });
     if (claim.kind === 'paused') {
       report.paused = claim.reason;
       return 'idle';
@@ -199,6 +211,12 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
   let busy = 0;
 
   async function laneLoop(lane: string): Promise<void> {
+    if (!(await acquireWake(o.db, lane, wakeId, WAKE_TTL_SECONDS))) {
+      report.duplicateWakes.push(lane);
+      log(`lane ${lane} is already running; this wake leaves`);
+      return;
+    }
+    held.add(lane);
     let seen = -1;
     for (;;) {
       if (o.stop?.()) {
@@ -216,6 +234,7 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
       busy++;
       try {
         if ((await step(lane)) === 'worked') {
+          firstStepDone.add(lane);
           steps++;
           progress++;
           continue;
@@ -247,6 +266,20 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
     }
   }
 
-  await Promise.all(o.lanes.map(laneLoop));
+  // One timer keeps every held wake alive through long model calls and checks. It also notices a
+  // halt, so a long step ending finds it already recorded.
+  const held = new Set<string>();
+  let haltSeen = false;
+  const renew = setInterval(() => {
+    for (const lane of held) void acquireWake(o.db, lane, wakeId, WAKE_TTL_SECONDS).catch(() => undefined);
+    void shouldParkForHalt(o.haltClient, 'T12LanesRenew').then((h) => { haltSeen = h; }, () => undefined);
+  }, WAKE_RENEW_MS);
+  try {
+    await Promise.all(o.lanes.map(laneLoop));
+  } finally {
+    clearInterval(renew);
+    await Promise.all([...held].map((lane) => releaseWake(o.db, lane, wakeId).catch(() => undefined)));
+  }
+  if (haltSeen && report.stoppedBy === 'idle') report.stoppedBy = 'emergency_halt';
   return report;
 }

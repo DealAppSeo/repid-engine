@@ -6,6 +6,14 @@
 DROP TABLE IF EXISTS trinity_tasks CASCADE;
 DROP TABLE IF EXISTS trinity_changelog CASCADE;
 DROP TABLE IF EXISTS agent_resource_claims CASCADE;
+DROP TABLE IF EXISTS trinity_system_config CASCADE;
+DROP TABLE IF EXISTS repid_agents CASCADE;
+
+CREATE TABLE trinity_system_config (id integer PRIMARY KEY, emergency_halt boolean NOT NULL DEFAULT false);
+INSERT INTO trinity_system_config (id, emergency_halt) VALUES (1, false);
+-- Present only so a test can prove the restricted worker role cannot read it.
+CREATE TABLE repid_agents (id serial PRIMARY KEY, agent_name text, current_repid integer);
+INSERT INTO repid_agents (agent_name, current_repid) VALUES ('trinity-orch', 1000);
 
 CREATE TABLE agent_resource_claims (
   id bigserial PRIMARY KEY,
