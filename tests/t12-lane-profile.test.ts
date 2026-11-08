@@ -116,6 +116,9 @@ describePg('the restricted database role, attacked', () => {
     await admin.query('CREATE OR REPLACE FUNCTION public.t12_probe_open() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$');
     await admin.query('CREATE OR REPLACE FUNCTION public.t12_probe_closed() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$');
     await admin.query('REVOKE ALL ON FUNCTION public.t12_probe_closed() FROM PUBLIC, anon');
+    // Holds no grant of its own, so anything it can call, it reaches only through PUBLIC.
+    await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_public_only') THEN CREATE ROLE t12_public_only NOLOGIN; END IF; END $$`);
+    await admin.query('GRANT USAGE ON SCHEMA public TO t12_public_only');
     await admin.query(readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8'));
     u.username = 't12_lane_worker';
     workerUrl = u.toString();
@@ -295,10 +298,10 @@ describePg('the restricted database role, attacked', () => {
       await expect(worker.query('DELETE FROM trinity_agent_logs')).rejects.toThrow(/permission denied/);
     });
 
-    const asAnon = async (sql: string) => {
+    const asRole = async (role: string, sql: string) => {
       const c = await admin.connect();
       try {
-        await c.query('SET ROLE anon');
+        await c.query(`SET ROLE ${role}`);
         return await c.query(sql);
       } finally {
         await c.query('RESET ROLE');
@@ -309,8 +312,10 @@ describePg('the restricted database role, attacked', () => {
     it('cannot call a definer function that was open to PUBLIC, and no other role loses or gains', async () => {
       await expect(worker.query('SELECT public.t12_probe_open()')).rejects.toThrow(/permission denied/);
       await expect(worker.query('SELECT public.t12_probe_closed()')).rejects.toThrow(/permission denied/);
-      expect((await asAnon('SELECT public.t12_probe_open() AS x')).rows[0].x).toBe(1);
-      await expect(asAnon('SELECT public.t12_probe_closed()')).rejects.toThrow(/permission denied/);
+      expect((await asRole('anon', 'SELECT public.t12_probe_open() AS x')).rows[0].x).toBe(1);
+      await expect(asRole('anon', 'SELECT public.t12_probe_closed()')).rejects.toThrow(/permission denied/);
+      expect((await asRole('t12_public_only', 'SELECT public.t12_probe_open() AS x')).rows[0].x).toBe(1);
+      await expect(asRole('t12_public_only', 'SELECT public.t12_probe_closed()')).rejects.toThrow(/permission denied/);
       expect(await reachableDefiners(worker)).toEqual([]);
     });
 
