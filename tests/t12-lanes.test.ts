@@ -21,6 +21,7 @@ import {
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
 import { buildMakePrompt, createGitAdapters, parseMakerFiles, scrubbedEnv, verifyArgs, type PrClient } from '../src/orchestration/t12-lane-git';
 import { canAssign } from '../src/orchestration/lane-registry';
+import { __resetEmergencyHaltState } from '../src/services/emergency-halt';
 
 const CONTROL = [{ file: 'src/thing.mjs', find: '42', replace: '41' }];
 const spec = (id: string, over: Partial<LaneSpec> = {}): LaneSpec => ({
@@ -306,6 +307,7 @@ describe('real git adapters', () => {
   }, 60_000);
 });
 
+const notHalted = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { emergency_halt: false }, error: null }) }) }) }) } as never;
 const PG = process.env.T12_LANES_PG_URL;
 const describePg = PG ? describe : describe.skip;
 if (!PG) {
@@ -707,7 +709,7 @@ describePg('durable lanes on real Postgres', () => {
       };
     }
     const base = (adapters: LaneAdapters, specs: LaneSpec[], over = {}) => ({
-      db, lanes: [L1, L2, L3], adapters, publishEnabled: true, specs: () => specs, readyTarget: specs.length, heartbeatMs: 50, idleMs: 20, ...over,
+      db, haltClient: notHalted, lanes: [L1, L2, L3], adapters, publishEnabled: true, specs: () => specs, readyTarget: specs.length, heartbeatMs: 50, idleMs: 20, ...over,
     });
 
     it('three lanes take nine tasks all the way through, refilling on their own', async () => {
@@ -804,6 +806,17 @@ describePg('durable lanes on real Postgres', () => {
       const report = await runLanes(base(a, [spec('nocheck')], { publishEnabled: false, checkEnabled: false }));
       expect(report).toMatchObject({ made: 1, approved: 0, notChecked: 0 });
       expect(a.calls.filter((c) => c.startsWith('check'))).toEqual([]);
+    }, 30_000);
+
+    it('the emergency halt stops every lane before any work', async () => {
+      __resetEmergencyHaltState();
+      const a = fakeAdapters();
+      const halted = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { emergency_halt: true }, error: null }) }) }) }) } as never;
+      const report = await runLanes({ ...base(a, [spec('halted')]), haltClient: halted });
+      __resetEmergencyHaltState();
+      expect(report.stoppedBy).toBe('emergency_halt');
+      expect(a.calls).toEqual([]);
+      expect((await pool.query('SELECT count(*)::int AS n FROM trinity_tasks')).rows[0].n).toBe(0);
     }, 30_000);
 
     it('the stop switch halts before any work', async () => {

@@ -11,6 +11,8 @@ import {
   claimMake, claimStage, heartbeat, recordIntegration, recordVerdict, recoverStages, releaseMake, replenish, submit, waitForCapacity,
   type Handle, type LaneSpec, type ReplenishReport, type Submission, type TxDb, type Verdict,
 } from './t12-lane-store';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { shouldParkForHalt } from '../services/emergency-halt';
 import { HEARTBEAT_TTL_MS } from './write-lease';
 
 /** Read in one place so a flag cannot be spelled two ways. Each is off unless exactly `true`. */
@@ -36,6 +38,8 @@ export interface LaneAdapters {
 
 export interface RunLanesOptions {
   db: TxDb;
+  /** Reads the global emergency halt, which every lane obeys before taking any step. */
+  haltClient: Pick<SupabaseClient, 'from'>;
   lanes: readonly string[];
   adapters: LaneAdapters;
   /** Without this, verified work waits at `approved` and nothing is published. */
@@ -63,7 +67,7 @@ export interface RunReport {
   errors: string[];
   paused: string | null;
   replenish: ReplenishReport | null;
-  stoppedBy: 'idle' | 'stop_switch' | 'max_steps' | 'errors';
+  stoppedBy: 'idle' | 'stop_switch' | 'max_steps' | 'errors' | 'emergency_halt';
 }
 
 type Did = 'worked' | 'idle';
@@ -203,6 +207,10 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
       }
       if (steps >= maxSteps) {
         report.stoppedBy = 'max_steps';
+        return;
+      }
+      if (await shouldParkForHalt(o.haltClient, 'T12Lanes')) {
+        report.stoppedBy = 'emergency_halt';
         return;
       }
       busy++;

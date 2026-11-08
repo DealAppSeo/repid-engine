@@ -100,6 +100,7 @@ describe('what a non-answer means', () => {
   it('an answer is not a failure', () => expect(askFailure({ outcome: 'answered', host: 'groq', tried: ['groq'], text: 'x' })).toBeNull());
 });
 
+const notHalted = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { emergency_halt: false }, error: null }) }) }) }) } as never;
 const PG = process.env.T12_LANES_PG_URL;
 const describePg = PG ? describe : describe.skip;
 if (!PG) {
@@ -210,7 +211,7 @@ describePg('routing on real Postgres', () => {
     };
   };
   const opts = (adapters: LaneAdapters, specs: LaneSpec[], over: object = {}) => ({
-    db, lanes: [L1, L2, L3], adapters, publishEnabled: false, specs: () => specs, readyTarget: specs.length, heartbeatMs: 50, idleMs: 20, ...over,
+    db, haltClient: notHalted, lanes: [L1, L2, L3], adapters, publishEnabled: false, specs: () => specs, readyTarget: specs.length, heartbeatMs: 50, idleMs: 20, ...over,
   });
 
   it('3. every provider unavailable is a durable waiting state, and costs the task nothing', async () => {

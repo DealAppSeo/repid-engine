@@ -11,6 +11,7 @@
  * Exit: 0 ran, 2 NOT_CHECKED (not armed, or a bad argument), 1 failed.
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { db as supabase } from '../../src/db';
 import { getPgPool } from '../../src/db/direct-pg';
 import { createRoutedAsk } from '../../src/orchestration/t12-lane-route';
 import { createGitAdapters, ghPrClient } from '../../src/orchestration/t12-lane-git';
@@ -54,6 +55,7 @@ async function main(): Promise<void> {
   const db = poolDb(getPgPool() as never);
   const report = await runLanes({
     db,
+    haltClient: supabase,
     lanes,
     adapters: createGitAdapters({ repoDirs, workRoot, ask: createRoutedAsk(db), allowExec: flags.allowExec, pr: ghPrClient }),
     publishEnabled: flags.publish,
