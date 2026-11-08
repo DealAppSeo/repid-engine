@@ -284,6 +284,7 @@ describe('real git adapters', () => {
     expect(limited).toMatchObject({ ok: false, kind: 'rate_limited' });
     const dead = await adapters({ ask: async () => ({ outcome: 'NOT_CHECKED', host: null, tried: [], text: null }) }).make(handle(s, 2), new AbortController().signal);
     expect(dead).toMatchObject({ ok: false, kind: 'infra' });
+    expect(git(canon, 'branch', '--list', 't12/quiet-*')).toBe('');
   }, 60_000);
 
   it('publish is idempotent: a re-run after a crash opens no second PR', async () => {

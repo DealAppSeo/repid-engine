@@ -141,6 +141,7 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
     git(canon, 'fetch', 'origin', 'main');
     const base = git(canon, 'rev-parse', 'origin/main');
     git(canon, 'worktree', 'add', '-q', '-b', branch, dir, base);
+    let committed = false;
     try {
       const context: Record<string, string> = {};
       for (const p of h.spec.context ?? []) {
@@ -164,9 +165,11 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
       if (!git(dir, 'diff', '--cached', '--name-only')) return { ok: false, kind: 'maker_failed', reason: 'the model produced no change' };
       git(dir, '-c', 'user.name=t12-lane', '-c', 'user.email=t12-lane@users.noreply.github.com',
         'commit', '-q', '-m', `t12(${h.spec.id}): ${h.spec.title}`);
+      committed = true;
       return { ok: true, submission: { branch, commit: git(dir, 'rev-parse', 'HEAD'), base, files: files.map((f) => f.path), host: answer.host } };
     } finally {
       discard(canon, dir);
+      if (!committed) git(canon, 'branch', '-q', '-D', branch);
     }
   }
 
