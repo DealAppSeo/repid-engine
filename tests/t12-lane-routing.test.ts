@@ -120,6 +120,7 @@ describePg('routing on real Postgres', () => {
     pool = new Pool({ connectionString: PG, max: 16 });
     db = poolDb(pool as never);
     await pool.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
+    await pool.query(readFileSync(join(__dirname, '../migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8'));
   });
   afterAll(async () => pool.end());
   beforeEach(async () => pool.query('TRUNCATE trinity_tasks RESTART IDENTITY; TRUNCATE agent_resource_claims RESTART IDENTITY'));

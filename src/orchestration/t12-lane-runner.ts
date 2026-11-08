@@ -8,7 +8,7 @@
  * is set, or at `maxSteps`. It does not schedule itself; arming a schedule is an owner decision.
  */
 import {
-  acquireWake, claimMake, claimStage, heartbeat, recordIntegration, recordVerdict, recoverStages, releaseMake, releaseWake, replenish, submit, waitForCapacity,
+  acquireWake, checkoutBelt, claimMake, claimStage, heartbeat, recordIntegration, recordVerdict, recoverStages, releaseMake, releaseWake, replenish, submit, waitForCapacity,
   type Handle, type ReceiptOrigin, type LaneSpec, type ReplenishReport, type Submission, type TxDb, type Verdict,
 } from './t12-lane-store';
 import { randomUUID } from 'node:crypto';
@@ -117,7 +117,9 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
     try {
       let out: MakeOutcome;
       try {
-        out = await o.adapters.make(h, ac.signal);
+        const belt = await checkoutBelt(o.db, h);
+        if (!belt.ok) refused(`belt ${h.taskId}`, belt.reason);
+        out = belt.ok ? await o.adapters.make(h, ac.signal) : { ok: false, kind: 'maker_failed', reason: `belt denied: ${belt.reason}` };
       } catch (e) {
         out = { ok: false, kind: 'infra', reason: `maker threw: ${e instanceof Error ? e.message : String(e)}` };
       }

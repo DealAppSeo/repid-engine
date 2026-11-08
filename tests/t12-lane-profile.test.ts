@@ -8,8 +8,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client, Pool } from 'pg';
 import { dbPrivilege, privilegedEnvPresent } from '../src/orchestration/t12-lane-profile';
+import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
 import {
-  LANE_POOL, claimMake, claimStage, coolProvider, coolingProviders, poolDb, readLaneState, recordIntegration, recordVerdict, replenish, submit, type LaneSpec,
+  LANE_POOL, checkoutBelt, claimMake, claimStage, coolProvider, coolingProviders, pgHaltClient, poolDb, readLaneState, recordIntegration, recordVerdict, releaseMake, replenish, submit,
+  type Handle, type LaneSpec,
 } from '../src/orchestration/t12-lane-store';
 
 const ROOT = join(__dirname, '..');
@@ -104,7 +106,8 @@ describePg('the restricted database role, attacked', () => {
     await replenish(db, [spec('ok')], 1);
     const c = await claimMake(db, 'trinity-lane-1');
     if (c.kind !== 'claimed') throw new Error(c.reason);
-    await submit(db, c.handle, { branch: 'b', commit: 'c1', base: 'b0', files: c.handle.spec.paths, host: 'nvidia' });
+    expect(await checkoutBelt(db, c.handle)).toMatchObject({ ok: true, belt: 'engineering' });
+    expect(await submit(db, c.handle, { branch: 'b', commit: 'c1', base: 'b0', files: c.handle.spec.paths, host: 'nvidia' })).toEqual({ ok: true });
     const v = (await claimStage(db, 'awaiting_check', 'trinity-lane-2'))!;
     await recordVerdict(db, v, { outcome: 'approved', commit: 'c1', transcript: 'node --test exited 0 and each control exited 1 as it should.', evidence: {} });
     const i = (await claimStage(db, 'approved', 'trinity-lane-3'))!;
@@ -137,6 +140,169 @@ describePg('the restricted database role, attacked', () => {
 
   it('cannot forge a claim row for anything but its own two namespaces', async () => {
     await expect(worker.query(`INSERT INTO agent_resource_claims (resource_kind, resource_id, claimed_by, purpose, expires_at) VALUES ('repo', 'x', 'y', 'z', now() + interval '1 hour')`)).rejects.toThrow(/row-level security/);
+  });
+
+  describe('a task-bound belt, attacked on the real write path', () => {
+    const db = () => poolDb(worker as never);
+    let n = 0;
+    async function claimed(extra: Partial<LaneSpec> = {}): Promise<Handle> {
+      const id = `belt-${++n}`;
+      await replenish(db(), [{ ...spec(id), ...extra }], 1);
+      const c = await claimMake(db(), 'trinity-lane-1');
+      if (c.kind !== 'claimed' || c.handle.spec.id !== id) throw new Error(`did not claim ${id}`);
+      return c.handle;
+    }
+    const work = (h: Handle, files = h.spec.paths) => ({ branch: 'b', commit: 'c1', base: 'b0', files, host: 'nvidia' });
+    const denials = async (h: Handle) => (await admin.query(`SELECT message FROM trinity_agent_logs WHERE task_id = $1 AND action = 'belt_denied'`, [h.taskId])).rows.map((r) => r.message);
+    const events = async (h: Handle) => (await readLaneState(worker, h.taskId)).state.receipts.map((r) => r.event);
+    const stage = async (h: Handle) => (await readLaneState(worker, h.taskId)).state.stage;
+    const key = (h: Handle) => `t12:${h.taskId}:${h.epoch}`;
+    const rawSubmit = (h: Handle, files: string[]) => worker.query(
+      `UPDATE trinity_tasks SET metadata = jsonb_set(jsonb_set(metadata, '{t12,submission}', $2::jsonb), '{t12,stage}', '"awaiting_check"') WHERE id = $1`,
+      [h.taskId, JSON.stringify(work(h, files))],
+    );
+
+    it('a checked-out belt allows exactly that submission, as a positive control', async () => {
+      const h = await claimed();
+      expect(await checkoutBelt(db(), h)).toMatchObject({ ok: true, belt: 'engineering' });
+      expect(await submit(db(), h, work(h))).toEqual({ ok: true });
+      expect(await stage(h)).toBe('awaiting_check');
+      const grant = (await admin.query('SELECT * FROM principal_grants WHERE idempotency_key = $1', [key(h)])).rows[0];
+      expect(grant).toMatchObject({ grantor_agent_id: 't12-belt-issuer', grantee_agent_id: 'trinity-lane-1', grant_class: 'cold', role: 'engineering' });
+      expect(await events(h)).toContain('belt_checked_out');
+    });
+
+    it('refuses a submission with no belt, and nothing lands on the row', async () => {
+      const h = await claimed();
+      await expect(rawSubmit(h, h.spec.paths)).rejects.toThrow(/row-level security/);
+      expect((await readLaneState(worker, h.taskId)).state.submission).toBeUndefined();
+      expect(await stage(h)).toBe('making');
+    });
+
+    it('refuses an expired belt and records why where the worker cannot edit it', async () => {
+      const h = await claimed();
+      await checkoutBelt(db(), h);
+      await admin.query(`UPDATE principal_grants SET not_before = now() - interval '2 hours', expires_at = now() - interval '1 hour' WHERE idempotency_key = $1`, [key(h)]);
+      expect(await submit(db(), h, work(h))).toMatchObject({ ok: false, reason: expect.stringContaining('expired') });
+      expect(await denials(h)).toEqual(['the belt for this claim has expired']);
+      expect(await events(h)).toEqual(expect.arrayContaining(['belt_checked_out', 'belt_denied', 'maker_failed']));
+      expect(await stage(h)).toBe('ready');
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
+    it('refuses a revoked belt, and the claim cannot simply check out another', async () => {
+      const h = await claimed();
+      await checkoutBelt(db(), h);
+      await admin.query(`UPDATE principal_grants SET revoked_at = now(), revoked_by = 'owner' WHERE idempotency_key = $1`, [key(h)]);
+      await expect(rawSubmit(h, h.spec.paths)).rejects.toThrow(/row-level security/);
+      expect(await checkoutBelt(db(), h)).toEqual({ ok: false, reason: 'the belt for this claim was revoked' });
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
+    it('a belt from an earlier claim does not carry over to a later one', async () => {
+      const h = await claimed();
+      await checkoutBelt(db(), h);
+      await releaseMake(db(), h, 'host down', true);
+      const again = await claimMake(db(), 'trinity-lane-1');
+      if (again.kind !== 'claimed' || again.handle.taskId !== h.taskId) throw new Error('did not reclaim');
+      expect(again.handle.epoch).toBeGreaterThan(h.epoch);
+      await expect(rawSubmit(again.handle, h.spec.paths)).rejects.toThrow(/row-level security/);
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
+    it('a research belt cannot write code, and is denied before any grant exists', async () => {
+      const h = await claimed({ belt: 'research' });
+      expect(await checkoutBelt(db(), h)).toEqual({ ok: false, reason: 'the research belt does not cover the paths of this task' });
+      expect((await admin.query('SELECT count(*)::int AS n FROM principal_grants WHERE idempotency_key = $1', [key(h)])).rows[0].n).toBe(0);
+      expect(await denials(h)).toHaveLength(1);
+      expect(await events(h)).toContain('belt_denied');
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
+    it('a research belt can file a report, as a positive control', async () => {
+      const h = await claimed({ belt: 'research', paths: ['reports/finding.md'], verify: { runner: 'node-test', target: 'reports/finding.md', controls: CONTROL } });
+      expect(await checkoutBelt(db(), h)).toMatchObject({ ok: true, belt: 'research' });
+      expect(await submit(db(), h, work(h))).toEqual({ ok: true });
+    });
+
+    it('refuses files beyond the task or the belt even with a live belt', async () => {
+      const h = await claimed();
+      await checkoutBelt(db(), h);
+      await expect(rawSubmit(h, ['tests/some-other.test.mjs'])).rejects.toThrow(/row-level security/);
+      await expect(rawSubmit(h, ['package.json'])).rejects.toThrow(/row-level security/);
+      await expect(rawSubmit(h, [])).rejects.toThrow(/row-level security/);
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
+    it.each(['package.json', '.github/workflows/x.yml', 'src/../package.json', 'tests/..', 'src\\x.ts', 'src/.env', 'tests/.npmrc', 'scripts/x.sh'])('no belt covers %s', async (path) => {
+      const q = 'SELECT t12_belt_paths_ok($1, $2::jsonb) AS ok';
+      expect((await admin.query(q, ['engineering', JSON.stringify([path])])).rows[0].ok).toBe(false);
+      expect((await admin.query(q, ['research', JSON.stringify([path])])).rows[0].ok).toBe(false);
+      expect((await admin.query(q, ['engineering', JSON.stringify(['src/a.ts'])])).rows[0].ok).toBe(true);
+    });
+
+    it('cannot rewrite the task, skip the belt, or plant finished work', async () => {
+      const h = await claimed();
+      await expect(worker.query(`UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12,spec,paths}', '["src/evil.ts"]') WHERE id = $1`, [h.taskId])).rejects.toThrow(/row-level security/);
+      await expect(worker.query(`UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12,stage}', '"approved"') WHERE id = $1`, [h.taskId])).rejects.toThrow(/row-level security/);
+      const planted = (t12: object) => worker.query(`INSERT INTO trinity_tasks (description, assigned_to, metadata) VALUES ('x', $1, $2::jsonb)`, [LANE_POOL, JSON.stringify({ t12 })]);
+      await expect(planted({ spec: spec('p1'), stage: 'approved', epoch: 1 })).rejects.toThrow(/row-level security/);
+      await expect(planted({ spec: spec('p2'), stage: 'ready', epoch: 0, submission: work(h) })).rejects.toThrow(/row-level security/);
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
+    it('cannot mint a belt, restore one, read them, or touch the denial log', async () => {
+      await expect(worker.query(`INSERT INTO principal_grants (grantor_agent_id, grantee_agent_id, grant_class, expires_at, idempotency_key) VALUES ('t12-belt-issuer', 'trinity-lane-1', 'cold', now() + interval '1 hour', 't12:1:1')`)).rejects.toThrow(/permission denied/);
+      await expect(worker.query('UPDATE principal_grants SET revoked_at = NULL, revoked_by = NULL')).rejects.toThrow(/permission denied/);
+      await expect(worker.query('SELECT * FROM principal_grants')).rejects.toThrow(/permission denied/);
+      await expect(worker.query('SELECT * FROM trinity_agent_logs')).rejects.toThrow(/permission denied/);
+      await expect(worker.query('DELETE FROM trinity_agent_logs')).rejects.toThrow(/permission denied/);
+    });
+
+    it('cannot check out for another lane, an old claim, or a task outside the pool', async () => {
+      const h = await claimed();
+      const ask = (task: number, lane: string, epoch: number) => worker.query('SELECT t12_belt_checkout($1, $2, $3) AS r', [task, lane, epoch]).then((x) => x.rows[0].r);
+      expect(await ask(h.taskId, 'trinity-lane-2', h.epoch)).toEqual({ ok: false, reason: 'another lane holds this task' });
+      expect(await ask(h.taskId, h.actor, h.epoch - 1)).toEqual({ ok: false, reason: 'stale claim' });
+      const outside = (await admin.query(`SELECT id FROM trinity_tasks WHERE assigned_to = 'trinity-orch'`)).rows[0].id;
+      expect(await ask(Number(outside), h.actor, 1)).toEqual({ ok: false, reason: 'task is not in the lane pool' });
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
+    });
+
+    it('anon cannot call the belt functions, though Supabase defaults would let it', async () => {
+      await admin.query('CREATE OR REPLACE FUNCTION public.t12_probe() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$');
+      const c = await admin.connect();
+      try {
+        await c.query('SET ROLE anon');
+        expect((await c.query('SELECT public.t12_probe() AS x')).rows[0].x).toBe(1);
+        await expect(c.query(`SELECT public.t12_belt_checkout(1, 'x', 1)`)).rejects.toThrow(/permission denied/);
+        await expect(c.query(`SELECT public.t12_belt_permits(1, '{}'::jsonb)`)).rejects.toThrow(/permission denied/);
+      } finally {
+        await c.query('RESET ROLE');
+        c.release();
+      }
+    });
+
+    it('holds no role or membership that reaches past the policy', async () => {
+      const { rows } = await worker.query(`SELECT r.rolname FROM pg_roles r WHERE r.rolname <> current_user AND pg_has_role(current_user, r.oid, 'member')`);
+      expect(rows).toEqual([]);
+    });
+
+    it('on the real runner, a denied belt never reaches the model', async () => {
+      const calls: string[] = [];
+      const adapters: LaneAdapters = {
+        make: async (h) => { calls.push(h.spec.id); return { ok: false, kind: 'maker_failed', reason: 'should not run' }; },
+        check: async () => ({ outcome: 'not_checked', reason: 'unused' }),
+        publish: async () => { throw new Error('unused'); },
+      };
+      const report = await runLanes({
+        db: db(), haltClient: pgHaltClient(db()), lanes: ['trinity-lane-1'], adapters, specs: () => [{ ...spec('belt-runner'), belt: 'research' }], readyTarget: 1,
+        publishEnabled: false, checkEnabled: false, idleMs: 1, heartbeatMs: 60_000, maxSteps: 5, log: () => undefined,
+      });
+      expect(report.errors).toEqual([]);
+      expect(calls).toEqual([]);
+      expect(report.fenceRefused.some((x) => x.includes('research belt does not cover'))).toBe(true);
+    }, 60_000);
   });
 
   it('the real CLI starts as this role and refuses a role that can bypass row security', () => {

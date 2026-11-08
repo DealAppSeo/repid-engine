@@ -8,6 +8,51 @@ DROP TABLE IF EXISTS trinity_changelog CASCADE;
 DROP TABLE IF EXISTS agent_resource_claims CASCADE;
 DROP TABLE IF EXISTS trinity_system_config CASCADE;
 DROP TABLE IF EXISTS repid_agents CASCADE;
+DROP TABLE IF EXISTS principal_grants CASCADE;
+DROP TABLE IF EXISTS trinity_agent_logs CASCADE;
+
+-- As in production: a function created in public is executable by anon unless revoked by name.
+DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF; END $$;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon;
+
+-- Columns and constraints copied from production on 2026-11-08.
+CREATE TABLE principal_grants (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  grantor_agent_id text NOT NULL,
+  grantee_agent_id text NOT NULL,
+  parent_grant_id uuid REFERENCES principal_grants(id),
+  depth integer NOT NULL DEFAULT 0 CONSTRAINT principal_grants_depth_bound CHECK (depth >= 0 AND depth <= 4),
+  grant_class text NOT NULL CHECK (grant_class = ANY (ARRAY['spend','hot','warm','cold'])),
+  capabilities jsonb NOT NULL DEFAULT '[]'::jsonb,
+  caveats jsonb NOT NULL DEFAULT '[]'::jsonb,
+  role text,
+  audit_for text,
+  not_before timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  revoked_by text,
+  mint_reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  idempotency_key text,
+  grantor_signature text,
+  grantor_wallet_address_used text,
+  signature_status text CHECK (signature_status = ANY (ARRAY['VERIFIED','NOT_CHECKED'])),
+  CONSTRAINT principal_grants_expiry_after_not_before CHECK (expires_at > not_before),
+  CONSTRAINT principal_grants_revoke_attribution CHECK ((revoked_at IS NULL AND revoked_by IS NULL) OR (revoked_at IS NOT NULL AND revoked_by IS NOT NULL))
+);
+CREATE UNIQUE INDEX principal_grants_idempotency_key_uidx ON principal_grants (idempotency_key) WHERE idempotency_key IS NOT NULL;
+ALTER TABLE principal_grants ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE trinity_agent_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent text NOT NULL,
+  task_id bigint,
+  status text DEFAULT 'pending',
+  action text,
+  message text,
+  metadata jsonb DEFAULT '{}'::jsonb,
+  created_at timestamptz DEFAULT now()
+);
 
 CREATE TABLE trinity_system_config (id integer PRIMARY KEY, emergency_halt boolean NOT NULL DEFAULT false);
 INSERT INTO trinity_system_config (id, emergency_halt) VALUES (1, false);

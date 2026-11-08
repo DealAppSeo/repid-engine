@@ -46,7 +46,7 @@ const POOL_STATUSES = ['pending', 'claimed', 'pending_validation', 'cancelled', 
 export const LANE_REPOS: readonly string[] = ['DealAppSeo/trustshell'];
 
 export interface SqlRunner {
-  query(sql: string, params?: unknown[]): Promise<{ rows: any[] }>;
+  query(sql: string, params?: unknown[]): Promise<{ rows: any[]; rowCount?: number | null }>;
 }
 export interface TxDb extends SqlRunner {
   tx<T>(fn: (c: SqlRunner) => Promise<T>): Promise<T>;
@@ -92,6 +92,8 @@ export interface LaneSpec {
   priority?: number;
   /** Files handed to the model as supplied evidence. */
   context?: string[];
+  /** Which belt this task's writes need. Defaults to engineering. Postgres decides what each belt covers. */
+  belt?: 'engineering' | 'research';
 }
 
 /**
@@ -219,6 +221,7 @@ export function validateSpec(s: Partial<LaneSpec> | null | undefined): string[] 
     if (badPath(p) || PROTECTED_PATH.test(p)) out.push(`context ${String(p)} may not be read`);
   }
   if (s.context !== undefined && !Array.isArray(s.context)) out.push('context is not a list');
+  if (s.belt !== undefined && s.belt !== 'engineering' && s.belt !== 'research') out.push('belt must be engineering or research');
   // A maker bases on origin/main, which does not hold a dependency until a human merges it.
   if ((s as { dependsOn?: unknown[] }).dependsOn?.length) out.push('dependsOn is not supported until merges are tracked');
   if (!s.verify || !['jest', 'node-test'].includes(s.verify.runner)) out.push('has no machine-checkable verify runner');
@@ -292,7 +295,7 @@ interface Persist {
 
 async function persist(c: SqlRunner, id: Row['id'], state: LaneState, p: Persist): Promise<void> {
   const col = p.columns ?? {};
-  await c.query(
+  const written = await c.query(
     `UPDATE trinity_tasks SET
        status = $2,
        claimed_by = $3,
@@ -319,6 +322,8 @@ async function persist(c: SqlRunner, id: Row['id'], state: LaneState, p: Persist
       col.stuck_reason ?? null, !!p.verified, !!p.completed, !!p.refundClaim,
     ],
   );
+  // Row-level security hides a row from UPDATE without raising an error.
+  if (written.rowCount === 0) throw new Error(`task ${String(id)} was not written`);
 }
 
 const ROW_COLUMNS = `id, status, claimed_by, metadata, now()::text AS db_now`;
@@ -442,11 +447,33 @@ export async function heartbeat(db: TxDb, h: Handle): Promise<StepResult> {
   });
 }
 
-export async function submit(db: TxDb, h: Handle, submission: Submission): Promise<StepResult> {
-  return fenced(db, h, 'claimed', 'making', async (c, row, s) => {
-    const next = { ...step(row, s, h.actor, 'submitted', 'awaiting_check', `commit ${submission.commit}`, submission), producer: h.actor, submission };
-    await persist(c, row.id, next, { status: 'pending_validation', claimedBy: null, columns: { artifact_url: `git://${s.spec.repo}@${submission.commit}` } });
+export type BeltResult = { ok: true; belt: string; grantId: string; expiresAt: string } | { ok: false; reason: string };
+
+/** Ask Postgres for this claim's belt. Runs apart from the receipt so a failed receipt cannot undo the grant or denial. */
+export async function checkoutBelt(db: TxDb, h: Handle): Promise<BeltResult> {
+  const { rows } = await db.query(`SELECT public.t12_belt_checkout($1, $2, $3) AS r`, [h.taskId, h.actor, h.epoch]);
+  const r = rows[0].r as { ok: boolean; reason?: string; belt?: string; grant_id?: string; expires_at?: string };
+  await fenced(db, h, 'claimed', 'making', async (c, row, s) => {
+    const next = step(row, s, h.actor, r.ok ? 'belt_checked_out' : 'belt_denied', 'making', r.ok ? `${r.belt} belt` : String(r.reason), r);
+    await c.query(`UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12}', $2::jsonb) WHERE id = $1`, [row.id, JSON.stringify(next)]);
   });
+  return r.ok ? { ok: true, belt: r.belt!, grantId: r.grant_id!, expiresAt: r.expires_at! } : { ok: false, reason: String(r.reason) };
+}
+
+export async function submit(db: TxDb, h: Handle, submission: Submission): Promise<StepResult> {
+  try {
+    return await fenced(db, h, 'claimed', 'making', async (c, row, s) => {
+      const next = { ...step(row, s, h.actor, 'submitted', 'awaiting_check', `commit ${submission.commit}`, submission), producer: h.actor, submission };
+      await persist(c, row.id, next, { status: 'pending_validation', claimedBy: null, columns: { artifact_url: `git://${s.spec.repo}@${submission.commit}` } });
+    });
+  } catch (e) {
+    if ((e as { code?: string }).code !== '42501') throw e;
+  }
+  // Postgres refused the write. Asking again records why (expired or revoked) where the worker cannot edit it.
+  const belt = await checkoutBelt(db, h);
+  const reason = `belt refused the submission: ${belt.ok ? 'the files are outside the belt' : belt.reason}`;
+  await releaseMake(db, h, reason, false);
+  return { ok: false, fenced: true, reason };
 }
 
 function afterFailure(row: Row, s: LaneState, actor: string, event: string, reason: string): { next: LaneState; p: Persist } {
