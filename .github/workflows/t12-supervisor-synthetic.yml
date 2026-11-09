@@ -56,7 +56,7 @@ jobs:
       - name: Today's synthetic work record
         if: always()
         run: |
-          if [ -f "$RUNNER_TEMP/daily-record.json" ]; then cat "$RUNNER_TEMP/daily-record.json" | tee -a "$GITHUB_STEP_SUMMARY"; else echo "no daily record was written"; fi
+          if [ -f "$RUNNER_TEMP/daily-record.json" ]; then { echo '```json'; cat "$RUNNER_TEMP/daily-record.json"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"; else echo "no daily record was written"; fi
 
   boundary-maker:
     runs-on: ubuntu-latest

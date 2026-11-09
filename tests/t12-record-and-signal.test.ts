@@ -1,7 +1,7 @@
 /** The daily work record and the missed-run signal. Pure logic; no database and no network. */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildDailyRecord } from '../src/orchestration/t12-daily-record';
+import { buildDailyRecord, plainReason } from '../src/orchestration/t12-daily-record';
 import { judgeRuns, type RunRow } from '../src/orchestration/t12-missed-run';
 import { validateSpec, type DecisionReceipt, type LaneState } from '../src/orchestration/t12-lane-store';
 
@@ -22,6 +22,18 @@ describe('daily record', () => {
     expect(r.providers).toEqual([expect.objectContaining({ host: 'groq', attempts: 2, answered: 1, rate_limited: 1 })]);
     expect(r.tests[0]).toMatchObject({ task: 'a', verdict: 'approved', exit: 0, controls: 2 });
     expect(r.tests[1]).toMatchObject({ task: 'b', verdict: 'rejected', reason: 'wrote outside its lease' });
+  });
+
+  it('publishes a short plain reason, never what a model-written test printed', () => {
+    const hostile = 'verify failed with exit 1: ![x](https://evil.test/p.png) [click](https://evil.test) <img src=x>';
+    const r = buildDailyRecord([row('a', [receipt('check_rejected', at, {}, hostile), receipt('check_not_checked', at, {}, 'verify did not finish: `rm` <b>')])], DAY, 'real');
+    expect(r.tests.map((t) => t.reason)).toEqual(['verify failed with exit 1', 'verify did not finish']);
+    expect(JSON.stringify(r)).not.toMatch(/evil\.test|<img|<b>/);
+  });
+
+  it('strips markup from the short reason too', () => {
+    expect(plainReason('![x](u) `a` <b> done')).toBe('x u a b done');
+    expect(plainReason('   ')).toBeNull();
   });
 
   it('never calls usage free without provider-side evidence', () => {
@@ -117,6 +129,14 @@ describe('the workflows stay inert and least-privilege', () => {
     expect(spec.risk).toBe('LOW');
     const seed = readFileSync(join(root, 'seed', spec.verify.controls[0].file), 'utf8').replace(/\r\n/g, '\n');
     expect(seed).toContain(spec.verify.controls[0].find);
+  });
+
+  it('a work record can only reach a job summary as a code block', () => {
+    for (const f of ['t12-g25-dogfood.yml', 't12-supervisor-synthetic.yml']) {
+      const lines = read(f).split('\n').filter((l) => l.includes('GITHUB_STEP_SUMMARY') && !l.trim().startsWith('#'));
+      expect(lines.length).toBeGreaterThan(0);
+      for (const l of lines) expect(l).toContain("echo '```json'");
+    }
   });
 
   it('the synthetic workflow holds no secrets at all', () => {

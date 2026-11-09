@@ -113,4 +113,4 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
         run: |
-          npx ts-node --transpile-only scripts/t12/daily-record.ts --source real --entitlements "$RUNNER_TEMP/free.json" --out "$RUNNER_TEMP/daily-record.json" >> "$GITHUB_STEP_SUMMARY"
+          { echo '```json'; npx ts-node --transpile-only scripts/t12/daily-record.ts --source real --entitlements "$RUNNER_TEMP/free.json" --out "$RUNNER_TEMP/daily-record.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

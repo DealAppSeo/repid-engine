@@ -28,6 +28,13 @@ interface Row { state: LaneState }
 
 const isoDay = (at: string) => new Date(at).toISOString().slice(0, 10);
 
+/**
+ * A published reason is a short code. Rejection reasons can carry what a model's code printed, and this record
+ * goes to a public job summary, so nothing after the first colon is copied and markup is stripped. Receipts keep the detail.
+ */
+export const plainReason = (reason: string): string | null =>
+  (reason.split(':')[0] ?? '').replace(/[<>[\]()!*_`#|~\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || null;
+
 function hostUse(uses: Map<string, ProviderUse>, host: string, entitlements: readonly FreeEntitlement[]): ProviderUse {
   let u = uses.get(host);
   if (!u) {
@@ -76,11 +83,11 @@ export function buildDailyRecord(rows: readonly Row[], date: string, source: Dai
         },
         check_rejected: () => {
           record.tasks.rejected += 1;
-          record.tests.push({ task, verdict: 'rejected', commit: null, exit: null, controls: 0, reason: r.reason.slice(0, 200) });
+          record.tests.push({ task, verdict: 'rejected', commit: null, exit: null, controls: 0, reason: plainReason(r.reason) });
         },
         check_not_checked: () => {
           record.tasks.not_checked += 1;
-          record.tests.push({ task, verdict: 'not_checked', commit: null, exit: null, controls: 0, reason: r.reason.slice(0, 200) });
+          record.tests.push({ task, verdict: 'not_checked', commit: null, exit: null, controls: 0, reason: plainReason(r.reason) });
         },
         route_attempt: () => {
           const u = hostUse(uses, String(ev.provider ?? 'unknown'), entitlements);
