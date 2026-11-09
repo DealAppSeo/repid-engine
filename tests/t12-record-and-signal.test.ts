@@ -101,15 +101,13 @@ describe('the workflows stay inert and least-privilege', () => {
   });
 
   it('the G2.5 workflow cannot publish, and only the maker can hold a model key', () => {
-    const g25 = read('t12-g25-dogfood.yml').split('
-').filter((l) => !l.trim().startsWith('#')).join('
-');
-    expect(g25).not.toMatch(/^s*schedule:/m);
+    const g25 = read('t12-g25-dogfood.yml').split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+    expect(g25).not.toMatch(/^\s*schedule:/m);
     expect(g25).toContain("vars.T12_G25_ENABLED == 'true'");
     expect(g25).not.toMatch(/T12_LANES_PUBLISH|GH_TOKEN|T12_PR_TOKEN|--role integrator|contents: write/);
-    expect(g25.match(/secrets./g)).toHaveLength(1);
+    expect(g25.match(/secrets\./g)).toHaveLength(1);
     const checker = g25.slice(g25.indexOf('name: Checker'), g25.indexOf("name: The day's work record"));
-    expect(checker).not.toMatch(/_API_KEY|secrets.|T12_FREE_WAVE/);
+    expect(checker).not.toMatch(/_API_KEY|secrets\.|T12_FREE_WAVE/);
   });
 
   it('the G2.5 task is valid, low risk and has a control that applies to the seed', () => {
@@ -117,9 +115,7 @@ describe('the workflows stay inert and least-privilege', () => {
     const spec = JSON.parse(readFileSync(join(root, 'specs.jsonl'), 'utf8').trim());
     expect(validateSpec(spec)).toEqual([]);
     expect(spec.risk).toBe('LOW');
-    const seed = readFileSync(join(root, 'seed', spec.verify.controls[0].file), 'utf8').replace(/
-/g, '
-');
+    const seed = readFileSync(join(root, 'seed', spec.verify.controls[0].file), 'utf8').replace(/\r\n/g, '\n');
     expect(seed).toContain(spec.verify.controls[0].find);
   });
 
