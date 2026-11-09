@@ -19,6 +19,7 @@ import {
   validateSpec, verifyReceipts, type DecisionReceipt, type Handle, type LaneSpec, type Submission, type TxDb, type Verdict,
 } from '../src/orchestration/t12-lane-store';
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
+import { hostSandboxForTests } from './helpers/t12-host-sandbox';
 import { buildMakePrompt, createGitAdapters, readMakerFiles, scrubbedEnv, verifyArgs, type PrClient } from '../src/orchestration/t12-lane-git';
 import { __resetEmergencyHaltState } from '../src/services/emergency-halt';
 
@@ -169,7 +170,7 @@ describe('real git adapters', () => {
   const ask = (files: Array<{ path: string; content: string }>) => async () => ({ outcome: 'answered' as const, host: 'local', tried: ['local'], text: JSON.stringify({ files }) });
   const noPr: PrClient = { findByBranch: () => null, createDraft: () => 'https://example.test/pr/1' };
   const adapters = (over: Partial<Parameters<typeof createGitAdapters>[0]> = {}) =>
-    createGitAdapters({ repoDirs: { 'DealAppSeo/trustshell': canon }, workRoot: work, ask: ask([]), allowExec: true, pr: noPr, timeoutMs: 60_000, ...over });
+    createGitAdapters({ repoDirs: { 'DealAppSeo/trustshell': canon }, workRoot: work, ask: ask([]), allowExec: true, pr: noPr, timeoutMs: 60_000, sandbox: hostSandboxForTests, ...over });
 
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), 't12-git-'));
@@ -867,6 +868,34 @@ describePg('durable lanes on real Postgres', () => {
       const report = await runLanes(base(a, [spec('nocheck')], { publishEnabled: false, checkEnabled: false }));
       expect(report).toMatchObject({ made: 1, approved: 0, notChecked: 0 });
       expect(a.calls.filter((c) => c.startsWith('check'))).toEqual([]);
+    }, 30_000);
+
+    it('each role does only its own stage', async () => {
+      const a = fakeAdapters();
+      const s = [spec('roles')];
+      expect(await runLanes({ ...base(a, s), role: 'maker', lanes: [L1] })).toMatchObject({ made: 1, approved: 0, integrated: 0 });
+      expect(a.calls).toEqual([`make:${L1}:roles`]);
+      expect(await runLanes({ ...base(a, s), role: 'integrator', lanes: [L3] })).toMatchObject({ made: 0, approved: 0, integrated: 0 });
+      expect(a.calls).toHaveLength(1);
+      expect(await runLanes({ ...base(a, s), role: 'checker', lanes: [L2] })).toMatchObject({ made: 0, approved: 1, integrated: 0 });
+      expect(a.calls.at(-1)).toBe(`check:${L2}:roles`);
+      expect(await runLanes({ ...base(a, s), role: 'integrator', lanes: [L3] })).toMatchObject({ made: 0, approved: 0, integrated: 1 });
+      expect(a.calls.at(-1)).toBe(`publish:${L3}:roles`);
+      expect(a.calls).toHaveLength(3);
+    }, 30_000);
+
+    it('only a maker takes work that is ready to make', async () => {
+      const a = fakeAdapters();
+      await replenish(db, [spec('readyonly')], 1);
+      await runLanes({ ...base(a, [spec('readyonly')]), role: 'checker', lanes: [L2] });
+      await runLanes({ ...base(a, [spec('readyonly')]), role: 'integrator', lanes: [L3] });
+      expect(a.calls).toEqual([]);
+    }, 30_000);
+
+    it('a checker does not refill the queue', async () => {
+      const a = fakeAdapters();
+      expect(await runLanes({ ...base(a, [spec('norefill')]), role: 'checker', lanes: [L2] })).toMatchObject({ made: 0 });
+      expect((await pool.query("SELECT count(*)::int AS n FROM trinity_tasks WHERE metadata #>> '{t12,spec,id}' = 'norefill'")).rows[0].n).toBe(0);
     }, 30_000);
 
     it('the emergency halt stops every lane before any work', async () => {

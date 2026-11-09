@@ -3,7 +3,7 @@
  * lane, the restricted database role, real git, real test runs, and a real SIGKILL mid-task. Only
  * the model is replaced, by a loopback server, because the point here is the machinery.
  */
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
@@ -13,10 +13,12 @@ import { Client, Pool } from 'pg';
 import { verifyReceipts, type DecisionReceipt, type LaneState } from '../src/orchestration/t12-lane-store';
 
 const PG = process.env.T12_LANES_PG_URL;
-const describePg = PG ? describe : describe.skip;
-if (!PG) {
+// A check now runs only in a container, so approvals need Docker too.
+const DOCKER = process.platform === 'linux' && spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], { encoding: 'utf8' }).status === 0;
+const describePg = PG && DOCKER ? describe : describe.skip;
+if (!PG || !DOCKER) {
   // eslint-disable-next-line no-console
-  console.warn('[t12-lane-process] NOT_CHECKED: this proof needs T12_LANES_PG_URL (a throwaway Postgres).');
+  console.warn('[t12-lane-process] NOT_CHECKED: this proof needs T12_LANES_PG_URL (a throwaway Postgres) and Docker on Linux.');
 }
 const ROOT = join(__dirname, '..');
 const DB = 't12_process_test';

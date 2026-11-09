@@ -1,0 +1,110 @@
+# Synthetic proof of the T12 supervisor (G1). No secrets, no production database, no real model.
+#
+# Throwaway Postgres, a loopback model, real Docker, real separate processes and real kills. The boundary
+# jobs move a real commit between two real machines by artifact id. A skipped test fails this run: the
+# container and database blocks must actually execute here to count.
+name: t12-supervisor-synthetic
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/orchestration/t12-*'
+      - 'scripts/t12/**'
+      - 'tests/t12-*'
+      - 'tests/fixtures/t12-*'
+      - 'tests/helpers/t12-*'
+      - 'ops/t12/**'
+      - 'migrations/*t12*'
+      - '.github/workflows/t12-*.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --legacy-peer-deps --ignore-scripts
+      - run: docker pull node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+      - name: Run the synthetic proof
+        env:
+          SUPABASE_URL: http://localhost:54321
+          SUPABASE_SERVICE_KEY: dummy
+          T12_LANES_PG_URL: postgres://postgres@127.0.0.1:5432/postgres
+          T12_E2E_RECORD_OUT: ${{ runner.temp }}/daily-record.json
+        run: npx jest --config jest.config.js --forceExit --runInBand --json --outputFile="$RUNNER_TEMP/jest.json" tests/t12-sandbox.test.ts tests/t12-lane-transfer.test.ts tests/t12-lanes.test.ts tests/t12-lane-process.test.ts tests/t12-lane-profile.test.ts tests/t12-lane-routing.test.ts tests/t12-supervisor-e2e.test.ts tests/t12-record-and-signal.test.ts
+      - name: A skipped test is not a passing test
+        if: always()
+        run: |
+          node -e "const j=require(process.env.RUNNER_TEMP+'/jest.json');console.log(JSON.stringify({passed:j.numPassedTests,failed:j.numFailedTests,skipped:j.numPendingTests,total:j.numTotalTests}));process.exit(j.numFailedTests===0&&j.numPendingTests===0&&j.numPassedTests>0?0:1)"
+      - name: Today's synthetic work record
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/daily-record.json" ]; then { echo '```json'; cat "$RUNNER_TEMP/daily-record.json"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"; else echo "no daily record was written"; fi
+
+  boundary-maker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      sha256: ${{ steps.make.outputs.sha256 }}
+      commit: ${{ steps.make.outputs.commit }}
+      base: ${{ steps.make.outputs.base }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --legacy-peer-deps --ignore-scripts
+      - id: make
+        run: npx ts-node --transpile-only scripts/t12/artifact-boundary.ts make transfer >> "$GITHUB_OUTPUT"
+      - id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: t12-boundary-${{ github.run_id }}
+          path: transfer/*.bundle
+          retention-days: 1
+
+  boundary-checker:
+    needs: boundary-maker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --legacy-peer-deps --ignore-scripts
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.boundary-maker.outputs.artifact-id }}
+          path: transfer
+          digest-mismatch: error
+      - name: Verify on a different machine, then show a changed byte is refused
+        env:
+          BUNDLE_SHA256: ${{ needs.boundary-maker.outputs.sha256 }}
+          COMMIT: ${{ needs.boundary-maker.outputs.commit }}
+          BASE: ${{ needs.boundary-maker.outputs.base }}
+        run: npx ts-node --transpile-only scripts/t12/artifact-boundary.ts check transfer

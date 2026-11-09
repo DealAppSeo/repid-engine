@@ -48,6 +48,30 @@ export function privilegedEnvPresent(env: Record<string, string | undefined>, ro
     .sort();
 }
 
+/** Why this process may not run as this role. Each role holds only what its one job needs. */
+export function laneRoleProblem(
+  role: 'all' | 'maker' | 'checker' | 'integrator',
+  flags: { allowExec: boolean; publish: boolean },
+  env: Record<string, string | undefined>,
+): string | null {
+  if (role === 'all') return null;
+  const modelKeys = [...FREE_ROUTE_KEYS].filter((name) => !!env[name]).sort();
+  if (role === 'maker') {
+    if (flags.allowExec) return 'a maker must not be allowed to run code';
+    if (flags.publish) return 'a maker must not publish';
+    return null;
+  }
+  if (modelKeys.length) return `a ${role} must not hold model keys: ${modelKeys.join(', ')}`;
+  if (role === 'checker') {
+    if (flags.publish) return 'a checker must not publish';
+    if (!flags.allowExec) return 'a checker needs T12_LANES_ALLOW_EXEC';
+    return null;
+  }
+  if (flags.allowExec) return 'an integrator must not be allowed to run code';
+  if (!flags.publish) return 'an integrator needs T12_LANES_PUBLISH';
+  return null;
+}
+
 export interface DbPrivilege {
   name: string;
   privileged: boolean;
