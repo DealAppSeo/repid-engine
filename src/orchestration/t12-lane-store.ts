@@ -116,6 +116,8 @@ export interface Submission {
   base: string;
   files: string[];
   host: string | null;
+  /** SHA-256 of the git bundle, when the commit has to travel to another machine. */
+  bundle_sha256?: string;
 }
 
 /** Why this decision happened: a person asked, a schedule fired, the system chose, or it was repairing itself. */

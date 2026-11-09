@@ -14,12 +14,13 @@
  * only prove the file went missing. Controls are only as strong as the breaks a task names; the
  * draft PR's human reviewer is still the judge of whether the test is good.
  *
- * ONE CLONE. A commit exists only in the maker's clone until publish, so makers and checkers share
- * one until something pushes earlier. A check that cannot find the commit reports NOT_CHECKED.
+ * CLONES. A commit exists only in the maker's clone until publish. Roles on one machine can share a
+ * clone. Roles on separate machines move it as a verified bundle (t12-lane-transfer.ts). A check that
+ * cannot get the commit reports NOT_CHECKED.
  *
- * EXECUTION IS THE RISK. `check` runs model-written code. It is refused unless `allowExec` is set,
- * runs with a stripped environment and never runs install scripts, but that is not a sandbox: arm
- * it only on an ephemeral runner holding no secrets.
+ * EXECUTION IS THE RISK. `check` runs model-written code, and only inside the verified container in
+ * t12-sandbox.ts. Without one the answer is NOT_CHECKED: this file has no way to run it on the host.
+ * `npm ci --ignore-scripts` does run on the host, because it needs the network and runs no package code.
  */
 import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -27,6 +28,8 @@ import { dirname, join } from 'node:path';
 import type { RoutedAnswer } from './t12-lane-route';
 import { PublishRefused, submissionRefProblem, type Handle, type LaneSpec, type Verdict } from './t12-lane-store';
 import type { LaneAdapters, MakeOutcome } from './t12-lane-runner';
+import { dockerSandbox, type SandboxRunner } from './t12-sandbox';
+import { exportSubmission, importSubmission } from './t12-lane-transfer';
 
 export interface PrClient {
   findByBranch(repo: string, branch: string): string | null;
@@ -41,10 +44,16 @@ export interface GitAdapterConfig {
   allowExec: boolean;
   pr: PrClient;
   timeoutMs?: number;
+  /** Where model-written code runs. Defaults to the verified container. */
+  sandbox?: SandboxRunner;
+  /** Set when roles run on separate machines: `outDir` on the maker, `inDir` on the checker and integrator. */
+  transfer?: { outDir?: string; inDir?: string };
 }
 
 const MAX_CONTEXT_CHARS = 20_000;
 const MAX_OUTPUT_CHARS = 8_000;
+
+class SandboxRefused extends Error {}
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 }).trim();
@@ -142,11 +151,6 @@ export function verifyArgs(spec: LaneSpec): string[] {
   return runner === 'jest' ? ['node_modules/jest/bin/jest.js', '--ci', '--runInBand', '--passWithNoTests=false', target] : ['--test', target];
 }
 
-async function runVerify(dir: string, spec: LaneSpec, env: NodeJS.ProcessEnv, timeoutMs: number) {
-  const args = verifyArgs(spec);
-  return { cmd: `node ${args.join(' ')}`, ...(await run(process.execPath, args, { cwd: dir, env, timeoutMs })) };
-}
-
 /** What a non-answer means to the runner. Null when the model did answer. */
 export function askFailure(answer: RoutedAnswer): Extract<MakeOutcome, { ok: false }> | null {
   if (answer.outcome === 'no_capacity') return { ok: false, kind: 'no_capacity', until: answer.until, reason: answer.reason };
@@ -160,6 +164,15 @@ export function askFailure(answer: RoutedAnswer): Extract<MakeOutcome, { ok: fal
 
 export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
   const timeoutMs = cfg.timeoutMs ?? 5 * 60 * 1000;
+  const sandbox = cfg.sandbox ?? dockerSandbox();
+
+  /** A refusal is thrown so every call site reports NOT_CHECKED the same way. */
+  async function runVerify(dir: string, spec: LaneSpec) {
+    const args = verifyArgs(spec);
+    const r = await sandbox({ dir, command: ['node', ...args], timeoutMs });
+    if (r.kind === 'refused') throw new SandboxRefused(r.reason);
+    return { cmd: `node ${args.join(' ')}`, code: r.code, ranOut: r.ranOut, reason: r.reason, output: r.output };
+  }
 
   async function make(h: Handle, signal: AbortSignal): Promise<MakeOutcome> {
     const canon = canonDir(cfg, h.spec);
@@ -195,7 +208,9 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
       git(dir, '-c', 'user.name=t12-lane', '-c', 'user.email=t12-lane@users.noreply.github.com',
         'commit', '-q', '-m', `t12(${h.spec.id}): ${h.spec.title}`);
       committed = true;
-      return { ok: true, submission: { branch, commit: git(dir, 'rev-parse', 'HEAD'), base, files: files.map((f) => f.path), host: answer.host } };
+      const commit = git(dir, 'rev-parse', 'HEAD');
+      const bundle = cfg.transfer?.outDir ? { bundle_sha256: exportSubmission(canon, cfg.transfer.outDir, h.spec, branch, base, commit) } : {};
+      return { ok: true, submission: { branch, commit, base, files: files.map((f) => f.path), host: answer.host, ...bundle } };
     } finally {
       discard(canon, dir);
       if (!committed) git(canon, 'branch', '-q', '-D', branch);
@@ -208,6 +223,10 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
     const refProblem = submissionRefProblem(h.spec, sub);
     if (refProblem) return { outcome: 'rejected', reason: refProblem };
     const canon = canonDir(cfg, h.spec);
+    if (cfg.transfer?.inDir) {
+      const got = importSubmission(canon, cfg.transfer.inDir, h.spec, sub);
+      if (!got.ok) return { outcome: got.outcome, reason: got.reason };
+    }
     try {
       git(canon, 'cat-file', '-e', `${sub.commit}^{commit}`);
     } catch {
@@ -234,14 +253,14 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
           { cwd: dir, env, timeoutMs, shell: process.platform === 'win32' });
         if (npm.code !== 0) return { outcome: 'not_checked', reason: `npm ci failed: ${npm.output.slice(-300)}` };
       }
-      const pass = await runVerify(dir, h.spec, env, timeoutMs);
+      const pass = await runVerify(dir, h.spec);
       if (pass.ranOut) return { outcome: 'not_checked', reason: `verify did not finish: ${pass.reason ?? 'timed out'}` };
       if (pass.code !== 0) return { outcome: 'rejected', reason: `verify failed with exit ${pass.code}: ${pass.output.slice(-600)}` };
 
       // Negative controls: each must turn the same test red.
       const controls: Array<{ control: string; exit: number | null }> = [];
       const expectRed = async (label: string): Promise<Verdict | null> => {
-        const c = await runVerify(dir, h.spec, env, timeoutMs);
+        const c = await runVerify(dir, h.spec);
         if (c.ranOut) return { outcome: 'not_checked', reason: `control "${label}" did not finish: ${c.reason ?? 'timed out'}` };
         if (c.code === 0) return { outcome: 'rejected', reason: `vacuous: the test still passes with ${label}` };
         controls.push({ control: label, exit: c.code });
@@ -271,6 +290,9 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
 
       const transcript = `${pass.cmd} at ${sub.commit} exited 0. Controls: ${controls.map((c) => `${c.control} exited ${c.exit}`).join('; ')}.\n${pass.output}`;
       return { outcome: 'approved', commit: sub.commit, transcript, evidence: { commit: sub.commit, cmd: pass.cmd, exit: pass.code, controls } };
+    } catch (e) {
+      if (e instanceof SandboxRefused) return { outcome: 'not_checked', reason: `no sandbox, so the code was not run: ${e.message}` };
+      throw e;
     } finally {
       discard(canon, dir);
       rmSync(home, { recursive: true, force: true });
@@ -283,6 +305,10 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
     if (refProblem) throw new PublishRefused(refProblem);
     const existing = cfg.pr.findByBranch(h.spec.repo, sub.branch);
     if (existing) return { url: existing };
+    if (cfg.transfer?.inDir) {
+      const got = importSubmission(canonDir(cfg, h.spec), cfg.transfer.inDir, h.spec, sub);
+      if (!got.ok) throw new PublishRefused(got.reason);
+    }
     git(canonDir(cfg, h.spec), 'push', 'origin', `${sub.commit}:refs/heads/${sub.branch}`);
     const body = `T12 lane deliverable for ${h.spec.id}. Checked by a fresh-checkout re-run at ${sub.commit}, with a negative control. That proves the test passes with this change and fails without it, not that the test is good. Review before merging.`;
     return { url: cfg.pr.createDraft({ repo: h.spec.repo, branch: sub.branch, title: `t12(${h.spec.id}): ${h.spec.title}`, body }) };

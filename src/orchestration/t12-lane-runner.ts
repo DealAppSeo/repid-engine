@@ -38,8 +38,13 @@ export interface LaneAdapters {
   publish(h: Handle): Promise<{ url: string }>;
 }
 
+/** Which stages a run may claim. Roles on separate machines hold separate credentials. */
+export type LaneRole = 'all' | 'maker' | 'checker' | 'integrator';
+
 export interface RunLanesOptions {
   db: TxDb;
+  /** Defaults to 'all', one process doing every stage. */
+  role?: LaneRole;
   /** Reads the global emergency halt, which every lane obeys before taking any step. */
   haltClient: Pick<SupabaseClient, 'from'>;
   /** What started this run. The first decision each lane makes is attributed to it. */
@@ -94,6 +99,8 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
   let checksHeld = false;
   let routeRetries = 0;
   const wakeId = randomUUID();
+  const role = o.role ?? 'all';
+  const mayMake = role === 'all' || role === 'maker';
   const wake = o.wake ?? 'human_prompt';
   const firstStepDone = new Set<string>();
   /** The wake gets credit for each lane's first decision. Everything after, the lane chose itself. */
@@ -190,7 +197,7 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
 
   async function step(lane: string): Promise<Did> {
     await recoverStages(o.db);
-    if (o.publishEnabled) {
+    if (o.publishEnabled && (role === 'all' || role === 'integrator')) {
       const h = await claimStage(o.db, 'approved', lane, originFor(lane));
       if (h) {
         // A publish failure leaves the claim to recoverStages, so it retries instead of stranding.
@@ -198,12 +205,13 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
         return 'worked';
       }
     }
-    const check = o.checkEnabled === false || checksHeld ? null : await claimStage(o.db, 'awaiting_check', lane, originFor(lane));
+    const mayCheck = role === 'all' || role === 'checker';
+    const check = !mayCheck || o.checkEnabled === false || checksHeld ? null : await claimStage(o.db, 'awaiting_check', lane, originFor(lane));
     if (check) {
       await checkOne(check);
       return 'worked';
     }
-    if (report.paused) return 'idle';
+    if (report.paused || !mayMake) return 'idle';
     const claim = await claimMake(o.db, lane, { dailyCap: o.dailyCap, origin: originFor(lane) });
     if (claim.kind === 'paused') {
       report.paused = claim.reason;
@@ -250,7 +258,7 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
           progress++;
           continue;
         }
-        if (!report.paused) {
+        if (!report.paused && mayMake) {
           // Automatic continuation: nothing to do, so refill from vetted specs and go again.
           const r = await replenish(o.db, o.specs(), o.readyTarget);
           report.replenish = r;

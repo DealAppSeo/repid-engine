@@ -1,0 +1,152 @@
+# T12 supervisor (G1): INERT.
+#
+# Nothing runs by itself. There is no schedule here on purpose: adding one is an owner decision at a later
+# gate. A manual start also does nothing unless the owner sets the repository variable
+# T12_SUPERVISOR_ENABLED to true and creates the secrets, and none of those exist today.
+#
+# Three separate jobs, on three separate machines, each holding only its own credentials. Model-written
+# commits travel as an artifact pinned by id, then each bundle is checked against the digest on the task row.
+# Model-written code runs only inside the verified container. Raw runner output is never printed or
+# uploaded, because this repository's logs are public; detail stays in the database receipts.
+name: t12-supervisor
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: 'Repository the lanes work on (owner/name, must be on the lane allowlist)'
+        required: true
+      specs:
+        description: 'Reviewed lane specs file in this repository'
+        required: true
+        default: 'ops/t12/specs.jsonl'
+      publish:
+        description: 'Run the integrator (opens draft PRs only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: t12-supervisor
+  cancel-in-progress: false
+
+jobs:
+  maker:
+    if: vars.T12_SUPERVISOR_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --legacy-peer-deps --ignore-scripts
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.target_repo }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Maker, no way to run code and no push token
+        env:
+          DATABASE_URL: ${{ secrets.T12_WORKER_DATABASE_URL }}
+          T12_LANES_ENABLED: 'true'
+          T12_FREE_WAVE: 'true'
+          GROQ_API_KEY: ${{ secrets.T12_GROQ_API_KEY }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+          SPECS: ${{ inputs.specs }}
+        run: |
+          mkdir -p transfer
+          npx ts-node --transpile-only scripts/t12/lanes.ts --role maker --lane-name trinity-lane-1 --wake human_prompt \
+            --specs "$SPECS" --repo "$TARGET_REPO=$PWD/target" --work-root "$RUNNER_TEMP/w" --transfer-out transfer --daily-cap 3 \
+            > "$RUNNER_TEMP/report.json" 2> "$RUNNER_TEMP/stderr.txt"
+          node -e "const r=require(process.env.RUNNER_TEMP+'/report.json');console.log(JSON.stringify({made:r.made,errors:r.errors.length,stoppedBy:r.stoppedBy}))"
+      - id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: t12-transfer-${{ github.run_id }}
+          path: transfer/*.bundle
+          if-no-files-found: ignore
+          retention-days: 1
+
+  checker:
+    needs: maker
+    if: vars.T12_SUPERVISOR_ENABLED == 'true' && needs.maker.outputs.artifact-id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --legacy-peer-deps --ignore-scripts
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.target_repo }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.maker.outputs.artifact-id }}
+          path: transfer
+          digest-mismatch: error
+      - name: Checker, runs model code only in the container, no model keys and no push token
+        env:
+          DATABASE_URL: ${{ secrets.T12_WORKER_DATABASE_URL }}
+          T12_LANES_ENABLED: 'true'
+          T12_LANES_ALLOW_EXEC: 'true'
+          TARGET_REPO: ${{ inputs.target_repo }}
+          SPECS: ${{ inputs.specs }}
+        run: |
+          npx ts-node --transpile-only scripts/t12/lanes.ts --role checker --lane-name trinity-lane-2 --wake human_prompt \
+            --specs "$SPECS" --repo "$TARGET_REPO=$PWD/target" --work-root "$RUNNER_TEMP/w" --transfer-in transfer \
+            > "$RUNNER_TEMP/report.json" 2> "$RUNNER_TEMP/stderr.txt"
+          node -e "const r=require(process.env.RUNNER_TEMP+'/report.json');console.log(JSON.stringify({approved:r.approved,rejected:r.rejected,notChecked:r.notChecked,errors:r.errors.length,stoppedBy:r.stoppedBy}))"
+
+  integrator:
+    needs: [maker, checker]
+    if: vars.T12_SUPERVISOR_ENABLED == 'true' && inputs.publish && needs.checker.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --legacy-peer-deps --ignore-scripts
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.target_repo }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.maker.outputs.artifact-id }}
+          path: transfer
+          digest-mismatch: error
+      - name: Integrator, opens draft PRs only, cannot run code and holds no model keys
+        env:
+          DATABASE_URL: ${{ secrets.T12_WORKER_DATABASE_URL }}
+          T12_LANES_ENABLED: 'true'
+          T12_LANES_PUBLISH: 'true'
+          GH_TOKEN: ${{ secrets.T12_PR_TOKEN }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+          SPECS: ${{ inputs.specs }}
+        run: |
+          gh auth setup-git
+          npx ts-node --transpile-only scripts/t12/lanes.ts --role integrator --lane-name trinity-lane-3 --wake human_prompt \
+            --specs "$SPECS" --repo "$TARGET_REPO=$PWD/target" --work-root "$RUNNER_TEMP/w" --transfer-in transfer \
+            > "$RUNNER_TEMP/report.json" 2> "$RUNNER_TEMP/stderr.txt"
+          node -e "const r=require(process.env.RUNNER_TEMP+'/report.json');console.log(JSON.stringify({integrated:r.integrated,errors:r.errors.length,stoppedBy:r.stoppedBy}))"
