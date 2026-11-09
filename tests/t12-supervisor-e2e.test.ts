@@ -27,7 +27,7 @@ type Role = 'maker' | 'checker' | 'integrator';
 const DB = 't12_supervisor_e2e';
 const REPO = 'DealAppSeo/trustshell';
 const PASS = (name: string) => `import test from 'node:test';\nimport assert from 'node:assert';\nimport { answer } from '../src/thing.mjs';\ntest('${name}', () => assert.equal(answer(), 42));\n`;
-const spec = (id: string) => ({ id, repo: REPO, title: `task ${id}`, prompt: 'Add a focused regression test.', paths: [`tests/${id}.test.mjs`], verify: { runner: 'node-test', target: `tests/${id}.test.mjs`, controls: [{ file: 'src/thing.mjs', find: '42', replace: '41' }] }, risk: 'LOW', priority: 50 });
+const spec = (id: string) => ({ id, repo: REPO, title: `task ${id}`, prompt: 'Add a focused regression test for the behaviour described in this task.', paths: [`tests/${id}.test.mjs`], verify: { runner: 'node-test', target: `tests/${id}.test.mjs`, controls: [{ file: 'src/thing.mjs', find: '42', replace: '41' }] }, risk: 'LOW', priority: 50 });
 
 const cli = (args: string[], env: NodeJS.ProcessEnv) => spawn(process.execPath, ['node_modules/ts-node/dist/bin.js', '--transpile-only', 'scripts/t12/lanes.ts', ...args], { cwd: ROOT, env });
 const collect = (child: ChildProcess) => {
