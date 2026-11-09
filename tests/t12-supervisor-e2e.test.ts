@@ -200,6 +200,8 @@ describeFull('three roles on three clones', () => {
     const { s } = await state('tampered');
     expect(s.lastRejection).toContain('digest');
     expect(() => git(clones.checker, 'cat-file', '-e', `${sub.commit}^{commit}`)).toThrow();
+    // A rejected task correctly goes back to be made again. Retire it so the next test sees only its own work.
+    await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE metadata #>> '{t12,spec,id}' = 'tampered'`);
   }, 240_000);
 
   it('a duplicate wake leaves, a killed maker is recovered, and the work finishes once', async () => {
