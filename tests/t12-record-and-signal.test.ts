@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildDailyRecord } from '../src/orchestration/t12-daily-record';
 import { judgeRuns, type RunRow } from '../src/orchestration/t12-missed-run';
-import type { DecisionReceipt, LaneState } from '../src/orchestration/t12-lane-store';
+import { validateSpec, type DecisionReceipt, type LaneState } from '../src/orchestration/t12-lane-store';
 
 const receipt = (event: string, at: string, evidence: unknown = {}, reason = ''): DecisionReceipt => ({ seq: 0, at, actor: 'trinity-lane-1', origin: 'scheduled', event, from: 'a', to: 'b', epoch: 1, reason, evidence, prev: '0', hash: `h-${event}` });
 const row = (id: string, receipts: DecisionReceipt[]) => ({ state: { spec: { id }, receipts } as unknown as LaneState });
@@ -98,6 +98,29 @@ describe('the workflows stay inert and least-privilege', () => {
   it('never uploads or prints raw runner output', () => {
     expect(code).not.toMatch(/path:\s*\S*(run|lane)\.log/);
     for (const [j, role] of [[maker, 'maker'], [checker, 'checker'], [integrator, 'integrator']] as const) expect(j).toContain(`--role ${role}`);
+  });
+
+  it('the G2.5 workflow cannot publish, and only the maker can hold a model key', () => {
+    const g25 = read('t12-g25-dogfood.yml').split('
+').filter((l) => !l.trim().startsWith('#')).join('
+');
+    expect(g25).not.toMatch(/^s*schedule:/m);
+    expect(g25).toContain("vars.T12_G25_ENABLED == 'true'");
+    expect(g25).not.toMatch(/T12_LANES_PUBLISH|GH_TOKEN|T12_PR_TOKEN|--role integrator|contents: write/);
+    expect(g25.match(/secrets./g)).toHaveLength(1);
+    const checker = g25.slice(g25.indexOf('name: Checker'), g25.indexOf("name: The day's work record"));
+    expect(checker).not.toMatch(/_API_KEY|secrets.|T12_FREE_WAVE/);
+  });
+
+  it('the G2.5 task is valid, low risk and has a control that applies to the seed', () => {
+    const root = join(__dirname, '..', 'ops', 't12', 'g25');
+    const spec = JSON.parse(readFileSync(join(root, 'specs.jsonl'), 'utf8').trim());
+    expect(validateSpec(spec)).toEqual([]);
+    expect(spec.risk).toBe('LOW');
+    const seed = readFileSync(join(root, 'seed', spec.verify.controls[0].file), 'utf8').replace(/
+/g, '
+');
+    expect(seed).toContain(spec.verify.controls[0].find);
   });
 
   it('the synthetic workflow holds no secrets at all', () => {

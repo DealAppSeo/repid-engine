@@ -43,7 +43,7 @@ const MAX_LEASE_AGE_SECONDS = MAX_LEASE_AGE_MS / 1000;
 const POOL_STATUSES = ['pending', 'claimed', 'pending_validation', 'cancelled', 'not_checked'];
 
 /** Repos a lane may work on. A row naming any other repo is refused at replenish and at claim. */
-export const LANE_REPOS: readonly string[] = ['DealAppSeo/trustshell'];
+export const LANE_REPOS: readonly string[] = ['DealAppSeo/trustshell', 'DealAppSeo/t12-dogfood-sandbox'];
 
 export interface SqlRunner {
   query(sql: string, params?: unknown[]): Promise<{ rows: any[]; rowCount?: number | null }>;

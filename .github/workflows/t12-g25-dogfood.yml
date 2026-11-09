@@ -1,0 +1,116 @@
+# G2.5: one real free-model task on a disposable public repository, with a throwaway database. INERT.
+#
+# Does nothing unless the owner sets T12_G25_ENABLED to true. Manual only, no schedule. Never publishes:
+# there is no integrator here and no push credential anywhere in this file. Do not arm it until the
+# synthetic workflow is green and the free-entitlement evidence exists (see the plan in living-docs).
+#
+# provider=local runs a model inside this machine, with no key and nothing leaving it. provider=groq also
+# needs the owner's written confirmation of a free plan, passed as free_evidence.
+#
+# One job, because a throwaway service database lasts only one job. Roles are separate processes in separate
+# clones with separate step-scoped credentials, and model code runs only in the container.
+name: t12-g25-dogfood
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: 'local or groq'
+        required: true
+        default: 'local'
+      model:
+        description: 'Ollama model tag, for provider=local'
+        required: true
+        default: 'qwen2.5:3b'
+      free_evidence:
+        description: 'For groq: where the free plan was confirmed, and when'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: t12-g25
+  cancel-in-progress: false
+
+jobs:
+  dogfood:
+    if: vars.T12_G25_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TARGET: DealAppSeo/t12-dogfood-sandbox
+      PROVIDER: ${{ inputs.provider }}
+      FREE_EVIDENCE: ${{ inputs.free_evidence }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --legacy-peer-deps --ignore-scripts
+      - name: Refuse without free-entitlement evidence
+        run: |
+          case "$PROVIDER" in
+            local) printf '[{"host":"local","verified":true,"evidence":"model ran on this machine; no key was present"}]' > "$RUNNER_TEMP/free.json" ;;
+            groq) test -n "$FREE_EVIDENCE" || { echo "::error::groq needs free_evidence"; exit 2; }
+                  node -e "console.log(JSON.stringify([{host:'groq',verified:true,evidence:process.env.FREE_EVIDENCE}]))" > "$RUNNER_TEMP/free.json" ;;
+            *) echo "::error::provider must be local or groq"; exit 2 ;;
+          esac
+      - name: Prepare the throwaway database and two clones
+        run: |
+          psql() { docker exec -i "$(docker ps -qf ancestor=postgres:17)" psql -v ON_ERROR_STOP=1 -U postgres -q "$@"; }
+          psql < tests/fixtures/t12-lanes-schema.sql
+          psql < migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql
+          git clone -q "https://github.com/$TARGET" "$RUNNER_TEMP/maker"
+          git clone -q "https://github.com/$TARGET" "$RUNNER_TEMP/checker"
+          docker pull -q node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+      - name: Start a model on this machine
+        if: inputs.provider == 'local'
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          (OLLAMA_HOST=127.0.0.1:11434 ollama serve > /dev/null 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/tags > /dev/null && break; sleep 2; done
+          ollama pull "$MODEL"
+      - name: Maker
+        env:
+          DATABASE_URL: postgres://t12_lane_worker@127.0.0.1:5432/postgres
+          T12_LANES_ENABLED: 'true'
+          T12_FREE_WAVE: 'true'
+          T12_LOCAL_BASE_URL: ${{ inputs.provider == 'local' && 'http://127.0.0.1:11434/v1' || '' }}
+          T12_LOCAL_MODEL: ${{ inputs.model }}
+          GROQ_API_KEY: ${{ inputs.provider == 'groq' && secrets.T12_GROQ_API_KEY || '' }}
+        run: |
+          npx ts-node --transpile-only scripts/t12/lanes.ts --role maker --lane-name trinity-lane-1 --wake human_prompt --specs ops/t12/g25/specs.jsonl \
+            --repo "$TARGET=$RUNNER_TEMP/maker" --work-root "$RUNNER_TEMP/w1" --ready-target 1 --daily-cap 1 --transfer-out "$RUNNER_TEMP/transfer" \
+            > "$RUNNER_TEMP/maker.json" 2> /dev/null
+          node -e "const r=require(process.env.RUNNER_TEMP+'/maker.json');console.log(JSON.stringify({made:r.made,errors:r.errors.length,stoppedBy:r.stoppedBy,paused:r.paused}))"
+      - name: Checker
+        env:
+          DATABASE_URL: postgres://t12_lane_worker@127.0.0.1:5432/postgres
+          T12_LANES_ENABLED: 'true'
+          T12_LANES_ALLOW_EXEC: 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/transfer"
+          npx ts-node --transpile-only scripts/t12/lanes.ts --role checker --lane-name trinity-lane-2 --wake human_prompt --specs ops/t12/g25/specs.jsonl \
+            --repo "$TARGET=$RUNNER_TEMP/checker" --work-root "$RUNNER_TEMP/w2" --transfer-in "$RUNNER_TEMP/transfer" \
+            > "$RUNNER_TEMP/checker.json" 2> /dev/null
+          node -e "const r=require(process.env.RUNNER_TEMP+'/checker.json');console.log(JSON.stringify({approved:r.approved,rejected:r.rejected,notChecked:r.notChecked,errors:r.errors.length,stoppedBy:r.stoppedBy}))"
+      - name: The day's work record
+        if: always()
+        env:
+          DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
+        run: |
+          npx ts-node --transpile-only scripts/t12/daily-record.ts --source real --entitlements "$RUNNER_TEMP/free.json" --out "$RUNNER_TEMP/daily-record.json" >> "$GITHUB_STEP_SUMMARY"
