@@ -122,6 +122,14 @@ describe('the workflows stay inert and least-privilege', () => {
     expect(checker).not.toMatch(/_API_KEY|secrets\.|T12_FREE_WAVE/);
   });
 
+  it('the G2.5 workflow keeps only the sanitized work record as an artifact', () => {
+    const g25 = read('t12-g25-dogfood.yml').split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+    const paths = [...g25.matchAll(/^\s*path:\s*(.+)$/gm)].map((m) => m[1]!.trim());
+    // Raw maker/checker output can hold what a model-written test printed; only the record is safe to keep.
+    expect(paths).toEqual(['${{ runner.temp }}/daily-record.json']);
+    expect(g25).not.toMatch(/path:.*(maker\.json|checker\.json|transfer|\.log)/);
+  });
+
   it('the G2.5 task is valid, low risk and has a control that applies to the seed', () => {
     const root = join(__dirname, '..', 'ops', 't12', 'g25');
     const spec = JSON.parse(readFileSync(join(root, 'specs.jsonl'), 'utf8').trim());

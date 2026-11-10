@@ -114,3 +114,16 @@ jobs:
           DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
         run: |
           { echo '```json'; npx ts-node --transpile-only scripts/t12/daily-record.ts --source real --entitlements "$RUNNER_TEMP/free.json" --out "$RUNNER_TEMP/daily-record.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # Keep ONLY the work record, so a run can be audited from its files: verdicts, the short
+      # reasons, receipt-chain checks. The record is built to publish a plain reason and never what a
+      # model-written test printed (tests/t12-record-and-signal.test.ts), which is why maker.json,
+      # checker.json and the transfer directory are NOT uploaded. The job summary has the same record,
+      # but neither the REST API nor a logged-out page shows it.
+      - name: Keep the day's work record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t12-g25-daily-record
+          path: ${{ runner.temp }}/daily-record.json
+          if-no-files-found: warn
+          retention-days: 30
