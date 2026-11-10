@@ -7,8 +7,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { evaluatePreflight, formatPreflight, prFromSubject, summaryMarkdown, taskFromBody, type PreflightFacts } from '../src/orchestration/preflight';
-import { mergedSince, parseOpenPrs, unquoteGitPath } from '../scripts/preflight';
+import { evaluatePreflight, formatPreflight, prFromSubject, printable, summaryMarkdown, taskFromBody, type PreflightFacts } from '../src/orchestration/preflight';
+import { matchesAny } from '../src/orchestration/write-lease';
+import { mergedSince, parseOpenPrs, refreshBase, unquoteGitPath } from '../scripts/preflight';
 
 const NOW = new Date('2026-11-09T20:00:00Z');
 const FORK = '41503778a769117c3a6b6a1622e9779b5bd6e427';
@@ -57,6 +58,16 @@ describe('preflight: fresh base', () => {
     const r = evaluatePreflight(facts({ forkSha: FORK, mergedSince: null }));
     expect(r.checks.find((x) => x.name === 'fresh_base')!.status).toBe('NOT_CHECKED');
     expect(r.verdict).toBe('NOT_CHECKED');
+  });
+
+  it('is NOT_CHECKED, not PASS, when the target branch could not be refreshed: an old copy can look like the tip', () => {
+    expect(status(facts({ baseUnrefreshed: 'could not refresh origin/main' }), 'fresh_base').status).toBe('NOT_CHECKED');
+    expect(status(facts({ forkSha: FORK, mergedSince: [{ sha: TIP, pr: 9, files: ['docs/x.md'] }], baseUnrefreshed: 'x' }), 'fresh_base').status).toBe('NOT_CHECKED');
+  });
+
+  it('still fails a real overlap found in an unrefreshed copy', () => {
+    const c = status(facts({ forkSha: FORK, mergedSince: [{ sha: TIP, pr: 692, files: ['app/page.tsx'] }], baseUnrefreshed: 'x' }), 'fresh_base');
+    expect(c.status).toBe('FAIL');
   });
 
   it('is NOT_CHECKED, not PASS, when neither SHA could be resolved (two empty strings are equal)', () => {
@@ -163,6 +174,20 @@ describe('preflight: hostile and incomplete inputs', () => {
     expect(out.split('\n').some((l) => l.startsWith('::'))).toBe(false);
   });
 
+  // Strix, review 4: JavaScript's `.` also stops at U+2028, U+2029 and U+0085, which the C0 guard missed.
+  it.each(['\u2028', '\u2029', '\u0085'])('does not let a %j in an owner-only path read as an ordinary file', (sep) => {
+    const c = status(facts({ files: [`migrations/a${sep}b.ts`], claim: { ...facts().claim!, scope: ['**'] } }), 'permission');
+    expect(c.status).toBe('WARN');
+  });
+
+  it('matches owner-only globs across any line terminator in the path', () => {
+    for (const sep of ['\n', '\r', '\u2028', '\u2029', '\u0085']) expect(matchesAny(`migrations/a${sep}b.ts`, ['migrations/**'])).toBe(true);
+  });
+
+  it('never prints a Unicode line separator into the log', () => {
+    expect(printable('a\u2028b\u2029c\u0085d')).not.toMatch(/[\u2028\u2029\u0085]/);
+  });
+
   it('sends a path with a control character to the owner instead of passing it', () => {
     const c = status(facts({ files: [hostile], claim: { ...facts().claim!, scope: ['**'] } }), 'permission');
     expect(c.status).toBe('WARN');
@@ -243,6 +268,26 @@ describe('preflight: reading real git history', () => {
     git('commit', '-q', '-m', 'add é (#6)');
     const merged = mergedSince(dir, fork, 'main');
     expect(merged!.flatMap((c) => c.files)).toContain('é.sql');
+  });
+
+  it('says the base was not refreshed when the fetch fails or is skipped, and not when it works', () => {
+    const origin = mkdtempSync(join(tmpdir(), 'preflight-origin-'));
+    try {
+      execFileSync('git', ['init', '-q', '--bare', origin]);
+      git('remote', 'add', 'origin', origin);
+      git('push', '-q', 'origin', 'main');
+      const ok = refreshBase(dir, 'main', false);
+      expect(ok.unrefreshed).toBeUndefined();
+      expect(ok.baseSha).toBe(git('rev-parse', 'HEAD'));
+      expect(refreshBase(dir, 'main', true).unrefreshed).toMatch(/not refreshed/);
+      git('remote', 'set-url', 'origin', join(origin, 'gone'));
+      const failed = refreshBase(dir, 'main', false);
+      expect(failed.unrefreshed).toMatch(/could not refresh/);
+      expect(failed.baseSha).toBe(ok.baseSha); // the old copy is still there, which is the danger
+    } finally {
+      git('remote', 'remove', 'origin');
+      rmSync(origin, { recursive: true, force: true });
+    }
   });
 
   it('returns null, not an empty list, when the history cannot be read', () => {

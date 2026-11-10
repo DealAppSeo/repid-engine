@@ -160,14 +160,24 @@ async function readClaim(taskId: number): Promise<{ claim?: TaskClaim; unreadabl
   }
 }
 
+/**
+ * The target branch's tip after a fetch. A fetch that fails, or is skipped, leaves the local copy as
+ * it was, which may be behind the remote: `unrefreshed` says so, and fresh_base cannot then pass.
+ */
+export function refreshBase(dir: string, base: string, noFetch: boolean): { baseRef: string; baseSha: string; unrefreshed?: string } {
+  const baseRef = `origin/${base}`;
+  let unrefreshed: string | undefined;
+  if (noFetch) unrefreshed = `${baseRef} was not refreshed (--no-fetch), so it may be behind the remote`;
+  else if (run('git', ['fetch', '-q', 'origin', base], dir) === null) unrefreshed = `could not refresh ${baseRef} from the remote, so it may be behind`;
+  return { baseRef, baseSha: run('git', ['rev-parse', baseRef], dir) ?? '', unrefreshed };
+}
+
 async function main(): Promise<void> {
   const dir = flag('dir') ?? process.cwd();
   const base = flag('base') ?? 'main';
   const prNumber = flag('pr') ? Number(flag('pr')) : undefined;
   const repo = flag('github') ?? repoFromRemote(dir) ?? '';
-  if (!has('no-fetch')) run('git', ['fetch', '-q', 'origin', base], dir);
-  const baseRef = `origin/${base}`;
-  const baseSha = run('git', ['rev-parse', baseRef], dir) ?? '';
+  const { baseRef, baseSha, unrefreshed } = refreshBase(dir, base, has('no-fetch'));
 
   let head = 'HEAD';
   let files: string[] = [];
@@ -214,6 +224,7 @@ async function main(): Promise<void> {
   const facts: PreflightFacts = {
     agent: flag('agent') ?? /^\s*agent:\s*(\S+)\s*$/im.exec(body ?? '')?.[1] ?? author ?? 'unknown',
     baseSha,
+    baseUnrefreshed: unrefreshed,
     forkSha,
     files,
     filesUnreadable,

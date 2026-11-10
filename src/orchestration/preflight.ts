@@ -48,6 +48,8 @@ export interface PreflightFacts {
   agent: string;
   /** Tip of the target branch, freshly fetched. */
   baseSha: string;
+  /** Set when the target branch could not be refreshed from the remote, so `baseSha` may be old. */
+  baseUnrefreshed?: string;
   /** Where this work started: the merge base of the work and the target branch. */
   forkSha: string;
   /** Files touched so far, or planned, repo-relative. */
@@ -98,14 +100,14 @@ export const OWNER_ONLY_PATHS: readonly string[] = [
 
 const ORDER: readonly CheckStatus[] = ['FAIL', 'NOT_CHECKED', 'WARN', 'PASS'];
 
-const CONTROL = /[\x00-\x1f\x7f]/;
+const CONTROL = /[\x00-\x1f\x7f\x85\u2028\u2029]/;
 
 /**
  * Text safe to print on one line. Reasons quote paths and names that came from a pull request, and a
  * newline in one would start a new log line, which the Actions runner reads as a workflow command
  * when it begins with "::". Control characters are shown as U+FFFD instead.
  */
-export const printable = (s: string): string => s.replace(/[\x00-\x1f\x7f]/g, '�');
+export const printable = (s: string): string => s.replace(/[\x00-\x1f\x7f\x85\u2028\u2029]/g, '�');
 
 const list = (xs: readonly string[], max = 4): string => {
   const shown = xs.map(printable);
@@ -113,6 +115,13 @@ const list = (xs: readonly string[], max = 4): string => {
 };
 
 function freshBase(f: PreflightFacts, mine: Set<string>): Check {
+  const c = freshBaseFrom(f, mine);
+  // An old copy of the target branch can say "starts from the tip" or "none of these files changed"
+  // when the remote has moved. Only a FAIL found in what was read still stands.
+  return f.baseUnrefreshed && c.status !== 'FAIL' && c.status !== 'NOT_CHECKED' ? { ...c, status: 'NOT_CHECKED', reason: f.baseUnrefreshed } : c;
+}
+
+function freshBaseFrom(f: PreflightFacts, mine: Set<string>): Check {
   // Two unreadable SHAs are both '', and '' === '' must not read as "starts from the tip".
   if (!f.baseSha || !f.forkSha) return { name: 'fresh_base', status: 'NOT_CHECKED', reason: 'could not resolve the target branch or where this work started' };
   if (f.forkSha === f.baseSha) return { name: 'fresh_base', status: 'PASS', reason: `starts from the current tip ${f.baseSha.slice(0, 8)}` };
@@ -218,7 +227,7 @@ export function formatPreflight(r: PreflightResult): string {
  * escaped: no PR can add a row, a heading or a link to the summary a reviewer reads.
  */
 export function markdownCell(s: string): string {
-  return s.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/([\\`*_{}[\]()<>#+!|~-])/g, '\\$1');
+  return s.replace(/[\x00-\x1f\x7f\x85\u2028\u2029]/g, ' ').replace(/([\\`*_{}[\]()<>#+!|~-])/g, '\\$1');
 }
 
 export function summaryMarkdown(r: PreflightResult, advisory: boolean): string {
