@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { KNOWN_ENV_VARS } from './known-env-vars.generated';
@@ -131,25 +132,42 @@ const CODE_EXT = new Set(['.js', '.mjs', '.cjs', '.ts']);
 // control on a tree with no other code (Strix, #1529). The registry is unioned separately below.
 const SELF_FILE_RE = /^(env-typo-guard|known-env-vars\.generated)\./;
 
-export async function scanNamedTokens(roots: readonly string[]): Promise<Set<string>> {
+/** The names found, plus how many files or folders could not be read (a partial scan cannot vouch for absence). */
+export type NamedTokens = Set<string> & { unreadable: number };
+
+export async function scanNamedTokens(roots: readonly string[]): Promise<NamedTokens> {
   const named = new Set<string>();
+  let unreadable = 0;
   const walk = async (dir: string): Promise<void> => {
-    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    let entries: Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      unreadable += 1;
+      return;
+    }
     for (const e of entries) {
       if (e.name === 'node_modules' || e.name.startsWith('.') || e.isSymbolicLink() || SELF_FILE_RE.test(e.name)) continue;
       const p = join(dir, e.name);
       if (e.isDirectory()) await walk(p);
+      else if (!e.isFile()) continue; // FIFOs, sockets, devices: readFile on a FIFO never returns (Strix, #1529)
       else if (CODE_EXT.has(extname(e.name))) {
-        const text = await readFile(p, 'utf8').catch(() => '');
-        for (const m of text.match(TOKEN_RE) ?? []) named.add(m);
+        try {
+          for (const m of (await readFile(p, 'utf8')).match(TOKEN_RE) ?? []) named.add(m);
+        } catch {
+          unreadable += 1;
+        }
       }
     }
   };
   for (const r of roots) await walk(r);
-  return named;
+  return Object.assign(named, { unreadable });
 }
 
-export function unreadEnvReport(setNames: readonly string[], named: ReadonlySet<string>): string {
+export function unreadEnvReport(setNames: readonly string[], named: ReadonlySet<string> & { unreadable?: number }): string {
+  if (named.unreadable) {
+    return `[config] unread-variable check NOT_CHECKED: ${named.unreadable} file(s) or folder(s) in the code scan could not be read, so a name listed as unread might be read there.`;
+  }
   if (!named.has(SCAN_CONTROL)) {
     return `[config] unread-variable check NOT_CHECKED: the code scan did not find ${SCAN_CONTROL}, which this service always reads, so it cannot say any name is absent.`;
   }

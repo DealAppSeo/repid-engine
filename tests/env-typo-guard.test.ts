@@ -1,6 +1,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { findEnvTypos, ALL_KNOWN_ENV_VARS, scanNamedTokens, unreadEnvReport, reportUnreadEnvNames } from '../src/config/env-typo-guard';
 import { SURFACE_ENV_NAMES, SURFACES } from '../src/resilience/decision-contract';
 
@@ -161,8 +162,39 @@ describe('unread variable names (names only)', () => {
     }
   });
 
+  it('a partial scan says NOT_CHECKED even when the control was found', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'env-unread-partial-'));
+    try {
+      writeFileSync(join(dir, 'config.js'), 'process.env.SUPABASE_URL\n');
+      const got = await scanNamedTokens([dir, join(dir, 'gone')]);
+      expect(got.has('SUPABASE_URL')).toBe(true);
+      expect(got.unreadable).toBe(1);
+      const line = unreadEnvReport(['SUPABASE_URL', 'LEFTOVER_OLD_SWITCH'], got);
+      expect(line).toContain('NOT_CHECKED: 1 file(s) or folder(s)');
+      expect(line).not.toContain('LEFTOVER_OLD_SWITCH');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A FIFO with a code extension: readFile on it never returns. Needs mkfifo, so POSIX only.
+  (process.platform === 'win32' ? it.skip : it)('skips a FIFO instead of hanging on it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'env-unread-fifo-'));
+    try {
+      writeFileSync(join(dir, 'config.js'), 'process.env.SUPABASE_URL\n');
+      expect(spawnSync('mkfifo', [join(dir, 'pipe.js')]).status).toBe(0);
+      const timeout = new Promise<'hung'>((r) => setTimeout(() => r('hung'), 3000).unref());
+      const got = await Promise.race([scanNamedTokens([dir]), timeout]);
+      expect(got).not.toBe('hung');
+      expect((got as Awaited<ReturnType<typeof scanNamedTokens>>).has('SUPABASE_URL')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('on this repo, finds the control and a name read only through a helper', async () => {
     const got = await scanNamedTokens([join(__dirname, '..', 'src'), join(__dirname, '..', 'scripts')]);
+    expect(got.unreadable).toBe(0);
     expect(got.has('SUPABASE_URL')).toBe(true);
     expect(got.has('HAL_PERSIST_RULER')).toBe(true); // read as envTrue('...'), not process.env.X
     expect(got.has('ZZ_NOT_A_NAME_ANYWHERE_0')).toBe(false);
