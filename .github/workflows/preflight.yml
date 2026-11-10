@@ -37,11 +37,14 @@ jobs:
         with:
           path: work
           fetch-depth: 0
+      # The tool comes from the BASE branch, never from the PR under review: a PR that edits
+      # scripts/preflight.ts must not be checked by its own edited copy. (So the PR that first adds
+      # the tool reads NOT_CHECKED here, because main does not have it yet.)
       - name: Check out the preflight tool
         uses: actions/checkout@v7
         with:
           repository: DealAppSeo/repid-engine
-          ref: ${{ inputs.tool-ref || github.sha }}
+          ref: ${{ inputs.tool-ref || github.event.pull_request.base.sha }}
           path: tool
       - uses: actions/setup-node@v7
         with:
