@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { findEnvTypos, ALL_KNOWN_ENV_VARS, scanNamedTokens, unreadEnvReport, reportUnreadEnvNames } from '../src/config/env-typo-guard';
 import { SURFACE_ENV_NAMES, SURFACES } from '../src/resilience/decision-contract';
@@ -86,7 +86,7 @@ describe('unread variable names (names only)', () => {
 
   it('lists a set name that no code names, and only that one', () => {
     const line = unreadEnvReport(['SUPABASE_URL', 'HAL_STRICTNESS', 'LEFTOVER_OLD_SWITCH'], named);
-    expect(line).toContain("1 set variable(s) that this repo's code never names: LEFTOVER_OLD_SWITCH.");
+    expect(line).toContain('1 set variable(s) named nowhere in the scanned code: LEFTOVER_OLD_SWITCH.');
     expect(line).toContain('Libraries and names built at runtime are not seen, so check before deleting.');
   });
 
@@ -96,9 +96,9 @@ describe('unread variable names (names only)', () => {
   });
 
   it('leaves out names the platform injects', () => {
-    const line = unreadEnvReport(['SUPABASE_URL', 'RAILWAY_ENVIRONMENT', 'PATH', 'npm_config_cache', 'NODE_ENV'], named);
+    const line = unreadEnvReport(['SUPABASE_URL', 'RAILWAY_ENVIRONMENT', 'PATH', 'npm_config_cache', 'NODE_ENV', 'NIX_PATH', 'NIXPKGS_ALLOW_UNFREE', 'COLOR', 'INIT_CWD', 'VIPSHOME'], named);
     expect(line).toContain('no set variable is unread');
-    expect(line).toContain("all 1 non-platform names appear in this repo's code (4 platform names skipped)");
+    expect(line).toContain('all 1 non-platform names appear in the scanned code (9 platform names skipped)');
   });
 
   it('counts an odd-format name but never prints it', () => {
@@ -166,12 +166,26 @@ describe('unread variable names (names only)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'env-unread-partial-'));
     try {
       writeFileSync(join(dir, 'config.js'), 'process.env.SUPABASE_URL\n');
-      const got = await scanNamedTokens([dir, join(dir, 'gone')]);
+      const got = await scanNamedTokens([dir, join(dir, 'config.js')]); // a file as a root: readdir fails, not ENOENT
       expect(got.has('SUPABASE_URL')).toBe(true);
       expect(got.unreadable).toBe(1);
       const line = unreadEnvReport(['SUPABASE_URL', 'LEFTOVER_OLD_SWITCH'], got);
       expect(line).toContain('NOT_CHECKED: 1 file(s) or folder(s)');
       expect(line).not.toContain('LEFTOVER_OLD_SWITCH');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('an absent root is not a partial scan: that code is not in this image', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'env-unread-absent-'));
+    try {
+      writeFileSync(join(dir, 'config.js'), 'process.env.SUPABASE_URL\n');
+      const got = await scanNamedTokens([dir, join(dir, 'scripts')]);
+      expect(got.unreadable).toBe(0);
+      expect(got.scanned).toEqual([dir]); // the absent root is not claimed as scanned
+      expect(unreadEnvReport(['SUPABASE_URL', 'LEFTOVER_OLD_SWITCH'], got)).toContain('named nowhere in the scanned code: LEFTOVER_OLD_SWITCH.');
+      expect(unreadEnvReport(['LEFTOVER_OLD_SWITCH'], await scanNamedTokens([join(dir, 'dist')]))).toContain('NOT_CHECKED'); // no dist/: control fails
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -212,6 +226,7 @@ describe('unread variable names (names only)', () => {
       expect(warn).toHaveBeenCalledTimes(1);
       const line = String(warn.mock.calls[0]![0]);
       expect(line).toContain('LEFTOVER_E2E_SWITCH');
+      expect(line).toContain(`named nowhere in ${basename(dir)}/:`);
       expect(line).not.toContain('secret-value-must-not-print');
 
       warn.mockClear();
