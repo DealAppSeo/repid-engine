@@ -43,30 +43,94 @@ function run(cmd: string, args: string[], cwd: string): string | null {
 }
 
 const lines = (s: string | null): string[] => (s ? s.split(/\r?\n/).map((x) => x.trim()).filter(Boolean) : []);
+const nulSeparated = (s: string | null): string[] | null => (s === null ? null : s.split('\0').filter(Boolean));
+
+/** git prints non-ASCII paths as octal escapes unless told not to, and then they never equal GitHub's. */
+const GIT_RAW = ['-c', 'core.quotePath=false'];
+
+/** git still C-quotes a path holding a quote, a backslash or a control character. Undo that exactly. */
+export function unquoteGitPath(s: string): string {
+  if (s.length < 2 || !s.startsWith('"') || !s.endsWith('"')) return s;
+  const esc: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 };
+  const body = s.slice(1, -1);
+  const bytes: number[] = [];
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]!;
+    if (c !== '\\') bytes.push(...Buffer.from(c, 'utf8'));
+    else if (/[0-7]/.test(body[i + 1] ?? '')) {
+      bytes.push(parseInt(body.slice(i + 1, i + 4), 8));
+      i += 3;
+    } else {
+      const n = body[i + 1] ?? '';
+      bytes.push(esc[n] ?? n.charCodeAt(0));
+      i += 1;
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
 
 /** Commits on `base` after `fork`, each with the PR number from its squash subject and the files it touched. */
 export function mergedSince(dir: string, fork: string, base: string): MergedChange[] | null {
-  const out = run('git', ['log', '--no-renames', '--format=@@%H%x09%s', '--name-only', `${fork}..${base}`], dir);
+  const out = run('git', [...GIT_RAW, 'log', '--no-renames', '--format=@@%H%x09%s', '--name-only', `${fork}..${base}`], dir);
   if (out === null) return null;
   const changes: MergedChange[] = [];
   for (const line of out.split(/\r?\n/)) {
     if (line.startsWith('@@')) {
       const [sha, ...subject] = line.slice(2).split('\t');
       changes.push({ sha: sha ?? '', pr: prFromSubject(subject.join('\t')), files: [] });
-    } else if (line.trim() && changes.length) changes[changes.length - 1]!.files.push(line.trim());
+    } else if (line.trim() && changes.length) changes[changes.length - 1]!.files.push(unquoteGitPath(line.trim()));
   }
   return changes;
 }
 
-function openPrs(dir: string, repo: string, exclude: (p: { number: number; headRefName: string }) => boolean): OpenPr[] | null {
-  const out = run('gh', ['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', 'number,title,headRefName,files'], dir);
+/** Every file of one PR, exactly as GitHub names it (JSON per line, so a newline in a name survives). */
+function prFiles(dir: string, repo: string, n: number): string[] | null {
+  const out = run('gh', ['api', '--paginate', `repos/${repo}/pulls/${n}/files`, '--jq', '.[].filename | @json'], dir);
   if (out === null) return null;
   try {
-    const rows = JSON.parse(out) as { number: number; title: string; headRefName: string; files: { path: string }[] | null }[];
-    return rows.filter((p) => !exclude(p)).map((p) => ({ number: p.number, title: p.title, files: (p.files ?? []).map((x) => x.path) }));
+    return lines(out).map((l) => JSON.parse(l) as string);
   } catch {
     return null;
   }
+}
+
+export const OPEN_PR_LIMIT = 1000;
+
+/**
+ * Other open PRs and their files. `gh pr list` gives at most 100 files per PR and at most `limit` PRs and
+ * drops the rest without saying so, so a short read is filled from the API or, failing that, is null:
+ * a partial list is never "no other open PR touches these files".
+ */
+export function parseOpenPrs(
+  out: string | null,
+  exclude: (p: { number: number; headRefName: string }) => boolean,
+  fetchFiles: (n: number) => string[] | null,
+  limit = OPEN_PR_LIMIT,
+): OpenPr[] | null {
+  if (out === null) return null;
+  let rows: { number: number; title: string; headRefName: string; files: { path: string }[] | null; changedFiles: number }[];
+  try {
+    rows = JSON.parse(out);
+  } catch {
+    return null;
+  }
+  if (rows.length >= limit) return null;
+  const result: OpenPr[] = [];
+  for (const p of rows.filter((r) => !exclude(r))) {
+    let files = (p.files ?? []).map((x) => x.path);
+    if (files.length < p.changedFiles) {
+      const all = fetchFiles(p.number);
+      if (all === null || all.length < p.changedFiles) return null;
+      files = all;
+    }
+    result.push({ number: p.number, title: p.title, files });
+  }
+  return result;
+}
+
+function openPrs(dir: string, repo: string, exclude: (p: { number: number; headRefName: string }) => boolean): OpenPr[] | null {
+  const out = run('gh', ['pr', 'list', '--repo', repo, '--state', 'open', '--limit', String(OPEN_PR_LIMIT), '--json', 'number,title,headRefName,files,changedFiles'], dir);
+  return parseOpenPrs(out, exclude, (n) => prFiles(dir, repo, n));
 }
 
 function repoFromRemote(dir: string): string | null {
@@ -106,31 +170,44 @@ async function main(): Promise<void> {
   const baseSha = run('git', ['rev-parse', baseRef], dir) ?? '';
 
   let head = 'HEAD';
-  let files: string[];
+  let files: string[] = [];
+  let filesUnreadable: string | undefined;
   let body: string | null = null;
   let author: string | undefined;
   let self: (p: { number: number; headRefName: string }) => boolean;
 
   if (prNumber !== undefined) {
-    const view = run('gh', ['pr', 'view', String(prNumber), '--repo', repo, '--json', 'body,files,author'], dir);
-    const pr = view ? (JSON.parse(view) as { body: string; files: { path: string }[]; author: { login: string } }) : null;
+    const view = run('gh', ['pr', 'view', String(prNumber), '--repo', repo, '--json', 'body,author,changedFiles'], dir);
+    let pr: { body: string; author: { login: string }; changedFiles: number } | null = null;
+    try {
+      pr = view ? JSON.parse(view) : null;
+    } catch {
+      pr = null;
+    }
     head = `refs/preflight/pr-${prNumber}`;
     run('git', ['fetch', '-q', 'origin', `+refs/pull/${prNumber}/head:${head}`], dir);
-    files = (pr?.files ?? []).map((f) => f.path);
+    const listed = prFiles(dir, repo, prNumber);
+    files = listed ?? [];
+    if (!pr || listed === null) filesUnreadable = `could not read the files of PR #${prNumber}`;
+    else if (listed.length !== pr.changedFiles) filesUnreadable = `read ${listed.length} of the ${pr.changedFiles} files in PR #${prNumber}`;
     body = pr?.body ?? null;
     author = pr?.author.login;
     self = (p) => p.number === prNumber;
   } else {
     const branch = run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], dir) ?? '';
     self = (p) => p.headRefName === branch;
-    files = [];
   }
   const forkSha = run('git', ['merge-base', head, baseRef], dir) ?? '';
   if (prNumber === undefined) {
     const planned = flag('files');
-    files = planned
-      ? planned.split(',').map((x) => x.trim()).filter(Boolean)
-      : [...new Set([...lines(run('git', ['diff', '--name-only', forkSha], dir)), ...lines(run('git', ['ls-files', '--others', '--exclude-standard'], dir))])];
+    if (planned) files = planned.split(',').map((x) => x.trim()).filter(Boolean);
+    else {
+      // -z gives each path verbatim, so a newline in a name cannot split it into two.
+      const changed = forkSha ? nulSeparated(run('git', [...GIT_RAW, 'diff', '--name-only', '-z', forkSha], dir)) : null;
+      const untracked = nulSeparated(run('git', [...GIT_RAW, 'ls-files', '-z', '--others', '--exclude-standard'], dir));
+      if (changed === null || untracked === null) filesUnreadable = `could not read the files this work touches under ${dir}`;
+      files = [...new Set([...(changed ?? []), ...(untracked ?? [])])];
+    }
   }
 
   const taskId = flag('task') ? Number(flag('task')) : taskFromBody(body);
@@ -139,6 +216,7 @@ async function main(): Promise<void> {
     baseSha,
     forkSha,
     files,
+    filesUnreadable,
     mergedSince: baseSha && forkSha ? mergedSince(dir, forkSha, baseRef) : null,
     openPrs: repo ? openPrs(dir, repo, self) : null,
     taskId,

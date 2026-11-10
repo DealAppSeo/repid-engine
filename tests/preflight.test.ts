@@ -7,8 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { evaluatePreflight, prFromSubject, summaryMarkdown, taskFromBody, type PreflightFacts } from '../src/orchestration/preflight';
-import { mergedSince } from '../scripts/preflight';
+import { evaluatePreflight, formatPreflight, prFromSubject, summaryMarkdown, taskFromBody, type PreflightFacts } from '../src/orchestration/preflight';
+import { mergedSince, parseOpenPrs, unquoteGitPath } from '../scripts/preflight';
 
 const NOW = new Date('2026-11-09T20:00:00Z');
 const FORK = '41503778a769117c3a6b6a1622e9779b5bd6e427';
@@ -153,6 +153,51 @@ describe('preflight: the job summary', () => {
   });
 });
 
+describe('preflight: hostile and incomplete inputs', () => {
+  const hostile = 'migrations/foo\n::error::forged\nbar.ts';
+
+  it('never lets a path start a new log line, so it cannot forge a workflow command', () => {
+    const out = formatPreflight(evaluatePreflight(facts({ files: [hostile], claim: { ...facts().claim!, scope: ['app/**'] } })));
+    expect(out).toContain('forged');
+    expect(out.split('\n')).toHaveLength(1 + 7);
+    expect(out.split('\n').some((l) => l.startsWith('::'))).toBe(false);
+  });
+
+  it('sends a path with a control character to the owner instead of passing it', () => {
+    const c = status(facts({ files: [hostile], claim: { ...facts().claim!, scope: ['**'] } }), 'permission');
+    expect(c.status).toBe('WARN');
+  });
+
+  it('reports the file legs NOT_CHECKED when the file list is known to be incomplete', () => {
+    const r = evaluatePreflight(facts({ forkSha: FORK, mergedSince: [{ sha: TIP, pr: 9, files: ['docs/other.md'] }], filesUnreadable: 'read 100 of the 250 files in PR #1' }));
+    for (const name of ['fresh_base', 'duplicate_work', 'scope', 'permission']) expect(r.checks.find((c) => c.name === name)!.status).toBe('NOT_CHECKED');
+  });
+
+  it('keeps a real overlap as FAIL even when the list is incomplete', () => {
+    const r = evaluatePreflight(facts({ openPrs: [{ number: 5, title: 'x', files: ['app/page.tsx'] }], filesUnreadable: 'partial' }));
+    expect(r.checks.find((c) => c.name === 'duplicate_work')!.status).toBe('FAIL');
+  });
+
+  it('decodes paths git C-quotes, so they equal the literal paths GitHub reports', () => {
+    expect(unquoteGitPath('"\\303\\251.sql"')).toBe('é.sql');
+    expect(unquoteGitPath('"a\\nb.ts"')).toBe('a\nb.ts');
+    expect(unquoteGitPath('plain/path.ts')).toBe('plain/path.ts');
+  });
+
+  const row = (number: number, paths: string[], changedFiles: number) => ({ number, title: 't', headRefName: `b${number}`, files: paths.map((path) => ({ path })), changedFiles });
+  const none = () => false;
+
+  it('fills a PR whose file list gh truncated, from the full listing', () => {
+    const out = JSON.stringify([row(1, ['a.ts'], 2)]);
+    expect(parseOpenPrs(out, none, () => ['a.ts', 'b.ts'])).toEqual([{ number: 1, title: 't', files: ['a.ts', 'b.ts'] }]);
+  });
+
+  it('returns null, never a partial list, when a truncated PR cannot be filled or the PR list hit its limit', () => {
+    expect(parseOpenPrs(JSON.stringify([row(1, ['a.ts'], 2)]), none, () => null)).toBeNull();
+    expect(parseOpenPrs(JSON.stringify([row(1, ['a.ts'], 1), row(2, ['b.ts'], 1)]), none, () => [], 2)).toBeNull();
+  });
+});
+
 describe('preflight: parsing', () => {
   it('reads the PR number from a squash subject, and nothing else', () => {
     expect(prFromSubject('fix(site): move every install to 1.9.1 (#692)')).toBe(692);
@@ -189,6 +234,15 @@ describe('preflight: reading real git history', () => {
     const c = r.checks.find((x) => x.name === 'fresh_base')!;
     expect(c.status).toBe('FAIL');
     expect(c.reason).toContain('#5');
+  });
+
+  it('reads a non-ASCII path literally, as GitHub does', () => {
+    const fork = git('rev-parse', 'HEAD');
+    writeFileSync(join(dir, 'é.sql'), '1');
+    git('add', '.');
+    git('commit', '-q', '-m', 'add é (#6)');
+    const merged = mergedSince(dir, fork, 'main');
+    expect(merged!.flatMap((c) => c.files)).toContain('é.sql');
   });
 
   it('returns null, not an empty list, when the history cannot be read', () => {

@@ -52,6 +52,8 @@ export interface PreflightFacts {
   forkSha: string;
   /** Files touched so far, or planned, repo-relative. */
   files: string[];
+  /** Set when `files` is known to be incomplete or could not be read: every file leg is then NOT_CHECKED. */
+  filesUnreadable?: string;
   /** Commits on the target branch since `forkSha`. null = could not be read. */
   mergedSince: MergedChange[] | null;
   /** Other open PRs on the same repo. null = could not be read. */
@@ -96,8 +98,19 @@ export const OWNER_ONLY_PATHS: readonly string[] = [
 
 const ORDER: readonly CheckStatus[] = ['FAIL', 'NOT_CHECKED', 'WARN', 'PASS'];
 
-const list = (xs: readonly string[], max = 4): string =>
-  xs.length <= max ? xs.join(', ') : `${xs.slice(0, max).join(', ')} and ${xs.length - max} more`;
+const CONTROL = /[\x00-\x1f\x7f]/;
+
+/**
+ * Text safe to print on one line. Reasons quote paths and names that came from a pull request, and a
+ * newline in one would start a new log line, which the Actions runner reads as a workflow command
+ * when it begins with "::". Control characters are shown as U+FFFD instead.
+ */
+export const printable = (s: string): string => s.replace(/[\x00-\x1f\x7f]/g, '�');
+
+const list = (xs: readonly string[], max = 4): string => {
+  const shown = xs.map(printable);
+  return shown.length <= max ? shown.join(', ') : `${shown.slice(0, max).join(', ')} and ${shown.length - max} more`;
+};
 
 function freshBase(f: PreflightFacts, mine: Set<string>): Check {
   // Two unreadable SHAs are both '', and '' === '' must not read as "starts from the tip".
@@ -159,28 +172,44 @@ function taskChecks(f: PreflightFacts, files: string[]): Check[] {
 }
 
 function permission(files: string[]): Check {
-  const owner = files.filter((x) => matchesAny(x, OWNER_ONLY_PATHS));
+  // The globs compile `**` to `.*`, which stops at a newline, so a path with a control character could
+  // slip past every owner-only pattern. Such a path is never a silent pass: it goes to the owner.
+  const odd = files.filter((x) => CONTROL.test(x));
+  const owner = files.filter((x) => !CONTROL.test(x) && matchesAny(x, OWNER_ONLY_PATHS));
+  if (odd.length > 0) {
+    const also = owner.length > 0 ? `; owner-only paths: ${list(owner)}` : '';
+    return { name: 'permission', status: 'WARN', reason: `paths with control characters, which the owner-only check cannot read: ${list(odd)}${also}` };
+  }
   return owner.length === 0
     ? { name: 'permission', status: 'PASS', reason: 'no owner-only paths' }
     : { name: 'permission', status: 'WARN', reason: `owner decision needed before merge (r31 MAJOR): ${list(owner)}` };
 }
 
+const FILE_LEGS: readonly CheckName[] = ['fresh_base', 'duplicate_work', 'scope', 'permission'];
+
 export function evaluatePreflight(f: PreflightFacts): PreflightResult {
   const files = [...new Set(f.files.map((x) => normalisePath(x)).filter(Boolean))];
   const mine = new Set(files);
-  // With no files, "no overlap", "inside scope" and "no owner-only paths" are true of nothing: not checked.
-  const fileLegs: readonly CheckName[] = ['duplicate_work', 'scope', 'permission'];
-  const checks = [freshBase(f, mine), duplicateWork(f, mine), ...taskChecks(f, files), permission(files)].map((c): Check =>
-    files.length === 0 && c.status === 'PASS' && fileLegs.includes(c.name)
-      ? { ...c, status: 'NOT_CHECKED', reason: 'no files to check: pass --files, or make the change first' }
-      : c,
-  );
+  const checks = [freshBase(f, mine), duplicateWork(f, mine), ...taskChecks(f, files), permission(files)].map((c): Check => {
+    if (!FILE_LEGS.includes(c.name)) return c;
+    const atTip = c.name === 'fresh_base' && c.status === 'PASS'; // true whatever the files are
+    // An incomplete or unread file list cannot support "no overlap", "inside scope", "no owner-only
+    // paths" or "none of these files changed". A FAIL or an owner WARN found in it still stands.
+    if (f.filesUnreadable && !atTip && (c.status === 'PASS' || (c.name === 'fresh_base' && c.status === 'WARN'))) {
+      return { ...c, status: 'NOT_CHECKED', reason: f.filesUnreadable };
+    }
+    // With no files, those statements are true of nothing: not checked.
+    if (files.length === 0 && c.status === 'PASS' && c.name !== 'fresh_base') {
+      return { ...c, status: 'NOT_CHECKED', reason: 'no files to check: pass --files, or make the change first' };
+    }
+    return c;
+  });
   const verdict = ORDER.find((s) => checks.some((c) => c.status === s)) ?? 'PASS';
   return { verdict, checks };
 }
 
 export function formatPreflight(r: PreflightResult): string {
-  return [`Preflight: ${r.verdict}`, ...r.checks.map((c) => `${c.status.padEnd(11)} ${c.name.padEnd(14)} ${c.reason}`)].join('\n');
+  return [`Preflight: ${r.verdict}`, ...r.checks.map((c) => `${c.status.padEnd(11)} ${c.name.padEnd(14)} ${printable(c.reason)}`)].join('\n');
 }
 
 /**
