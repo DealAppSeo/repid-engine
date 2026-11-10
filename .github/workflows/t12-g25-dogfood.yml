@@ -86,7 +86,7 @@ jobs:
           ollama pull "$MODEL"
       - name: Maker
         env:
-          DATABASE_URL: postgres://t12_lane_worker@127.0.0.1:5432/postgres
+          DATABASE_URL: postgres://t12_lane_maker@127.0.0.1:5432/postgres
           T12_LANES_ENABLED: 'true'
           T12_FREE_WAVE: 'true'
           T12_LOCAL_BASE_URL: ${{ inputs.provider == 'local' && 'http://127.0.0.1:11434/v1' || '' }}
@@ -99,7 +99,7 @@ jobs:
           node -e "const r=require(process.env.RUNNER_TEMP+'/maker.json');console.log(JSON.stringify({made:r.made,errors:r.errors.length,stoppedBy:r.stoppedBy,paused:r.paused}))"
       - name: Checker
         env:
-          DATABASE_URL: postgres://t12_lane_worker@127.0.0.1:5432/postgres
+          DATABASE_URL: postgres://t12_lane_checker@127.0.0.1:5432/postgres
           T12_LANES_ENABLED: 'true'
           T12_LANES_ALLOW_EXEC: 'true'
         run: |

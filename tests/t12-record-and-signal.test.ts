@@ -98,6 +98,14 @@ describe('the workflows stay inert and least-privilege', () => {
     expect(code).not.toMatch(/contents: write|id-token: write/);
   });
 
+  it('gives each job its own database secret, for its own Postgres role', () => {
+    const db = (j: string) => j.match(/secrets\.T12_\w*DATABASE_URL/g);
+    expect(db(maker)).toEqual(['secrets.T12_MAKER_DATABASE_URL']);
+    expect(db(checker)).toEqual(['secrets.T12_CHECKER_DATABASE_URL']);
+    expect(db(integrator)).toEqual(['secrets.T12_INTEGRATOR_DATABASE_URL']);
+    expect(code).not.toContain('T12_WORKER_DATABASE_URL');
+  });
+
   it('moves commits by artifact id and fails on a digest mismatch', () => {
     for (const j of [checker, integrator]) {
       expect(j).toContain('artifact-ids: ${{ needs.maker.outputs.artifact-id }}');

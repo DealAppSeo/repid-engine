@@ -4,7 +4,11 @@
 # gate. A manual start also does nothing unless the owner sets the repository variable
 # T12_SUPERVISOR_ENABLED to true and creates the secrets, and none of those exist today.
 #
-# Three separate jobs, on three separate machines, each holding only its own credentials. Model-written
+# Three separate jobs, on three separate machines, each holding only its own credentials. Each job reads
+# its own database secret, for its own Postgres role (t12_lane_maker, t12_lane_checker, t12_lane_integrator),
+# and Postgres refuses any stage move that is not that role's: a maker cannot approve its own work. One
+# owner still holds all three credentials, so this is separation under one controller, not independent
+# authority. Model-written
 # commits travel as an artifact pinned by id, then each bundle is checked against the digest on the task row.
 # Model-written code runs only inside the verified container. Raw runner output is never printed or
 # uploaded, because this repository's logs are public; detail stays in the database receipts.
@@ -55,7 +59,7 @@ jobs:
           persist-credentials: false
       - name: Maker, no way to run code and no push token
         env:
-          DATABASE_URL: ${{ secrets.T12_WORKER_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.T12_MAKER_DATABASE_URL }}
           T12_LANES_ENABLED: 'true'
           T12_FREE_WAVE: 'true'
           GROQ_API_KEY: ${{ secrets.T12_GROQ_API_KEY }}
@@ -101,7 +105,7 @@ jobs:
           digest-mismatch: error
       - name: Checker, runs model code only in the container, no model keys and no push token
         env:
-          DATABASE_URL: ${{ secrets.T12_WORKER_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.T12_CHECKER_DATABASE_URL }}
           T12_LANES_ENABLED: 'true'
           T12_LANES_ALLOW_EXEC: 'true'
           TARGET_REPO: ${{ inputs.target_repo }}
@@ -138,7 +142,7 @@ jobs:
           digest-mismatch: error
       - name: Integrator, opens draft PRs only, cannot run code and holds no model keys
         env:
-          DATABASE_URL: ${{ secrets.T12_WORKER_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.T12_INTEGRATOR_DATABASE_URL }}
           T12_LANES_ENABLED: 'true'
           T12_LANES_PUBLISH: 'true'
           GH_TOKEN: ${{ secrets.T12_PR_TOKEN }}

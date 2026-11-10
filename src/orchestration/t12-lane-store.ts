@@ -638,15 +638,24 @@ export async function claimStage(db: TxDb, stage: 'awaiting_check' | 'approved',
   });
 }
 
-/** Free check and integrate claims whose holder went away, back to the same stage. */
-export async function recoverStages(db: TxDb, ttlSeconds: number = STAGE_TTL_SECONDS): Promise<number> {
+/**
+ * Free check and integrate claims whose holder went away, back to the same stage. Each database role
+ * may hand back only its own stage (checking for a checker, integrating for an integrator), so a run
+ * passes the stages its role owns; Postgres refuses a write to another stage's row.
+ */
+export async function recoverStages(
+  db: TxDb,
+  ttlSeconds: number = STAGE_TTL_SECONDS,
+  stages: ReadonlyArray<'checking' | 'integrating'> = ['checking', 'integrating'],
+): Promise<number> {
   return db.tx(async (c) => {
     const { rows } = await c.query(
       `SELECT ${ROW_COLUMNS} FROM trinity_tasks
         WHERE assigned_to = $1 AND status = 'pending_validation' AND claimed_by IS NOT NULL
           AND claimed_at <= now() - make_interval(secs => $2::int)
+          AND metadata #>> '{t12,stage}' = ANY($3::text[])
           AND metadata #> '{t12,spec}' IS NOT NULL FOR UPDATE SKIP LOCKED`,
-      [LANE_POOL, ttlSeconds],
+      [LANE_POOL, ttlSeconds, stages],
     );
     for (const row of rows as Row[]) {
       const s = stateOf(row);
