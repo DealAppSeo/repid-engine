@@ -1,4 +1,7 @@
-import { findEnvTypos, ALL_KNOWN_ENV_VARS } from '../src/config/env-typo-guard';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { findEnvTypos, ALL_KNOWN_ENV_VARS, scanNamedTokens, unreadEnvReport } from '../src/config/env-typo-guard';
 import { SURFACE_ENV_NAMES, SURFACES } from '../src/resilience/decision-contract';
 
 describe('findEnvTypos', () => {
@@ -74,5 +77,62 @@ describe('findEnvTypos', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { KNOWN_ENV_VARS } = require('../src/config/known-env-vars.generated');
     expect(() => findEnvTypos(Object.keys(process.env), KNOWN_ENV_VARS)).not.toThrow();
+  });
+});
+
+describe('unread variable names (names only)', () => {
+  const named = new Set(['SUPABASE_URL', 'HAL_STRICTNESS']);
+
+  it('lists a set name that no code names, and only that one', () => {
+    const line = unreadEnvReport(['SUPABASE_URL', 'HAL_STRICTNESS', 'LEFTOVER_OLD_SWITCH'], named);
+    expect(line).toContain('1 set variable(s) that no shipped code names: LEFTOVER_OLD_SWITCH.');
+    expect(line).toContain('check before deleting');
+  });
+
+  it('counts a registry name as read even when the scan did not see it', () => {
+    const composed = ALL_KNOWN_ENV_VARS[ALL_KNOWN_ENV_VARS.length - 1]!;
+    expect(unreadEnvReport(['SUPABASE_URL', composed], named)).toContain('every set variable is named');
+  });
+
+  it('leaves out names the platform injects', () => {
+    const line = unreadEnvReport(['SUPABASE_URL', 'RAILWAY_ENVIRONMENT', 'PATH', 'npm_config_cache', 'NODE_ENV'], named);
+    expect(line).toContain('every set variable is named');
+  });
+
+  it('counts an odd-format name but never prints it', () => {
+    const line = unreadEnvReport(['SUPABASE_URL', 'weird-name=sk_live_abc'], named);
+    expect(line).toContain('Plus 1 name(s) in an unusual format, not printed.');
+    expect(line).not.toContain('weird');
+    expect(line).not.toContain('sk_live');
+  });
+
+  it('says NOT_CHECKED, and lists nothing, when the scan cannot see the control name', () => {
+    const line = unreadEnvReport(['LEFTOVER_OLD_SWITCH'], new Set(['HAL_STRICTNESS']));
+    expect(line).toContain('NOT_CHECKED');
+    expect(line).not.toContain('LEFTOVER_OLD_SWITCH');
+  });
+
+  it('reads names from code files, comments included, but not from docs or node_modules', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'env-unread-'));
+    try {
+      writeFileSync(join(dir, 'a.ts'), '// mentions ALPHA_ONE\nconst x = process.env.BETA_TWO;\n');
+      writeFileSync(join(dir, 'b.md'), 'GAMMA_THREE\n');
+      mkdirSync(join(dir, 'node_modules'));
+      writeFileSync(join(dir, 'node_modules', 'c.js'), 'DELTA_FOUR\n');
+      const got = await scanNamedTokens([dir]);
+      expect(got.has('ALPHA_ONE')).toBe(true);
+      expect(got.has('BETA_TWO')).toBe(true);
+      expect(got.has('GAMMA_THREE')).toBe(false);
+      expect(got.has('DELTA_FOUR')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('on this repo, finds the control and a name read only through a helper', async () => {
+    const got = await scanNamedTokens([join(__dirname, '..', 'src'), join(__dirname, '..', 'scripts')]);
+    expect(got.has('SUPABASE_URL')).toBe(true);
+    expect(got.has('HAL_PERSIST_RULER')).toBe(true); // read as envTrue('...'), not process.env.X
+    expect(got.has('ZZ_NOT_A_NAME_ANYWHERE_0')).toBe(false);
   });
 });

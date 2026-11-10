@@ -1,3 +1,5 @@
+import { readdir, readFile } from 'node:fs/promises';
+import { extname, join, resolve } from 'node:path';
 import { KNOWN_ENV_VARS } from './known-env-vars.generated';
 import { SURFACE_ENV_NAMES } from '../resilience/decision-contract';
 
@@ -96,4 +98,79 @@ export function warnEnvTypos(): void {
       `[config] ${w.set} is set, but nothing reads it. Did you mean ${w.suggested}? (that one is UNSET, using its default)`,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Unread names: every set variable that no shipped code names at all.
+//
+// The typo check above only speaks when a set name is CLOSE to a real one, so a
+// stale name that resembles nothing passes in silence (on 2026-11-10 one service
+// held about 20 such names). This prints them all,
+// once per boot, off the boot path. Names only: no value is ever read.
+//
+// "Named" is deliberately generous: any SCREAMING_SNAKE token anywhere in the
+// shipped code (compiled src and the scripts the cron services run, comments
+// included), plus the registry. A name that is only in a comment counts as read.
+// That errs toward silence, never toward telling the owner to delete a live
+// variable. The one gap is a name built at runtime, so the line says to check
+// before deleting.
+
+/** Names the platform injects. One missing here shows up as noise, not as a hidden name. */
+const PLATFORM_NAME_RE =
+  /^(RAILWAY|NIXPACKS|NPM|NODE|LC|XDG|GIT)_|^(_|PATH|HOME|HOSTNAME|PWD|OLDPWD|SHLVL|TERM|LANG|TZ|USER|SHELL|LD_LIBRARY_PATH|CI|DEBIAN_FRONTEND)$/i;
+
+/** Anything else is counted, never printed: a name is not a value, but an odd one could hold one. */
+const PLAIN_NAME_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
+
+/** src/config.ts refuses to boot without it, so a scan that cannot see it saw nothing. */
+const SCAN_CONTROL = 'SUPABASE_URL';
+
+const TOKEN_RE = /\b[A-Z][A-Z0-9_]+\b/g;
+const CODE_EXT = new Set(['.js', '.mjs', '.cjs', '.ts']);
+
+export async function scanNamedTokens(roots: readonly string[]): Promise<Set<string>> {
+  const named = new Set<string>();
+  const walk = async (dir: string): Promise<void> => {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) await walk(p);
+      else if (CODE_EXT.has(extname(e.name))) {
+        const text = await readFile(p, 'utf8').catch(() => '');
+        for (const m of text.match(TOKEN_RE) ?? []) named.add(m);
+      }
+    }
+  };
+  for (const r of roots) await walk(r);
+  return named;
+}
+
+export function unreadEnvReport(setNames: readonly string[], named: ReadonlySet<string>): string {
+  if (!named.has(SCAN_CONTROL)) {
+    return `[config] unread-variable check NOT_CHECKED: the code scan did not find ${SCAN_CONTROL}, which this service always reads, so it cannot say any name is absent.`;
+  }
+  const known = new Set(ALL_KNOWN_ENV_VARS);
+  const unread = setNames.filter((n) => !PLATFORM_NAME_RE.test(n) && !known.has(n) && !named.has(n));
+  const plain = unread.filter((n) => PLAIN_NAME_RE.test(n)).sort();
+  const odd = unread.length - plain.length;
+  if (!unread.length) return `[config] every set variable is named in the shipped code (${setNames.length} set).`;
+  const oddNote = odd ? ` Plus ${odd} name(s) in an unusual format, not printed.` : '';
+  return (
+    `[config] ${plain.length} set variable(s) that no shipped code names: ${plain.join(', ') || 'none'}.${oddNote}` +
+    ' Names only, values are never read. A name built at runtime would also land here, so check before deleting.'
+  );
+}
+
+/** dist/config -> dist (src/config -> src under ts-node), plus the repo's scripts/. */
+export function defaultScanRoots(): string[] {
+  const codeRoot = resolve(__dirname, '..');
+  return [codeRoot, resolve(codeRoot, '..', 'scripts')];
+}
+
+/** Fire-and-forget. Never throws, never blocks boot. */
+export function reportUnreadEnvNames(roots: readonly string[] = defaultScanRoots()): Promise<void> {
+  return scanNamedTokens(roots)
+    .then((named) => console.warn(unreadEnvReport(Object.keys(process.env), named)))
+    .catch((e) => console.warn(`[config] unread-variable check NOT_CHECKED: ${e?.message ?? e}`));
 }

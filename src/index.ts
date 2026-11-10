@@ -170,7 +170,7 @@ async function warmModelSelectionCaches(): Promise<void> {
     if (r.status === 'rejected') console.error('[hal] model-selection cache refresh failed:', r.reason);
   }
 }
-import { warnEnvTypos } from './config/env-typo-guard';
+import { warnEnvTypos, reportUnreadEnvNames } from './config/env-typo-guard';
 
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
@@ -179,6 +179,7 @@ import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 // inside the process. Never throws, never delays boot — see env-typo-guard.ts.
 try {
   warnEnvTypos();
+  void reportUnreadEnvNames(); // async, off the boot path; one line listing set names no code names
 } catch {
   // best-effort diagnostic only
 }
