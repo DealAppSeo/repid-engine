@@ -157,7 +157,10 @@ export function globToRegExp(pattern: string): RegExp {
       out += c;
     }
   }
-  return new RegExp(out + '$');
+  // The 's' flag: without it `.` stops at any line terminator (LF, CR, U+0085, U+2028, U+2029), so
+  // `migrations/**` would not match a path holding one, and an owner-only or leased path could pass
+  // as ordinary.
+  return new RegExp(out + '$', 's');
 }
 
 /** Normalise any path to repo-relative POSIX form for matching. */

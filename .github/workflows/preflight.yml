@@ -1,0 +1,65 @@
+# Preflight, ADVISORY. The shared start-of-work contract every coding agent passes (Claude, Codex, T12):
+# src/orchestration/preflight.ts, facts gathered by scripts/preflight.ts.
+#
+# On each pull request it reports: does the branch start from an old main whose later commits changed the
+# same files (fresh_base); does another open PR touch the same files (duplicate_work); which trinity_tasks
+# row the PR claims ("Task: <id>" in the body), and that task's lease, fencing epoch and file scope; and
+# owner-only paths (permission).
+#
+# ADVISORY means the job always succeeds and the findings go to the job summary. It reads no secrets, so the
+# task legs read NOT_CHECKED here: CI has no queue credential, and adding one is the owner's decision. Making
+# this a required check is a ruleset change, also the owner's.
+#
+# Other repos run the same contract by calling this file (`workflow_call`), so the rules live in one place.
+# The tool is always repid-engine's code; the repo under review is the caller's.
+name: preflight
+
+on:
+  pull_request:
+  workflow_call:
+    inputs:
+      tool-ref:
+        description: repid-engine ref whose preflight code runs
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository under review
+        uses: actions/checkout@v7
+        with:
+          path: work
+          fetch-depth: 0
+      # The tool comes from the BASE branch, never from the PR under review: a PR that edits
+      # scripts/preflight.ts must not be checked by its own edited copy. (So the PR that first adds
+      # the tool reads NOT_CHECKED here, because main does not have it yet.)
+      - name: Check out the preflight tool
+        uses: actions/checkout@v7
+        with:
+          repository: DealAppSeo/repid-engine
+          ref: ${{ inputs.tool-ref || github.event.pull_request.base.sha }}
+          path: tool
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Preflight (advisory)
+        working-directory: tool
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REPO: ${{ github.repository }}
+        # TypeScript matches repid-engine's own (tsconfig uses 6.x options). If the tool itself cannot run,
+        # the job still succeeds, as advisory, but says NOT_CHECKED instead of reading as a clean pass.
+        run: |
+          npx --yes -p ts-node@10.9.2 -p typescript@6.0.3 \
+            ts-node --transpile-only scripts/preflight.ts \
+            --dir ../work --pr "$PR_NUMBER" --github "$REPO" --base "$BASE_REF" --advisory \
+          || echo "## Preflight: NOT_CHECKED (advisory): the preflight tool did not run; see the log." | tee -a "$GITHUB_STEP_SUMMARY"
