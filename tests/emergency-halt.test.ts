@@ -932,3 +932,23 @@ describe('emergency halt — tick-loop coverage (filesystem-pinned)', () => {
     expect(halt).toBeLessThan(breaker);
   });
 });
+
+describe('stdout stays clean: CLIs that print JSON import this module', () => {
+  // scripts/t12/lanes.ts prints its result as JSON on stdout and reaches this module through
+  // shouldParkForHalt. A "[EmergencyHalt] ..." line on stdout made that JSON unparseable and
+  // failed the first real T12 run (repid-engine Actions run 42775628879).
+  it('the first read, a halt, its clearing and the refresher start write nothing to console.log', async () => {
+    const off = fakeClient({ data: { emergency_halt: false }, error: null });
+    await shouldParkForHalt(off.client, 'cli'); // first read: logs "halt cleared"
+    const on = fakeClient({ data: { emergency_halt: true }, error: null });
+    await checkEmergencyHalt(on.client, { mode: 'enforce', cacheMs: 0 }); // halt active
+    await checkEmergencyHalt(off.client, { mode: 'enforce', cacheMs: 0 }); // cleared again
+    startEmergencyHaltRefresher(off.client, 60_000);
+    __stopEmergencyHaltRefresher();
+
+    expect(logSpy).not.toHaveBeenCalled();
+    const warned = warnSpy.mock.calls.map((c) => String(c[0]));
+    expect(warned.filter((m) => m.includes('halt cleared'))).toHaveLength(2);
+    expect(warned.some((m) => m.includes('refresher started'))).toBe(true);
+  });
+});

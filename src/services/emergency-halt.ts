@@ -415,7 +415,10 @@ function logTransition(flag: boolean, halted: boolean, mode: EmergencyHaltMode, 
               'so NOTHING is being parked or refused. Set EMERGENCY_HALT_MODE=enforce (the default) to make it bite.',
       );
     } else {
-      console.log(`[EmergencyHalt] halt cleared — resuming normal operation (mode=${mode} source=${source})`);
+      // stderr, like every other line here. A CLI that prints JSON on stdout imports this module
+      // (scripts/t12/lanes.ts via shouldParkForHalt), and this line fires on the FIRST read, since
+      // lastLoggedHalted starts null. On stdout it broke the T12 maker's output (run 42775628879).
+      console.warn(`[EmergencyHalt] halt cleared — resuming normal operation (mode=${mode} source=${source})`);
     }
     return;
   }
@@ -472,7 +475,7 @@ export function startEmergencyHaltRefresher(
   tick();
   refresherTimer = setInterval(tick, Math.max(1000, intervalMs));
   if (typeof refresherTimer.unref === 'function') refresherTimer.unref();
-  console.log(`[EmergencyHalt] refresher started (every ${Math.max(1000, intervalMs)}ms, mode=${peekHaltState().mode})`);
+  console.warn(`[EmergencyHalt] refresher started (every ${Math.max(1000, intervalMs)}ms, mode=${peekHaltState().mode})`);
 }
 
 /** Test-only: stop the background poll. */
