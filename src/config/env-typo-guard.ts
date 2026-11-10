@@ -127,13 +127,16 @@ const SCAN_CONTROL = 'SUPABASE_URL';
 
 const TOKEN_RE = /\b[A-Z][A-Z0-9_]+\b/g;
 const CODE_EXT = new Set(['.js', '.mjs', '.cjs', '.ts']);
+// This file and the registry are skipped: both spell SCAN_CONTROL, so scanning them would satisfy the
+// control on a tree with no other code (Strix, #1529). The registry is unioned separately below.
+const SELF_FILE_RE = /^(env-typo-guard|known-env-vars\.generated)\./;
 
 export async function scanNamedTokens(roots: readonly string[]): Promise<Set<string>> {
   const named = new Set<string>();
   const walk = async (dir: string): Promise<void> => {
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
     for (const e of entries) {
-      if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      if (e.name === 'node_modules' || e.name.startsWith('.') || e.isSymbolicLink() || SELF_FILE_RE.test(e.name)) continue;
       const p = join(dir, e.name);
       if (e.isDirectory()) await walk(p);
       else if (CODE_EXT.has(extname(e.name))) {

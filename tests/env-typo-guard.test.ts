@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findEnvTypos, ALL_KNOWN_ENV_VARS, scanNamedTokens, unreadEnvReport, reportUnreadEnvNames } from '../src/config/env-typo-guard';
@@ -127,6 +127,37 @@ describe('unread variable names (names only)', () => {
       expect(got.has('DELTA_FOUR')).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the control cannot be satisfied by this guard or the registry alone', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'env-unread-self-'));
+    try {
+      writeFileSync(join(dir, 'env-typo-guard.js'), "const SCAN_CONTROL = 'SUPABASE_URL';\n");
+      writeFileSync(join(dir, 'known-env-vars.generated.js'), 'SUPABASE_URL\n');
+      const got = await scanNamedTokens([dir]);
+      expect(got.has('SUPABASE_URL')).toBe(false);
+      expect(unreadEnvReport(['LEFTOVER_OLD_SWITCH'], got)).toContain('NOT_CHECKED');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  const linkDir = mkdtempSync(join(tmpdir(), 'env-unread-link-'));
+  const canLink = (() => {
+    try {
+      writeFileSync(join(linkDir, 'target.txt'), 'LINKED_ONLY_NAME\n');
+      symlinkSync(join(linkDir, 'target.txt'), join(linkDir, 'link.js'));
+      return true;
+    } catch {
+      return false; // Windows without developer mode: reported as skipped, never as a pass
+    }
+  })();
+  (canLink ? it : it.skip)('does not follow a symlink to a file', async () => {
+    try {
+      expect((await scanNamedTokens([linkDir])).has('LINKED_ONLY_NAME')).toBe(false);
+    } finally {
+      rmSync(linkDir, { recursive: true, force: true });
     }
   });
 
