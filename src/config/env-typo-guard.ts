@@ -1,6 +1,6 @@
 import type { Dirent } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
 import { KNOWN_ENV_VARS } from './known-env-vars.generated';
 import { SURFACE_ENV_NAMES } from '../resilience/decision-contract';
 
@@ -116,9 +116,12 @@ export function warnEnvTypos(): void {
 // variable. Two gaps remain, and the line names both: a name built at runtime,
 // and a name only a library reads (node_modules is not scanned).
 
-/** Names the platform injects. One missing here shows up as noise, not as a hidden name. */
+/**
+ * Names the platform injects. One missing here shows up as noise, not as a hidden name. The NIX/NIXPKGS
+ * prefixes and the second group's last seven came from the first production line (Railway Nixpacks image).
+ */
 const PLATFORM_NAME_RE =
-  /^(RAILWAY|NIXPACKS|NPM|NODE|LC|XDG|GIT)_|^(_|PATH|HOME|HOSTNAME|PWD|OLDPWD|SHLVL|TERM|LANG|TZ|USER|SHELL|LD_LIBRARY_PATH|CI|DEBIAN_FRONTEND)$/i;
+  /^(RAILWAY|NIXPACKS|NIX|NIXPKGS|NPM|NODE|LC|XDG|GIT)_|^(_|PATH|HOME|HOSTNAME|PWD|OLDPWD|SHLVL|TERM|LANG|TZ|USER|SHELL|LD_LIBRARY_PATH|CI|DEBIAN_FRONTEND|COLOR|CPATH|EDITOR|INIT_CWD|LIBRARY_PATH|QTDIR|VIPSHOME)$/i;
 
 /** Anything else is counted, never printed: a name is not a value, but an odd one could hold one. */
 const PLAIN_NAME_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
@@ -132,20 +135,28 @@ const CODE_EXT = new Set(['.js', '.mjs', '.cjs', '.ts']);
 // control on a tree with no other code (Strix, #1529). The registry is unioned separately below.
 const SELF_FILE_RE = /^(env-typo-guard|known-env-vars\.generated)\./;
 
-/** The names found, plus how many files or folders could not be read (a partial scan cannot vouch for absence). */
-export type NamedTokens = Set<string> & { unreadable: number };
+/**
+ * The names found, how many files or folders could not be read (a partial scan cannot vouch for absence),
+ * and which roots existed, so the line names only what was actually scanned.
+ */
+export type NamedTokens = Set<string> & { unreadable: number; scanned: string[] };
 
 export async function scanNamedTokens(roots: readonly string[]): Promise<NamedTokens> {
   const named = new Set<string>();
+  const scanned: string[] = [];
   let unreadable = 0;
-  const walk = async (dir: string): Promise<void> => {
+  const walk = async (dir: string, isRoot = false): Promise<void> => {
     let entries: Dirent[];
     try {
       entries = await readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      // A root that is absent is not partial: code that is not in this image reads nothing here (Fly and
+      // self-host images ship no scripts/). A missing dist/ still fails the control below.
+      if (isRoot && (err as NodeJS.ErrnoException)?.code === 'ENOENT') return;
       unreadable += 1;
       return;
     }
+    if (isRoot) scanned.push(dir);
     for (const e of entries) {
       if (e.name === 'node_modules' || e.name.startsWith('.') || e.isSymbolicLink() || SELF_FILE_RE.test(e.name)) continue;
       const p = join(dir, e.name);
@@ -160,11 +171,15 @@ export async function scanNamedTokens(roots: readonly string[]): Promise<NamedTo
       }
     }
   };
-  for (const r of roots) await walk(r);
-  return Object.assign(named, { unreadable });
+  for (const r of roots) await walk(r, true);
+  return Object.assign(named, { unreadable, scanned });
 }
 
-export function unreadEnvReport(setNames: readonly string[], named: ReadonlySet<string> & { unreadable?: number }): string {
+export function unreadEnvReport(
+  setNames: readonly string[],
+  named: ReadonlySet<string> & { unreadable?: number },
+  scope = 'the scanned code',
+): string {
   if (named.unreadable) {
     return `[config] unread-variable check NOT_CHECKED: ${named.unreadable} file(s) or folder(s) in the code scan could not be read, so a name listed as unread might be read there.`;
   }
@@ -177,11 +192,11 @@ export function unreadEnvReport(setNames: readonly string[], named: ReadonlySet<
   const plain = unread.filter((n) => PLAIN_NAME_RE.test(n)).sort();
   const odd = unread.length - plain.length;
   if (!unread.length) {
-    return `[config] no set variable is unread: all ${setNames.length - platform} non-platform names appear in this repo's code (${platform} platform names skipped).`;
+    return `[config] no set variable is unread: all ${setNames.length - platform} non-platform names appear in ${scope} (${platform} platform names skipped).`;
   }
   const oddNote = odd ? ` Plus ${odd} name(s) in an unusual format, not printed.` : '';
   return (
-    `[config] ${plain.length} set variable(s) that this repo's code never names: ${plain.join(', ') || 'none'}.${oddNote}` +
+    `[config] ${plain.length} set variable(s) named nowhere in ${scope}: ${plain.join(', ') || 'none'}.${oddNote}` +
     ' Names only, values are never read. Libraries and names built at runtime are not seen, so check before deleting.'
   );
 }
@@ -195,6 +210,6 @@ export function defaultScanRoots(): string[] {
 /** Fire-and-forget. Never throws, never blocks boot. */
 export function reportUnreadEnvNames(roots: readonly string[] = defaultScanRoots()): Promise<void> {
   return scanNamedTokens(roots)
-    .then((named) => console.warn(unreadEnvReport(Object.keys(process.env), named)))
+    .then((named) => console.warn(unreadEnvReport(Object.keys(process.env), named, named.scanned.map((r) => `${basename(r)}/`).join(' and '))))
     .catch((e) => console.warn(`[config] unread-variable check NOT_CHECKED: ${e?.message ?? e}`));
 }
