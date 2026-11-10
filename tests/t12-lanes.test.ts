@@ -748,6 +748,93 @@ describePg('durable lanes on real Postgres', () => {
     expect((await claimMake(db, L1)).kind).toBe('none');
   });
 
+  // Gate-0 probe P2, 2026-11-09: a maker with one clone met a higher-priority row for the other
+  // allowlisted repo, paused on "no local clone", spent a cap slot, and never reached its own row.
+  describe('a run claims only rows for the repos it has a clone for', () => {
+    const SERVED = 'DealAppSeo/t12-dogfood-sandbox';
+    const OTHER = 'DealAppSeo/trustshell';
+    let root: string;
+    let canon: string;
+    const g = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const pair = () => [spec('other-first', { repo: OTHER, priority: 90 }), spec('served', { repo: SERVED, priority: 10 })];
+    const rowOf = async (id: string) => (await pool.query(
+      `SELECT status, claim_count, metadata #>> '{t12,stage}' AS stage, metadata #> '{t12,receipts}' AS receipts FROM trinity_tasks WHERE metadata #>> '{t12,spec,id}' = $1`, [id],
+    )).rows[0];
+    const events = (r: { receipts: DecisionReceipt[] }) => r.receipts.map((x) => x.event);
+
+    beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), 't12-repos-'));
+      const origin = join(root, 'origin.git');
+      canon = join(root, 'canon');
+      execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+      execFileSync('git', ['clone', '-q', origin, canon], { stdio: 'ignore' });
+      g(canon, 'config', 'user.email', 't@t');
+      g(canon, 'config', 'user.name', 't');
+      g(canon, 'checkout', '-q', '-b', 'main');
+      writeFileSync(join(canon, 'README.md'), 'x\n');
+      g(canon, 'add', '.');
+      g(canon, 'commit', '-q', '-m', 'seed');
+      g(canon, 'push', '-q', 'origin', 'main');
+    });
+    afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+    /** The real git adapters with a clone for SERVED only, as `--repo SERVED=<clone>` gives the CLI. */
+    function run(repos: string[] | undefined, specs: () => LaneSpec[] = pair) {
+      const asked: string[] = [];
+      const adapters = createGitAdapters({
+        repoDirs: { [SERVED]: canon },
+        workRoot: join(root, `w-${Date.now()}`),
+        ask: async (_p, h) => { asked.push(h.spec.id); return { outcome: 'answered', host: 'local', tried: ['local'], text: JSON.stringify({ files: [{ path: h.spec.paths[0]!, content: 'x\n' }] }) }; },
+        allowExec: false,
+        pr: { findByBranch: () => null, createDraft: () => { throw new Error('no publish here'); } },
+      });
+      return runLanes({
+        db, role: 'maker', haltClient: notHalted, lanes: [L1], adapters, publishEnabled: false, checkEnabled: false,
+        repos, specs, readyTarget: 2, idleMs: 10, heartbeatMs: 60_000, maxSteps: 10,
+      }).then((report) => ({ report, asked }));
+    }
+
+    it('claims the served repo\'s row and leaves the other repo\'s row unclaimed, with no receipts', async () => {
+      await replenish(db, pair(), 2);
+      const { report, asked } = await run([SERVED]);
+      expect(report).toMatchObject({ made: 1, paused: null, errors: [], fenceRefused: [] });
+      expect(asked).toEqual(['served']);
+      expect(await rowOf('served')).toMatchObject({ status: 'pending_validation', stage: 'awaiting_check', claim_count: 1 });
+      const other = await rowOf('other-first');
+      expect(other).toMatchObject({ status: 'pending', stage: 'ready', claim_count: 0 });
+      expect(events(other)).toEqual(['enqueued']);
+    }, 60_000);
+
+    it('without the repo list the same pool reproduces P2, so the test above can fail', async () => {
+      await replenish(db, pair(), 2);
+      const { report, asked } = await run(undefined);
+      expect(report.made).toBe(0);
+      expect(report.paused).toContain(`no local clone configured for ${OTHER}`);
+      expect(asked).toEqual([]);
+      expect((await rowOf('served')).claim_count).toBe(0);
+    }, 60_000);
+
+    it('a run with no row it can serve claims nothing and spends no daily-cap slot', async () => {
+      await seed(spec('only-other', { repo: OTHER }));
+      expect(await claimMake(db, L1, { repos: [SERVED], dailyCap: 1 })).toEqual({ kind: 'none', reason: `no ready task in the repos this run can serve: ${SERVED}` });
+      expect(await claimMake(db, L1, { repos: [], dailyCap: 1 })).toMatchObject({ kind: 'none' });
+      const { report, asked } = await run([SERVED], () => [spec('only-other', { repo: OTHER })]);
+      expect(report).toMatchObject({ made: 0, paused: null, errors: [], stoppedBy: 'idle' });
+      expect(asked).toEqual([]);
+      const other = await rowOf('only-other');
+      expect(other).toMatchObject({ status: 'pending', claim_count: 0 });
+      expect(events(other)).toEqual(['enqueued']);
+      // The slot is still free: a run that serves the repo gets the one claim the cap allows.
+      expect((await claimMake(db, L2, { repos: [OTHER], dailyCap: 1 })).kind).toBe('claimed');
+    }, 60_000);
+
+    it('a checker without a clone for a row leaves its check alone', async () => {
+      const h = await toCheck('chk-other');
+      expect(await claimStage(db, 'awaiting_check', L2, 'autonomous', [SERVED])).toBeNull();
+      expect((await claimStage(db, 'awaiting_check', L2, 'autonomous', [OTHER]))?.taskId).toBe(h.taskId);
+    });
+  });
+
   describe('runner', () => {
     function fakeAdapters(over: Partial<LaneAdapters> = {}): LaneAdapters & { calls: string[] } {
       const calls: string[] = [];
