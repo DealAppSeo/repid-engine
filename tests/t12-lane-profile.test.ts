@@ -1,6 +1,8 @@
 /**
  * The restricted worker profile, tested on the real path: the actual CLI as a child process, and
- * the actual role migration applied to a throwaway Postgres and then attacked.
+ * the actual role migration applied to a throwaway Postgres and then attacked. Each stage has its own
+ * database role. `worker` below is the maker's, the one that runs next to model output; the checker
+ * and integrator roles are attacked in their own block.
  */
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -12,11 +14,13 @@ import { T12_ROUTES } from '../src/orchestration/t12-attempt';
 import { dbPrivilege, privilegedEnvPresent, reachableDefiners } from '../src/orchestration/t12-lane-profile';
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
 import {
-  LANE_POOL, checkoutBelt, claimMake, claimStage, coolProvider, coolingProviders, pgHaltClient, poolDb, readLaneState, recordIntegration, recordVerdict, releaseMake, replenish, submit,
+  LANE_POOL, checkoutBelt, claimMake, claimStage, coolProvider, coolingProviders, pgHaltClient, poolDb, readLaneState, recordIntegration, recordVerdict, recoverStages, releaseMake, replenish, submit,
   type Handle, type LaneSpec,
 } from '../src/orchestration/t12-lane-store';
 
 const ROOT = join(__dirname, '..');
+const MIGRATION = join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql');
+const LANE_ROLES = ['t12_lane_maker', 't12_lane_checker', 't12_lane_integrator'] as const;
 const baseEnv = (extra: Record<string, string>) => ({
   PATH: process.env.PATH ?? '', SystemRoot: process.env.SystemRoot ?? '', TEMP: process.env.TEMP ?? '', TMP: process.env.TMP ?? '', USERPROFILE: process.env.USERPROFILE ?? '', ...extra,
 });
@@ -95,6 +99,8 @@ describePg('the restricted database role, attacked', () => {
   const DB = 't12_profile_test';
   let admin: Pool;
   let worker: Pool;
+  let checker: Pool;
+  let integrator: Pool;
   let workerUrl: string;
 
   beforeAll(async () => {
@@ -107,13 +113,16 @@ describePg('the restricted database role, attacked', () => {
     u.pathname = `/${DB}`;
     admin = new Pool({ connectionString: u.toString() });
     await admin.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
-    // The migration must strip a same-named role that already holds more than it should.
-    await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_lane_worker') THEN CREATE ROLE t12_lane_worker LOGIN; END IF; END $$`);
-    await admin.query('ALTER ROLE t12_lane_worker SUPERUSER BYPASSRLS CREATEDB CREATEROLE REPLICATION');
-    await admin.query('ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO t12_lane_worker');
-    await admin.query('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO t12_lane_worker');
-    await admin.query('GRANT postgres TO t12_lane_worker');
-    await admin.query('GRANT ALL ON principal_grants, trinity_agent_logs, repid_agents TO t12_lane_worker');
+    // The migration must strip a same-named role that already holds more than it should, and disarm
+    // the retired shared role, which could approve its own work, if an earlier draft created it.
+    for (const r of [...LANE_ROLES, 't12_lane_worker']) {
+      await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${r}') THEN CREATE ROLE ${r} LOGIN; END IF; END $$`);
+      await admin.query(`ALTER ROLE ${r} LOGIN SUPERUSER BYPASSRLS CREATEDB CREATEROLE REPLICATION`);
+      await admin.query(`ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO ${r}`);
+      await admin.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO ${r}`);
+      await admin.query(`GRANT postgres TO ${r}`);
+      await admin.query(`GRANT ALL ON principal_grants, trinity_agent_logs, repid_agents, trinity_tasks TO ${r}`);
+    }
     // One definer function open to PUBLIC, as most start out, and one already closed to it.
     await admin.query('CREATE OR REPLACE FUNCTION public.t12_probe_open() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$');
     await admin.query('CREATE OR REPLACE FUNCTION public.t12_probe_closed() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$');
@@ -121,31 +130,37 @@ describePg('the restricted database role, attacked', () => {
     // Holds no grant of its own, so anything it can call, it reaches only through PUBLIC.
     await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_public_only') THEN CREATE ROLE t12_public_only NOLOGIN; END IF; END $$`);
     await admin.query('GRANT USAGE ON SCHEMA public TO t12_public_only');
-    await admin.query(readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8'));
-    u.username = 't12_lane_worker';
-    workerUrl = u.toString();
+    await admin.query(readFileSync(MIGRATION, 'utf8'));
+    const as = (r: string) => { u.username = r; return u.toString(); };
+    workerUrl = as('t12_lane_maker');
     worker = new Pool({ connectionString: workerUrl, max: 6 });
+    checker = new Pool({ connectionString: as('t12_lane_checker'), max: 4 });
+    integrator = new Pool({ connectionString: as('t12_lane_integrator'), max: 4 });
     await admin.query(`INSERT INTO trinity_tasks (description, status, assigned_to) VALUES ('someone else''s task', 'pending', 'trinity-orch')`);
   });
-  afterAll(async () => { await worker.end(); await admin.end(); });
+  afterAll(async () => { await worker.end(); await checker.end(); await integrator.end(); await admin.end(); });
 
-  it('the instrument can tell the difference: owner is privileged, worker is not', async () => {
+  it('the instrument can tell the difference: owner is privileged, no lane role is', async () => {
     expect((await dbPrivilege(admin)).privileged).toBe(true);
-    expect(await dbPrivilege(worker)).toEqual({ name: 't12_lane_worker', privileged: false });
+    expect(await dbPrivilege(worker)).toEqual({ name: 't12_lane_maker', privileged: false });
+    expect(await dbPrivilege(checker)).toEqual({ name: 't12_lane_checker', privileged: false });
+    expect(await dbPrivilege(integrator)).toEqual({ name: 't12_lane_integrator', privileged: false });
   });
 
-  it('can do the whole lane job', async () => {
-    const db = poolDb(worker as never);
-    await replenish(db, [spec('ok')], 1);
-    const c = await claimMake(db, 'trinity-lane-1');
+  it('can do the whole lane job, each stage under its own role', async () => {
+    const maker = poolDb(worker as never);
+    await replenish(maker, [spec('ok')], 1);
+    const c = await claimMake(maker, 'trinity-lane-1');
     if (c.kind !== 'claimed') throw new Error(c.reason);
-    expect(await checkoutBelt(db, c.handle)).toMatchObject({ ok: true, belt: 'engineering' });
-    expect(await submit(db, c.handle, { branch: `t12/ok-e${c.handle.epoch}`, commit: 'a'.repeat(40), base: 'b'.repeat(40), files: c.handle.spec.paths, host: 'nvidia' })).toEqual({ ok: true });
-    const v = (await claimStage(db, 'awaiting_check', 'trinity-lane-2'))!;
-    await recordVerdict(db, v, { outcome: 'approved', commit: 'a'.repeat(40), transcript: 'node --test exited 0 and each control exited 1 as it should.', evidence: {} });
-    const i = (await claimStage(db, 'approved', 'trinity-lane-3'))!;
-    expect(await recordIntegration(db, i, 'https://example.test/pr/1')).toEqual({ ok: true });
-    expect((await readLaneState(worker, c.handle.taskId)).state.stage).toBe('integrated');
+    expect(await checkoutBelt(maker, c.handle)).toMatchObject({ ok: true, belt: 'engineering' });
+    expect(await submit(maker, c.handle, { branch: `t12/ok-e${c.handle.epoch}`, commit: 'a'.repeat(40), base: 'b'.repeat(40), files: c.handle.spec.paths, host: 'nvidia' })).toEqual({ ok: true });
+    const v = (await claimStage(poolDb(checker as never), 'awaiting_check', 'trinity-lane-2'))!;
+    expect(await recordVerdict(poolDb(checker as never), v, { outcome: 'approved', commit: 'a'.repeat(40), transcript: 'node --test exited 0 and each control exited 1 as it should.', evidence: {} })).toEqual({ ok: true });
+    const i = (await claimStage(poolDb(integrator as never), 'approved', 'trinity-lane-3'))!;
+    expect(await recordIntegration(poolDb(integrator as never), i, 'https://example.test/pr/1')).toEqual({ ok: true });
+    const done = (await readLaneState(worker, c.handle.taskId)).state;
+    expect(done.stage).toBe('integrated');
+    expect(['submitted', 'check_approved', 'integrated'].map((e) => done.receipts.find((r) => r.event === e)!.actor)).toEqual(['trinity-lane-1', 'trinity-lane-2', 'trinity-lane-3']);
     await coolProvider(worker, 'groq', 60, 'rate_limited');
     expect((await coolingProviders(worker)).has('groq')).toBe(true);
   });
@@ -430,7 +445,7 @@ describePg('the restricted database role, attacked', () => {
     });
 
     it('the migration removes REPLICATION and any default privilege, so a table created later stays closed', async () => {
-      expect((await admin.query(`SELECT rolreplication FROM pg_roles WHERE rolname = 't12_lane_worker'`)).rows[0].rolreplication).toBe(false);
+      for (const r of LANE_ROLES) expect((await admin.query(`SELECT rolreplication FROM pg_roles WHERE rolname = $1`, [r])).rows[0].rolreplication).toBe(false);
       await admin.query('CREATE TABLE t12_created_later (x int)');
       try {
         await expect(worker.query('SELECT * FROM t12_created_later')).rejects.toThrow(/permission denied/);
@@ -493,14 +508,14 @@ describePg('the restricted database role, attacked', () => {
     }, 180_000);
 
     it('re-applying the migration strips a new membership and grant, and refuses a role that owns objects', async () => {
-      const file = readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8');
-      await admin.query('GRANT postgres TO t12_lane_worker');
-      await admin.query('GRANT SELECT ON principal_grants TO t12_lane_worker');
+      const file = readFileSync(MIGRATION, 'utf8');
+      await admin.query('GRANT postgres TO t12_lane_maker');
+      await admin.query('GRANT SELECT ON principal_grants TO t12_lane_maker');
       await admin.query(file);
       await expect(worker.query('SET ROLE postgres')).rejects.toThrow(/permission denied|must be member/);
       await expect(worker.query('SELECT * FROM principal_grants')).rejects.toThrow(/permission denied/);
       await admin.query('CREATE TABLE t12_owned_probe (x int)');
-      await admin.query('ALTER TABLE t12_owned_probe OWNER TO t12_lane_worker');
+      await admin.query('ALTER TABLE t12_owned_probe OWNER TO t12_lane_maker');
       const c = await admin.connect();
       try {
         await expect(c.query(file)).rejects.toThrow(/owns database objects/);
@@ -512,7 +527,7 @@ describePg('the restricted database role, attacked', () => {
     });
 
     it('a refusal stops the whole file when statements run one at a time, as psql -f does', async () => {
-      const file = readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8');
+      const file = readFileSync(MIGRATION, 'utf8');
       // Split as psql would: on semicolons outside dollar-quoted bodies and comments.
       const statements: string[] = [];
       let current = '';
@@ -528,9 +543,9 @@ describePg('the restricted database role, attacked', () => {
           current = part;
         }
       });
-      await admin.query('DROP POLICY t12_lane_worker_halt ON trinity_system_config');
+      await admin.query('DROP POLICY t12_lane_halt ON trinity_system_config');
       await admin.query('CREATE TABLE t12_owned_probe (x int)');
-      await admin.query('ALTER TABLE t12_owned_probe OWNER TO t12_lane_worker');
+      await admin.query('ALTER TABLE t12_owned_probe OWNER TO t12_lane_maker');
       const errors: string[] = [];
       const c = await admin.connect();
       try {
@@ -541,7 +556,7 @@ describePg('the restricted database role, attacked', () => {
       try {
         expect(statements.length).toBeGreaterThan(20);
         expect(errors[0]).toMatch(/owns database objects/);
-        const { rows } = await admin.query(`SELECT count(*)::int AS n FROM pg_policies WHERE policyname = 't12_lane_worker_halt'`);
+        const { rows } = await admin.query(`SELECT count(*)::int AS n FROM pg_policies WHERE policyname = 't12_lane_halt'`);
         expect(rows[0].n).toBe(0);
       } finally {
         await admin.query('DROP TABLE t12_owned_probe');
@@ -550,8 +565,10 @@ describePg('the restricted database role, attacked', () => {
     });
 
     it('holds no role or membership that reaches past the policy', async () => {
-      const { rows } = await worker.query(`SELECT r.rolname FROM pg_roles r WHERE r.rolname <> current_user AND pg_has_role(current_user, r.oid, 'member')`);
-      expect(rows).toEqual([]);
+      for (const p of [worker, checker, integrator]) {
+        const { rows } = await p.query(`SELECT r.rolname FROM pg_roles r WHERE r.rolname <> current_user AND pg_has_role(current_user, r.oid, 'member')`);
+        expect(rows).toEqual([]);
+      }
     });
 
     it('on the real runner, a denied belt never reaches the model', async () => {
@@ -571,13 +588,198 @@ describePg('the restricted database role, attacked', () => {
     }, 60_000);
   });
 
+  // Gate-0 probe P1, 2026-11-09: with one shared role, a maker set its own submitted row to approved
+  // with no check, and the integrator then took it for publishing. Each stage now has its own role,
+  // and these attack each one with the writes the others may make. One owner still holds all three
+  // credentials: this is separation under one controller, not independent authority.
+  describe('separate authority for maker, checker and integrator', () => {
+    const asMaker = () => poolDb(worker as never);
+    const asChecker = () => poolDb(checker as never);
+    const asIntegrator = () => poolDb(integrator as never);
+    let n = 0;
+    const work = (h: Handle) => ({ branch: `t12/${h.spec.id}-e${h.epoch}`, commit: 'a'.repeat(40), base: 'b'.repeat(40), files: h.spec.paths, host: 'nvidia' });
+    const APPROVE = { outcome: 'approved' as const, commit: 'a'.repeat(40), transcript: 'node --test exited 0 and each control exited 1 as it should.', evidence: {} };
+    // The P1 probe's own statement, and the same move without touching the verdict column.
+    const SELF_APPROVE = `UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12,stage}', '"approved"'), verifier_verdict = 'approved' WHERE id = $1`;
+    const STAGE_APPROVE = `UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12,stage}', '"approved"') WHERE id = $1`;
+    /** The SQLSTATE a write ends with, or 'written'. A refusal must carry its code, not just fail. */
+    const code = (p: Promise<unknown>) => p.then(() => 'written', (e: { code?: string }) => e.code ?? `no code: ${String(e)}`);
+    const retire = (id: number) => admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [id]);
+    const stateOf = async (id: number) => (await readLaneState(admin, id)).state;
+
+    // Earlier blocks leave submitted work in the pool. Retire it, so a claim here can only find this block's rows.
+    beforeAll(async () => {
+      await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE assigned_to = $1 AND status <> 'cancelled'`, [LANE_POOL]);
+    });
+
+    /** A task the maker has claimed. Top priority, so leftovers in the pool are never picked first. */
+    async function claimedBy(lane: string, extra: Partial<LaneSpec> = {}): Promise<Handle> {
+      const id = `auth-${++n}`;
+      await replenish(asMaker(), [{ ...spec(id), priority: 100, ...extra }], 1000);
+      const c = await claimMake(asMaker(), lane);
+      if (c.kind !== 'claimed' || c.handle.spec.id !== id) throw new Error(`did not claim ${id}`);
+      return c.handle;
+    }
+    /** A real submission by the maker role, under a live belt, as `lane`. */
+    async function submitted(lane = 'trinity-lane-1', extra: Partial<LaneSpec> = {}): Promise<Handle> {
+      const h = await claimedBy(lane, extra);
+      expect(await checkoutBelt(asMaker(), h)).toMatchObject({ ok: true });
+      expect(await submit(asMaker(), h, work(h))).toEqual({ ok: true });
+      return h;
+    }
+    async function approvedBy(lane: string, extra: Partial<LaneSpec> = {}): Promise<Handle> {
+      const h = await submitted('trinity-lane-1', extra);
+      const v = await claimStage(asChecker(), 'awaiting_check', lane);
+      expect(v?.taskId).toBe(h.taskId);
+      expect(await recordVerdict(asChecker(), v!, APPROVE)).toEqual({ ok: true });
+      return h;
+    }
+
+    it('P1 re-run: the maker cannot approve its own submitted row, and refusal is 42501', async () => {
+      const h = await submitted();
+      expect(await code(worker.query(SELF_APPROVE, [h.taskId]))).toBe('42501');
+      expect(await code(worker.query(STAGE_APPROVE, [h.taskId]))).toBe('42501');
+      const s = await stateOf(h.taskId);
+      expect(s.stage).toBe('awaiting_check');
+      expect(s.receipts.filter((r) => r.event === 'check_approved')).toHaveLength(0);
+      expect((await admin.query('SELECT verifier_verdict FROM trinity_tasks WHERE id = $1', [h.taskId])).rows[0].verifier_verdict).toBeNull();
+      expect(await claimStage(asIntegrator(), 'approved', 'trinity-lane-3')).toBeNull();
+      await retire(h.taskId);
+    });
+
+    it('the maker cannot record a verdict or move work past awaiting_check, even on a row it holds', async () => {
+      const held = await claimedBy('trinity-lane-1');
+      for (const sql of [
+        `UPDATE trinity_tasks SET verifier_verdict = 'approved' WHERE id = $1`,
+        `UPDATE trinity_tasks SET verified_at = now(), verify_count = 1 WHERE id = $1`,
+        `UPDATE trinity_tasks SET final_verdict = 'verified_done' WHERE id = $1`,
+        `UPDATE trinity_tasks SET completed_at = now() WHERE id = $1`,
+        `UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12,stage}', '"approved"') WHERE id = $1`,
+        `UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12,stage}', '"integrating"') WHERE id = $1`,
+      ]) expect([sql, await code(worker.query(sql, [held.taskId]))]).toEqual([sql, '42501']);
+      // A write that is the maker's own still lands: the refusals above are about what changed.
+      expect((await worker.query(`UPDATE trinity_tasks SET stuck_reason = 'probe' WHERE id = $1`, [held.taskId])).rowCount).toBe(1);
+      await retire(held.taskId);
+
+      const h = await submitted();
+      for (const stage of ['checking', 'approved', 'integrating', 'integrated', 'ready']) {
+        const sql = `UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12,stage}', '"${stage}"') WHERE id = $1`;
+        expect([stage, await code(worker.query(sql, [h.taskId]))]).toEqual([stage, '42501']);
+      }
+      await retire(h.taskId);
+    });
+
+    it('the checker cannot enqueue, check out a belt, make or submit', async () => {
+      expect(await code(replenish(asChecker(), [{ ...spec(`auth-${++n}`), priority: 100 }], 1000))).toBe('42501');
+      const h = await claimedBy('trinity-lane-1');
+      expect(await code(checker.query('SELECT t12_belt_checkout($1, $2, $3)', [h.taskId, h.actor, h.epoch]))).toBe('42501');
+      // A live belt exists for this claim, so only the checker's own rules can refuse the submission below.
+      expect(await checkoutBelt(asMaker(), h)).toMatchObject({ ok: true });
+      const rawSubmit = `UPDATE trinity_tasks SET metadata = jsonb_set(jsonb_set(jsonb_set(metadata, '{t12,submission}', $2::jsonb), '{t12,producer}', to_jsonb(claimed_by)), '{t12,stage}', '"awaiting_check"') WHERE id = $1`;
+      expect(await code(checker.query(rawSubmit, [h.taskId, JSON.stringify(work(h))]))).toBe('42501');
+      expect(await code(checker.query(`UPDATE trinity_tasks SET expires_at = now() + interval '1 hour' WHERE id = $1`, [h.taskId]))).toBe('42501');
+      await releaseMake(asMaker(), h, 'host down', true);
+      // A ready row: the checker's claim to make it is refused by Postgres, not only by the runner.
+      expect(await code(claimMake(asChecker(), 'trinity-lane-2'))).toBe('42501');
+      expect((await stateOf(h.taskId)).stage).toBe('ready');
+      await retire(h.taskId);
+    });
+
+    it('a checker cannot take or approve work its own lane produced', async () => {
+      const h = await submitted('trinity-lane-2');
+      expect((await stateOf(h.taskId)).producer).toBe('trinity-lane-2');
+      // The store never offers it...
+      expect(await claimStage(asChecker(), 'awaiting_check', 'trinity-lane-2')).toBeNull();
+      // ...and Postgres refuses the claim written straight to the row.
+      const takeAs = (lane: string) => checker.query(
+        `UPDATE trinity_tasks SET claimed_by = $2, claimed_at = now(), metadata = jsonb_set(metadata, '{t12,stage}', '"checking"') WHERE id = $1`, [h.taskId, lane],
+      );
+      expect(await code(takeAs('trinity-lane-2'))).toBe('42501');
+      // Even if the row reached checking held by its producer some other way, the approval is refused.
+      await admin.query(`UPDATE trinity_tasks SET claimed_by = 'trinity-lane-2', claimed_at = now(), metadata = jsonb_set(metadata, '{t12,stage}', '"checking"') WHERE id = $1`, [h.taskId]);
+      const s = await stateOf(h.taskId);
+      const own: Handle = { taskId: h.taskId, actor: 'trinity-lane-2', epoch: s.epoch, spec: s.spec, attempts: s.attempts, submission: s.submission };
+      expect(await code(recordVerdict(asChecker(), own, APPROVE))).toBe('42501');
+      expect((await stateOf(h.taskId)).stage).toBe('checking');
+      // Positive control: the same raw claim, by a lane that did not produce the work, is accepted.
+      await admin.query(`UPDATE trinity_tasks SET claimed_by = NULL, claimed_at = NULL, metadata = jsonb_set(metadata, '{t12,stage}', '"awaiting_check"') WHERE id = $1`, [h.taskId]);
+      expect((await takeAs('trinity-lane-4')).rowCount).toBe(1);
+      // And the checker cannot rewrite who produced it.
+      expect(await code(checker.query(`UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12,producer}', '"trinity-lane-9"') WHERE id = $1`, [h.taskId]))).toBe('42501');
+      await retire(h.taskId);
+    });
+
+    it('the integrator cannot approve, and cannot take HIGH risk work', async () => {
+      const h = await submitted();
+      expect(await code(integrator.query(SELF_APPROVE, [h.taskId]))).toBe('42501');
+      expect(await code(integrator.query(STAGE_APPROVE, [h.taskId]))).toBe('42501');
+      const v = await claimStage(asChecker(), 'awaiting_check', 'trinity-lane-2');
+      expect(v?.taskId).toBe(h.taskId);
+      expect(await code(integrator.query(SELF_APPROVE, [h.taskId]))).toBe('42501');
+      expect(await code(integrator.query(STAGE_APPROVE, [h.taskId]))).toBe('42501');
+      expect(await code(integrator.query(`UPDATE trinity_tasks SET verifier_verdict = 'approved' WHERE id = $1`, [h.taskId]))).toBe('42501');
+      await retire(h.taskId);
+
+      const hi = await approvedBy('trinity-lane-2', { risk: 'HIGH' });
+      expect(await claimStage(asIntegrator(), 'approved', 'trinity-lane-3')).toBeNull();
+      expect(await code(integrator.query(
+        `UPDATE trinity_tasks SET claimed_by = 'trinity-lane-3', claimed_at = now(), metadata = jsonb_set(metadata, '{t12,stage}', '"integrating"') WHERE id = $1`, [hi.taskId],
+      ))).toBe('42501');
+      await retire(hi.taskId);
+    });
+
+    it('each role hands back only its own stage, and the integrator only to where the row came from', async () => {
+      const h = await approvedBy('trinity-lane-2');
+      const i = await claimStage(asIntegrator(), 'approved', 'trinity-lane-3');
+      expect(i?.taskId).toBe(h.taskId);
+      expect(await code(recoverStages(asChecker(), 0, ['integrating']))).toBe('42501');
+      expect(await code(recoverStages(asMaker(), 0, ['integrating']))).toBe('42501');
+      expect(await recoverStages(asIntegrator(), 0, ['integrating'])).toBe(1);
+      expect((await stateOf(h.taskId)).stage).toBe('approved');
+      await retire(h.taskId);
+    });
+
+    it('the retired shared role cannot log in and holds nothing on the pool', async () => {
+      expect((await admin.query(`SELECT rolcanlogin FROM pg_roles WHERE rolname = 't12_lane_worker'`)).rows[0]).toEqual({ rolcanlogin: false });
+      const u = new URL(workerUrl);
+      u.username = 't12_lane_worker';
+      const c = new Client({ connectionString: u.toString() });
+      await expect(c.connect()).rejects.toThrow(/not permitted to log in/);
+      const { rows } = await admin.query(
+        `SELECT has_table_privilege('t12_lane_worker', 'public.trinity_tasks', 'SELECT') AS sel,
+                has_any_column_privilege('t12_lane_worker', 'public.trinity_tasks', 'UPDATE') AS upd,
+                has_function_privilege('t12_lane_worker', 'public.t12_belt_checkout(bigint, text, integer)', 'EXECUTE') AS belt`,
+      );
+      expect(rows[0]).toEqual({ sel: false, upd: false, belt: false });
+    });
+
+    it('mutation control: with the shared role\'s check back on the maker, the P1 attack lands', async () => {
+      // If the P1 test above could not fail, this would be refused too.
+      await admin.query('GRANT EXECUTE ON FUNCTION public.t12_belt_permits(bigint, jsonb) TO t12_lane_maker');
+      await admin.query(`ALTER POLICY t12_lane_maker_pool ON trinity_tasks WITH CHECK (
+        assigned_to = 'trinity-t12-lanes' AND public.t12_belt_permits(id, metadata)
+        AND status IN ('pending', 'claimed', 'pending_validation', 'cancelled', 'not_checked'))`);
+      try {
+        const h = await submitted();
+        expect((await worker.query(SELF_APPROVE, [h.taskId])).rowCount).toBe(1);
+        expect((await claimStage(asIntegrator(), 'approved', 'trinity-lane-3'))?.taskId).toBe(h.taskId);
+        await retire(h.taskId);
+      } finally {
+        await admin.query(readFileSync(MIGRATION, 'utf8'));
+      }
+      const again = await submitted();
+      expect(await code(worker.query(SELF_APPROVE, [again.taskId]))).toBe('42501');
+      await retire(again.taskId);
+    });
+  });
+
   it('the real CLI starts as this role and refuses a role that can bypass row security', () => {
     const dir = mkdtempSync(join(tmpdir(), 't12-prof-'));
     try {
       const specs = join(dir, 's.jsonl');
       writeFileSync(specs, '');
       const args = ['--specs', specs, '--repo', `DealAppSeo/trustshell=${dir}`, '--work-root', join(dir, 'w'), '--lanes', '1'];
-      const asOwner = cli(args, { T12_LANES_ENABLED: 'true', DATABASE_URL: workerUrl.replace('t12_lane_worker', 'postgres') });
+      const asOwner = cli(args, { T12_LANES_ENABLED: 'true', DATABASE_URL: workerUrl.replace('t12_lane_maker', 'postgres') });
       expect(asOwner.status).toBe(2);
       expect(asOwner.stderr).toContain('bypass row security');
 

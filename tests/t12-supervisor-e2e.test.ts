@@ -1,5 +1,5 @@
 /**
- * The T12 supervisor end to end, on synthetic everything: throwaway Postgres under the restricted role, a
+ * The T12 supervisor end to end, on synthetic everything: throwaway Postgres under the three restricted stage roles, a
  * loopback model, real git, the real CLI per role, three separate clones and real SIGKILLs. A check runs
  * in the real container, so the approving path needs Docker. Role fences do not, and always run.
  */
@@ -61,7 +61,7 @@ describe('a role refuses credentials it should not hold', () => {
 });
 
 describeFull('three roles on three clones', () => {
-  let root: string; let origin: string; let admin: Pool; let workerUrl: string; let server: Server; let port: number; let transfer: string; let fakeBin: string;
+  let root: string; let origin: string; let admin: Pool; const roleUrl = {} as Record<Role, string>; let server: Server; let port: number; let transfer: string; let fakeBin: string;
   const calls: string[] = [];
   const held = new Map<string, () => void>();
   const hold = (id: string) => new Promise<void>((resolve) => held.set(id, resolve));
@@ -80,8 +80,11 @@ describeFull('three roles on three clones', () => {
     admin = new Pool({ connectionString: u.toString() });
     await admin.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
     await admin.query(readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8'));
-    u.username = 't12_lane_worker';
-    workerUrl = u.toString();
+    // Each stage on its own restricted role, as the supervisor's three secrets give them.
+    for (const role of ['maker', 'checker', 'integrator'] as Role[]) {
+      u.username = `t12_lane_${role}`;
+      roleUrl[role] = u.toString();
+    }
 
     root = realpathSync(mkdtempSync(join(tmpdir(), 't12-e2e-')));
     origin = join(root, 'origin.git');
@@ -136,7 +139,7 @@ describeFull('three roles on three clones', () => {
     const specsFile = join(root, `specs-${id}.jsonl`);
     writeFileSync(specsFile, JSON.stringify(spec(id)));
     const env: NodeJS.ProcessEnv = {
-      ...baseEnv(), DATABASE_URL: workerUrl, T12_LANES_ENABLED: 'true',
+      ...baseEnv(), DATABASE_URL: roleUrl[role], T12_LANES_ENABLED: 'true',
       ...(role === 'maker' ? { T12_FREE_WAVE: 'true', T12_LOCAL_BASE_URL: `http://127.0.0.1:${port}/v1` } : {}),
       ...(role === 'checker' ? { T12_LANES_ALLOW_EXEC: 'true' } : {}),
       ...(role === 'integrator' ? { T12_LANES_PUBLISH: 'true', PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}` } : {}),
@@ -246,13 +249,15 @@ describeFull('three roles on three clones', () => {
     }
   }, 180_000);
 
-  it('the worker role cannot lift the halt', async () => {
-    const worker = new Client({ connectionString: workerUrl });
-    await worker.connect();
-    try {
-      await expect(worker.query('UPDATE trinity_system_config SET emergency_halt = false WHERE id = 1')).rejects.toMatchObject({ code: '42501' });
-    } finally {
-      await worker.end();
+  it('no lane role can lift the halt', async () => {
+    for (const role of ['maker', 'checker', 'integrator'] as Role[]) {
+      const worker = new Client({ connectionString: roleUrl[role] });
+      await worker.connect();
+      try {
+        await expect(worker.query('UPDATE trinity_system_config SET emergency_halt = false WHERE id = 1')).rejects.toMatchObject({ code: '42501' });
+      } finally {
+        await worker.end();
+      }
     }
   }, 30_000);
 });

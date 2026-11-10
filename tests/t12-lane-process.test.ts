@@ -1,7 +1,12 @@
 /**
  * The durable conductor as real, separate operating-system processes: the actual CLI for each
- * lane, the restricted database role, real git, real test runs, and a real SIGKILL mid-task. Only
- * the model is replaced, by a loopback server, because the point here is the machinery.
+ * lane, real git, real test runs, and a real SIGKILL mid-task. Only the model is replaced, by a
+ * loopback server, because the point here is the machinery.
+ *
+ * Each process here runs every stage (`--role all`), and no restricted database role may: each stage
+ * has its own role, and Postgres refuses the others' moves. So these processes use the throwaway
+ * database's owner, with T12_LANES_ALLOW_PRIVILEGED_DB. The restricted roles, one per process, are
+ * proven in t12-supervisor-e2e.test.ts and attacked in t12-lane-profile.test.ts.
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
@@ -53,7 +58,6 @@ describePg('three real worker processes', () => {
     admin = new Pool({ connectionString: u.toString() });
     await admin.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
     await admin.query(readFileSync(join(ROOT, 'migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8'));
-    u.username = 't12_lane_worker';
     workerUrl = u.toString();
 
     root = mkdtempSync(join(tmpdir(), 't12-proc-'));
@@ -104,7 +108,7 @@ describePg('three real worker processes', () => {
       cwd: ROOT,
       env: {
         PATH: process.env.PATH ?? '', SystemRoot: process.env.SystemRoot ?? '', TEMP: process.env.TEMP ?? '', TMP: process.env.TMP ?? '', USERPROFILE: process.env.USERPROFILE ?? '',
-        DATABASE_URL: workerUrl, T12_LANES_ENABLED: 'true', T12_FREE_WAVE: 'true', T12_LANES_ALLOW_EXEC: 'true', T12_LOCAL_BASE_URL: `http://127.0.0.1:${port}/v1`,
+        DATABASE_URL: workerUrl, T12_LANES_ALLOW_PRIVILEGED_DB: 'true', T12_LANES_ENABLED: 'true', T12_FREE_WAVE: 'true', T12_LANES_ALLOW_EXEC: 'true', T12_LOCAL_BASE_URL: `http://127.0.0.1:${port}/v1`,
       },
     });
     let out = '';

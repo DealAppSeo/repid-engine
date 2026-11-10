@@ -197,8 +197,12 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
     else refused(`integrate ${h.taskId}`, r.reason);
   }
 
+  // Each stage has its own database role, which may hand back only its own stage. A maker hands back
+  // nothing here: its leases are freed by the reaper cron.
+  const recoverable = ({ all: ['checking', 'integrating'], checker: ['checking'], integrator: ['integrating'], maker: [] } as const)[role];
+
   async function step(lane: string): Promise<Did> {
-    await recoverStages(o.db);
+    if (recoverable.length) await recoverStages(o.db, undefined, recoverable);
     if (o.publishEnabled && (role === 'all' || role === 'integrator')) {
       const h = await claimStage(o.db, 'approved', lane, originFor(lane), o.repos);
       if (h) {
