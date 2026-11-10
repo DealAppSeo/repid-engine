@@ -91,6 +91,8 @@ async function main(): Promise<void> {
     adapters: createGitAdapters({ repoDirs, workRoot, ask: createRoutedAsk(db), allowExec: flags.allowExec, pr: ghPrClient, transfer }),
     publishEnabled: flags.publish,
     checkEnabled: flags.allowExec,
+    // Claim only rows this run has a clone for; LANE_REPOS still bounds what any row may name.
+    repos: Object.keys(repoDirs),
     specs,
     readyTarget: Number(arg('ready-target') ?? 3),
     stop: () => (stopFile ? existsSync(stopFile) : false),

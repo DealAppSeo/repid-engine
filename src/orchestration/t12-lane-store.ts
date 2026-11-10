@@ -376,8 +376,17 @@ async function fenced(
   });
 }
 
-/** Take the next task whose paths are free. One lane at a time holds the advisory lock while deciding. */
-export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: number; origin?: ReceiptOrigin } = {}): Promise<ClaimResult> {
+/**
+ * Take the next task whose paths are free, among the repos this run can serve. One lane at a time
+ * holds the advisory lock while deciding.
+ *
+ * `repos` is the set this run has clones for. Without it a run met the top row for a repo it could
+ * not serve, paused on "no local clone", spent a daily-cap slot and never reached a row it could
+ * serve (gate-0 probe P2, 2026-11-09). Rows for other repos are left untouched for a run that can
+ * serve them. An empty list serves nothing. Omitted means every repo on LANE_REPOS, which only
+ * in-process callers with no clones use; the CLI always passes its `--repo` list.
+ */
+export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: number; origin?: ReceiptOrigin; repos?: readonly string[] } = {}): Promise<ClaimResult> {
   assertActor(lane);
   const cap = opts.dailyCap ?? DAILY_CLAIM_CAP;
   return db.tx(async (c): Promise<ClaimResult> => {
@@ -411,11 +420,14 @@ export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: numbe
         WHERE assigned_to = $1 AND status = 'pending' AND claimed_by IS NULL AND claim_count < $2
           AND metadata #> '{t12,spec}' IS NOT NULL
           AND (metadata #>> '{t12,notBefore}' IS NULL OR (metadata #>> '{t12,notBefore}')::timestamptz <= now())
+          AND ($3::text[] IS NULL OR metadata #>> '{t12,spec,repo}' = ANY($3::text[]))
         ORDER BY priority DESC NULLS LAST, created_at ASC LIMIT 100 FOR UPDATE SKIP LOCKED`,
-      [LANE_POOL, MAX_TASK_CLAIMS],
+      [LANE_POOL, MAX_TASK_CLAIMS, opts.repos ?? null],
     );
     const candidates = (rows as Row[]).map((row) => ({ row, spec: stateOf(row).spec }));
-    if (candidates.length === 0) return { kind: 'none', reason: 'no ready task' };
+    if (candidates.length === 0) {
+      return { kind: 'none', reason: opts.repos ? `no ready task in the repos this run can serve: ${opts.repos.join(', ') || 'none'}` : 'no ready task' };
+    }
 
     const { rows: held } = await c.query(
       `SELECT metadata #> '{t12,spec}' AS spec FROM trinity_tasks
@@ -598,8 +610,12 @@ export async function recordRouteAttempt(
   });
 }
 
-/** Claim a post-make stage. Checking can never be taken by the lane that produced the work. */
-export async function claimStage(db: TxDb, stage: 'awaiting_check' | 'approved', actor: string, origin: ReceiptOrigin = 'autonomous'): Promise<Handle | null> {
+/**
+ * Claim a post-make stage. Checking can never be taken by the lane that produced the work. `repos`
+ * is as for claimMake: a checker or integrator without a clone for a row's repo leaves it alone,
+ * rather than spending that task's not-checked allowance on "no local clone".
+ */
+export async function claimStage(db: TxDb, stage: 'awaiting_check' | 'approved', actor: string, origin: ReceiptOrigin = 'autonomous', repos?: readonly string[]): Promise<Handle | null> {
   assertActor(actor);
   return db.tx(async (c) => {
     const { rows } = await c.query(
@@ -608,8 +624,9 @@ export async function claimStage(db: TxDb, stage: 'awaiting_check' | 'approved',
           AND metadata #>> '{t12,stage}' = $2
           AND ($2 <> 'awaiting_check' OR metadata #>> '{t12,producer}' IS DISTINCT FROM $3)
           AND ($2 <> 'approved' OR metadata #>> '{t12,spec,risk}' <> 'HIGH')
+          AND ($4::text[] IS NULL OR metadata #>> '{t12,spec,repo}' = ANY($4::text[]))
         ORDER BY priority DESC NULLS LAST, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED`,
-      [LANE_POOL, stage, actor],
+      [LANE_POOL, stage, actor, repos ?? null],
     );
     const row = rows[0] as Row | undefined;
     if (!row) return null;

@@ -56,6 +56,8 @@ export interface RunLanesOptions {
   /** False on a host that may not run model-written code: submissions wait for one that may. */
   checkEnabled?: boolean;
   idleMs?: number;
+  /** Repos this run has clones for. Only their rows are claimed; others wait for a run that has one. */
+  repos?: readonly string[];
   specs: () => readonly LaneSpec[];
   readyTarget: number;
   stop?: () => boolean;
@@ -198,7 +200,7 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
   async function step(lane: string): Promise<Did> {
     await recoverStages(o.db);
     if (o.publishEnabled && (role === 'all' || role === 'integrator')) {
-      const h = await claimStage(o.db, 'approved', lane, originFor(lane));
+      const h = await claimStage(o.db, 'approved', lane, originFor(lane), o.repos);
       if (h) {
         // A publish failure leaves the claim to recoverStages, so it retries instead of stranding.
         await integrateOne(h).catch((e) => log(`publish failed for ${h.taskId}: ${String(e)}`));
@@ -206,13 +208,13 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
       }
     }
     const mayCheck = role === 'all' || role === 'checker';
-    const check = !mayCheck || o.checkEnabled === false || checksHeld ? null : await claimStage(o.db, 'awaiting_check', lane, originFor(lane));
+    const check = !mayCheck || o.checkEnabled === false || checksHeld ? null : await claimStage(o.db, 'awaiting_check', lane, originFor(lane), o.repos);
     if (check) {
       await checkOne(check);
       return 'worked';
     }
     if (report.paused || !mayMake) return 'idle';
-    const claim = await claimMake(o.db, lane, { dailyCap: o.dailyCap, origin: originFor(lane) });
+    const claim = await claimMake(o.db, lane, { dailyCap: o.dailyCap, origin: originFor(lane), repos: o.repos });
     if (claim.kind === 'paused') {
       report.paused = claim.reason;
       return 'idle';
