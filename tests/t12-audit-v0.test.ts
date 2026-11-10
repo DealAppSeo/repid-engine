@@ -30,6 +30,16 @@ describe('T12 audit v0 is read-only', () => {
     expect(src).toContain("db.query('BEGIN READ ONLY')");
     expect(src).toContain("db.query('ROLLBACK')");
   });
+
+  // Strix on #1531: the agent writes its own confidence, so the parse must not let it hide or crash the audit.
+  it('parses confidence defensively: bounded capture, and a missing value stays NULL', () => {
+    const sql = code(readFileSync(join(SQL_DIR, 'capability-record.sql'), 'utf8'));
+    expect(sql).not.toMatch(/least\(greatest\(nullif\(/); // clamping a NULL turns it into 0
+    expect(sql).not.toMatch(/"confidence"[^']*\[0-9\]\*/); // unbounded digits can overflow numeric
+    expect(sql).toMatch(/"confidence"[^']*\[0-9\]\{1,3\}/);
+    expect(sql).toContain('case when conf_raw is null then null');
+    expect(sql).toContain('coalesce(conf, 1) >= 0.8');
+  });
 });
 
 describe('drawSample', () => {
