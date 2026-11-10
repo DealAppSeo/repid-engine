@@ -112,8 +112,8 @@ export function warnEnvTypos(): void {
 // shipped code (compiled src and the scripts the cron services run, comments
 // included), plus the registry. A name that is only in a comment counts as read.
 // That errs toward silence, never toward telling the owner to delete a live
-// variable. The one gap is a name built at runtime, so the line says to check
-// before deleting.
+// variable. Two gaps remain, and the line names both: a name built at runtime,
+// and a name only a library reads (node_modules is not scanned).
 
 /** Names the platform injects. One missing here shows up as noise, not as a hidden name. */
 const PLATFORM_NAME_RE =
@@ -154,11 +154,11 @@ export function unreadEnvReport(setNames: readonly string[], named: ReadonlySet<
   const unread = setNames.filter((n) => !PLATFORM_NAME_RE.test(n) && !known.has(n) && !named.has(n));
   const plain = unread.filter((n) => PLAIN_NAME_RE.test(n)).sort();
   const odd = unread.length - plain.length;
-  if (!unread.length) return `[config] every set variable is named in the shipped code (${setNames.length} set).`;
+  if (!unread.length) return `[config] every set variable is named in this repo's code (${setNames.length} set).`;
   const oddNote = odd ? ` Plus ${odd} name(s) in an unusual format, not printed.` : '';
   return (
-    `[config] ${plain.length} set variable(s) that no shipped code names: ${plain.join(', ') || 'none'}.${oddNote}` +
-    ' Names only, values are never read. A name built at runtime would also land here, so check before deleting.'
+    `[config] ${plain.length} set variable(s) that this repo's code never names: ${plain.join(', ') || 'none'}.${oddNote}` +
+    ' Names only, values are never read. Libraries and names built at runtime are not seen, so check before deleting.'
   );
 }
 

@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { findEnvTypos, ALL_KNOWN_ENV_VARS, scanNamedTokens, unreadEnvReport } from '../src/config/env-typo-guard';
+import { findEnvTypos, ALL_KNOWN_ENV_VARS, scanNamedTokens, unreadEnvReport, reportUnreadEnvNames } from '../src/config/env-typo-guard';
 import { SURFACE_ENV_NAMES, SURFACES } from '../src/resilience/decision-contract';
 
 describe('findEnvTypos', () => {
@@ -85,8 +85,8 @@ describe('unread variable names (names only)', () => {
 
   it('lists a set name that no code names, and only that one', () => {
     const line = unreadEnvReport(['SUPABASE_URL', 'HAL_STRICTNESS', 'LEFTOVER_OLD_SWITCH'], named);
-    expect(line).toContain('1 set variable(s) that no shipped code names: LEFTOVER_OLD_SWITCH.');
-    expect(line).toContain('check before deleting');
+    expect(line).toContain("1 set variable(s) that this repo's code never names: LEFTOVER_OLD_SWITCH.");
+    expect(line).toContain('Libraries and names built at runtime are not seen, so check before deleting.');
   });
 
   it('counts a registry name as read even when the scan did not see it', () => {
@@ -134,5 +134,30 @@ describe('unread variable names (names only)', () => {
     expect(got.has('SUPABASE_URL')).toBe(true);
     expect(got.has('HAL_PERSIST_RULER')).toBe(true); // read as envTrue('...'), not process.env.X
     expect(got.has('ZZ_NOT_A_NAME_ANYWHERE_0')).toBe(false);
+  });
+
+  it('end to end: scans the given roots, reads only process.env keys, and logs one line', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'env-unread-e2e-'));
+    const saved = { ...process.env };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      writeFileSync(join(dir, 'config.js'), 'const u = process.env.SUPABASE_URL;\n');
+      process.env.SUPABASE_URL = 'http://localhost:54321';
+      process.env.LEFTOVER_E2E_SWITCH = 'secret-value-must-not-print';
+      await reportUnreadEnvNames([dir]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0]![0]);
+      expect(line).toContain('LEFTOVER_E2E_SWITCH');
+      expect(line).not.toContain('secret-value-must-not-print');
+
+      warn.mockClear();
+      await reportUnreadEnvNames([join(dir, 'missing')]); // a scan that sees nothing
+      expect(String(warn.mock.calls[0]![0])).toContain('NOT_CHECKED');
+    } finally {
+      warn.mockRestore();
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
