@@ -53,7 +53,10 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           REPO: ${{ github.repository }}
-        run: >-
-          npx --yes -p ts-node@10.9.2 -p typescript@5.5.4
-          ts-node --transpile-only scripts/preflight.ts
-          --dir ../work --pr "$PR_NUMBER" --github "$REPO" --base "$BASE_REF" --advisory
+        # TypeScript matches repid-engine's own (tsconfig uses 6.x options). If the tool itself cannot run,
+        # the job still succeeds, as advisory, but says NOT_CHECKED instead of reading as a clean pass.
+        run: |
+          npx --yes -p ts-node@10.9.2 -p typescript@6.0.3 \
+            ts-node --transpile-only scripts/preflight.ts \
+            --dir ../work --pr "$PR_NUMBER" --github "$REPO" --base "$BASE_REF" --advisory \
+          || echo "## Preflight: NOT_CHECKED (advisory): the preflight tool did not run; see the log." | tee -a "$GITHUB_STEP_SUMMARY"

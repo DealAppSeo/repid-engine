@@ -156,7 +156,9 @@ async function main(): Promise<void> {
   console.log(has('json') ? JSON.stringify({ ...result, advisory, repo, baseSha, forkSha, files }, null, 2) : text);
   const summary = flag('summary') ?? process.env['GITHUB_STEP_SUMMARY'];
   if (summary) {
-    const rows = result.checks.map((c) => `| ${c.status} | ${c.name} | ${c.reason.replace(/\|/g, '\\|')} |`).join('\n');
+    // Backslashes first, or a reason ending in "\" would escape the cell's closing pipe.
+    const cell = (s: string) => s.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+    const rows = result.checks.map((c) => `| ${c.status} | ${c.name} | ${cell(c.reason)} |`).join('\n');
     appendFileSync(summary, `## Preflight: ${result.verdict}${advisory ? ' (advisory)' : ''}\n\n| Status | Check | Why |\n|---|---|---|\n${rows}\n`);
   }
   if (advisory) process.exit(0);
