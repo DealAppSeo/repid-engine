@@ -19,6 +19,7 @@ import {
   evaluatePreflight,
   formatPreflight,
   prFromSubject,
+  summaryMarkdown,
   taskFromBody,
   type MergedChange,
   type OpenPr,
@@ -155,12 +156,7 @@ async function main(): Promise<void> {
   const text = `${formatPreflight(result)}${advisory ? '\nADVISORY: this check reports and never blocks.' : ''}`;
   console.log(has('json') ? JSON.stringify({ ...result, advisory, repo, baseSha, forkSha, files }, null, 2) : text);
   const summary = flag('summary') ?? process.env['GITHUB_STEP_SUMMARY'];
-  if (summary) {
-    // Backslashes first, or a reason ending in "\" would escape the cell's closing pipe.
-    const cell = (s: string) => s.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
-    const rows = result.checks.map((c) => `| ${c.status} | ${c.name} | ${cell(c.reason)} |`).join('\n');
-    appendFileSync(summary, `## Preflight: ${result.verdict}${advisory ? ' (advisory)' : ''}\n\n| Status | Check | Why |\n|---|---|---|\n${rows}\n`);
-  }
+  if (summary) appendFileSync(summary, summaryMarkdown(result, advisory));
   if (advisory) process.exit(0);
   process.exit(result.verdict === 'FAIL' ? 1 : result.verdict === 'NOT_CHECKED' ? 3 : 0);
 }

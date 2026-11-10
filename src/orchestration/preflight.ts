@@ -100,6 +100,8 @@ const list = (xs: readonly string[], max = 4): string =>
   xs.length <= max ? xs.join(', ') : `${xs.slice(0, max).join(', ')} and ${xs.length - max} more`;
 
 function freshBase(f: PreflightFacts, mine: Set<string>): Check {
+  // Two unreadable SHAs are both '', and '' === '' must not read as "starts from the tip".
+  if (!f.baseSha || !f.forkSha) return { name: 'fresh_base', status: 'NOT_CHECKED', reason: 'could not resolve the target branch or where this work started' };
   if (f.forkSha === f.baseSha) return { name: 'fresh_base', status: 'PASS', reason: `starts from the current tip ${f.baseSha.slice(0, 8)}` };
   if (f.mergedSince === null) return { name: 'fresh_base', status: 'NOT_CHECKED', reason: 'could not read what landed on the target branch since this work started' };
   const hits = f.mergedSince
@@ -166,13 +168,33 @@ function permission(files: string[]): Check {
 export function evaluatePreflight(f: PreflightFacts): PreflightResult {
   const files = [...new Set(f.files.map((x) => normalisePath(x)).filter(Boolean))];
   const mine = new Set(files);
-  const checks = [freshBase(f, mine), duplicateWork(f, mine), ...taskChecks(f, files), permission(files)];
+  // With no files, "no overlap", "inside scope" and "no owner-only paths" are true of nothing: not checked.
+  const fileLegs: readonly CheckName[] = ['duplicate_work', 'scope', 'permission'];
+  const checks = [freshBase(f, mine), duplicateWork(f, mine), ...taskChecks(f, files), permission(files)].map((c): Check =>
+    files.length === 0 && c.status === 'PASS' && fileLegs.includes(c.name)
+      ? { ...c, status: 'NOT_CHECKED', reason: 'no files to check: pass --files, or make the change first' }
+      : c,
+  );
   const verdict = ORDER.find((s) => checks.some((c) => c.status === s)) ?? 'PASS';
   return { verdict, checks };
 }
 
 export function formatPreflight(r: PreflightResult): string {
   return [`Preflight: ${r.verdict}`, ...r.checks.map((c) => `${c.status.padEnd(11)} ${c.name.padEnd(14)} ${c.reason}`)].join('\n');
+}
+
+/**
+ * One table cell of Markdown. Reasons carry file names from the PR under review, and a file name can
+ * hold a newline or Markdown, so control characters become spaces and every Markdown metacharacter is
+ * escaped: no PR can add a row, a heading or a link to the summary a reviewer reads.
+ */
+export function markdownCell(s: string): string {
+  return s.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/([\\`*_{}[\]()<>#+!|~-])/g, '\\$1');
+}
+
+export function summaryMarkdown(r: PreflightResult, advisory: boolean): string {
+  const rows = r.checks.map((c) => `| ${c.status} | ${c.name} | ${markdownCell(c.reason)} |`).join('\n');
+  return `## Preflight: ${r.verdict}${advisory ? ' (advisory)' : ''}\n\n| Status | Check | Why |\n|---|---|---|\n${rows}\n`;
 }
 
 /** PR numbers squash-merged by GitHub end their subject with "(#123)". */

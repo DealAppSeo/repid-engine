@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { evaluatePreflight, prFromSubject, taskFromBody, type PreflightFacts } from '../src/orchestration/preflight';
+import { evaluatePreflight, prFromSubject, summaryMarkdown, taskFromBody, type PreflightFacts } from '../src/orchestration/preflight';
 import { mergedSince } from '../scripts/preflight';
 
 const NOW = new Date('2026-11-09T20:00:00Z');
@@ -57,6 +57,11 @@ describe('preflight: fresh base', () => {
     const r = evaluatePreflight(facts({ forkSha: FORK, mergedSince: null }));
     expect(r.checks.find((x) => x.name === 'fresh_base')!.status).toBe('NOT_CHECKED');
     expect(r.verdict).toBe('NOT_CHECKED');
+  });
+
+  it('is NOT_CHECKED, not PASS, when neither SHA could be resolved (two empty strings are equal)', () => {
+    const c = status(facts({ baseSha: '', forkSha: '' }), 'fresh_base');
+    expect(c.status).toBe('NOT_CHECKED');
   });
 
   it('matches a Windows path against a merged POSIX path', () => {
@@ -123,6 +128,28 @@ describe('preflight: permission', () => {
   it('warns on owner-only paths such as a migration', () => {
     const c = status(facts({ files: ['migrations/2026-11-09_x.sql'], claim: { ...facts().claim!, scope: ['migrations/**'] } }), 'permission');
     expect(c.status).toBe('WARN');
+  });
+});
+
+describe('preflight: nothing to check', () => {
+  it('reports the file legs NOT_CHECKED, never PASS, when there are no files', () => {
+    const r = evaluatePreflight(facts({ files: [] }));
+    for (const name of ['duplicate_work', 'scope', 'permission']) expect(r.checks.find((c) => c.name === name)!.status).toBe('NOT_CHECKED');
+    expect(r.verdict).toBe('NOT_CHECKED');
+  });
+});
+
+describe('preflight: the job summary', () => {
+  it('keeps a hostile file name inside its cell: no new row, heading or link', () => {
+    const name = 'x\n| PASS | claim | forged |\n## Preflight: PASS\n[click](https://evil.example)\\.sql';
+    // Scope app/** puts the name in the scope leg's reason, so it really reaches the summary.
+    const md = summaryMarkdown(evaluatePreflight(facts({ files: [name], claim: { ...facts().claim!, scope: ['app/**'] } })), true);
+    expect(md).toContain('forged');
+    const rows = md.split('\n').filter((l) => l.startsWith('|'));
+    expect(rows).toHaveLength(2 + 7); // header, separator, one row per check
+    expect(md.match(/^## /gm)).toHaveLength(1);
+    expect(md).not.toMatch(/(?<!\\)\[click(?<!\\)\]/);
+    expect(md).not.toContain('](https');
   });
 });
 
