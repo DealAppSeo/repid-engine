@@ -151,10 +151,13 @@ export function unreadEnvReport(setNames: readonly string[], named: ReadonlySet<
     return `[config] unread-variable check NOT_CHECKED: the code scan did not find ${SCAN_CONTROL}, which this service always reads, so it cannot say any name is absent.`;
   }
   const known = new Set(ALL_KNOWN_ENV_VARS);
+  const platform = setNames.filter((n) => PLATFORM_NAME_RE.test(n)).length;
   const unread = setNames.filter((n) => !PLATFORM_NAME_RE.test(n) && !known.has(n) && !named.has(n));
   const plain = unread.filter((n) => PLAIN_NAME_RE.test(n)).sort();
   const odd = unread.length - plain.length;
-  if (!unread.length) return `[config] every set variable is named in this repo's code (${setNames.length} set).`;
+  if (!unread.length) {
+    return `[config] no set variable is unread: all ${setNames.length - platform} non-platform names appear in this repo's code (${platform} platform names skipped).`;
+  }
   const oddNote = odd ? ` Plus ${odd} name(s) in an unusual format, not printed.` : '';
   return (
     `[config] ${plain.length} set variable(s) that this repo's code never names: ${plain.join(', ') || 'none'}.${oddNote}` +

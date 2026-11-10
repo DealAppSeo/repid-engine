@@ -91,12 +91,13 @@ describe('unread variable names (names only)', () => {
 
   it('counts a registry name as read even when the scan did not see it', () => {
     const composed = ALL_KNOWN_ENV_VARS[ALL_KNOWN_ENV_VARS.length - 1]!;
-    expect(unreadEnvReport(['SUPABASE_URL', composed], named)).toContain('every set variable is named');
+    expect(unreadEnvReport(['SUPABASE_URL', composed], named)).toContain('no set variable is unread');
   });
 
   it('leaves out names the platform injects', () => {
     const line = unreadEnvReport(['SUPABASE_URL', 'RAILWAY_ENVIRONMENT', 'PATH', 'npm_config_cache', 'NODE_ENV'], named);
-    expect(line).toContain('every set variable is named');
+    expect(line).toContain('no set variable is unread');
+    expect(line).toContain("all 1 non-platform names appear in this repo's code (4 platform names skipped)");
   });
 
   it('counts an odd-format name but never prints it', () => {
