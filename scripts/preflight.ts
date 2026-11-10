@@ -161,6 +161,16 @@ async function readClaim(taskId: number): Promise<{ claim?: TaskClaim; unreadabl
 }
 
 /**
+ * Who is asking. On a PR it is the PR's author as GitHub authenticated it, never a name the PR body or a
+ * flag asserts: otherwise any PR could claim to be the lane that holds the lease. Locally the caller
+ * names itself, which proves nothing about identity and is only for its own early warning.
+ */
+export function agentIdentity(prMode: boolean, flagged: string | undefined, prAuthor: string | undefined): string {
+  if (prMode) return prAuthor ?? 'unknown';
+  return flagged ?? 'unknown';
+}
+
+/**
  * The target branch's tip after a fetch. A fetch that fails, or is skipped, leaves the local copy as
  * it was, which may be behind the remote: `unrefreshed` says so, and fresh_base cannot then pass.
  */
@@ -222,7 +232,7 @@ async function main(): Promise<void> {
 
   const taskId = flag('task') ? Number(flag('task')) : taskFromBody(body);
   const facts: PreflightFacts = {
-    agent: flag('agent') ?? /^\s*agent:\s*(\S+)\s*$/im.exec(body ?? '')?.[1] ?? author ?? 'unknown',
+    agent: agentIdentity(prNumber !== undefined, flag('agent'), author),
     baseSha,
     baseUnrefreshed: unrefreshed,
     forkSha,

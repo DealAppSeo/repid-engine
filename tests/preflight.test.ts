@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { evaluatePreflight, formatPreflight, prFromSubject, printable, summaryMarkdown, taskFromBody, type PreflightFacts } from '../src/orchestration/preflight';
 import { matchesAny } from '../src/orchestration/write-lease';
-import { mergedSince, parseOpenPrs, refreshBase, unquoteGitPath } from '../scripts/preflight';
+import { agentIdentity, mergedSince, parseOpenPrs, refreshBase, unquoteGitPath } from '../scripts/preflight';
 
 const NOW = new Date('2026-11-09T20:00:00Z');
 const FORK = '41503778a769117c3a6b6a1622e9779b5bd6e427';
@@ -220,6 +220,21 @@ describe('preflight: hostile and incomplete inputs', () => {
   it('returns null, never a partial list, when a truncated PR cannot be filled or the PR list hit its limit', () => {
     expect(parseOpenPrs(JSON.stringify([row(1, ['a.ts'], 2)]), none, () => null)).toBeNull();
     expect(parseOpenPrs(JSON.stringify([row(1, ['a.ts'], 1), row(2, ['b.ts'], 1)]), none, () => [], 2)).toBeNull();
+  });
+});
+
+describe('preflight: identity', () => {
+  it('on a PR, is the authenticated author, not a name the PR asserts', () => {
+    expect(agentIdentity(true, 'trinity-lane-1', 'some-contributor')).toBe('some-contributor');
+    expect(agentIdentity(true, 'trinity-lane-1', undefined)).toBe('unknown');
+  });
+  it('a self-asserted lane name cannot satisfy that lane\'s claim on a PR', () => {
+    const agent = agentIdentity(true, 'trinity-lane-1', 'some-contributor');
+    const c = status(facts({ agent, claim: { ...facts().claim!, holder: 'trinity-lane-1' } }), 'claim');
+    expect(c.status).toBe('FAIL');
+  });
+  it('locally, uses the name the caller gives', () => {
+    expect(agentIdentity(false, 'claude', undefined)).toBe('claude');
   });
 });
 
