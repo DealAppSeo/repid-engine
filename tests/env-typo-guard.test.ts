@@ -1,4 +1,8 @@
-import { findEnvTypos, ALL_KNOWN_ENV_VARS } from '../src/config/env-typo-guard';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { findEnvTypos, ALL_KNOWN_ENV_VARS, scanNamedTokens, unreadEnvReport, reportUnreadEnvNames } from '../src/config/env-typo-guard';
 import { SURFACE_ENV_NAMES, SURFACES } from '../src/resilience/decision-contract';
 
 describe('findEnvTypos', () => {
@@ -74,5 +78,150 @@ describe('findEnvTypos', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { KNOWN_ENV_VARS } = require('../src/config/known-env-vars.generated');
     expect(() => findEnvTypos(Object.keys(process.env), KNOWN_ENV_VARS)).not.toThrow();
+  });
+});
+
+describe('unread variable names (names only)', () => {
+  const named = new Set(['SUPABASE_URL', 'HAL_STRICTNESS']);
+
+  it('lists a set name that no code names, and only that one', () => {
+    const line = unreadEnvReport(['SUPABASE_URL', 'HAL_STRICTNESS', 'LEFTOVER_OLD_SWITCH'], named);
+    expect(line).toContain("1 set variable(s) that this repo's code never names: LEFTOVER_OLD_SWITCH.");
+    expect(line).toContain('Libraries and names built at runtime are not seen, so check before deleting.');
+  });
+
+  it('counts a registry name as read even when the scan did not see it', () => {
+    const composed = ALL_KNOWN_ENV_VARS[ALL_KNOWN_ENV_VARS.length - 1]!;
+    expect(unreadEnvReport(['SUPABASE_URL', composed], named)).toContain('no set variable is unread');
+  });
+
+  it('leaves out names the platform injects', () => {
+    const line = unreadEnvReport(['SUPABASE_URL', 'RAILWAY_ENVIRONMENT', 'PATH', 'npm_config_cache', 'NODE_ENV'], named);
+    expect(line).toContain('no set variable is unread');
+    expect(line).toContain("all 1 non-platform names appear in this repo's code (4 platform names skipped)");
+  });
+
+  it('counts an odd-format name but never prints it', () => {
+    const line = unreadEnvReport(['SUPABASE_URL', 'weird-name=sk_live_abc'], named);
+    expect(line).toContain('Plus 1 name(s) in an unusual format, not printed.');
+    expect(line).not.toContain('weird');
+    expect(line).not.toContain('sk_live');
+  });
+
+  it('says NOT_CHECKED, and lists nothing, when the scan cannot see the control name', () => {
+    const line = unreadEnvReport(['LEFTOVER_OLD_SWITCH'], new Set(['HAL_STRICTNESS']));
+    expect(line).toContain('NOT_CHECKED');
+    expect(line).not.toContain('LEFTOVER_OLD_SWITCH');
+  });
+
+  it('reads names from code files, comments included, but not from docs or node_modules', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'env-unread-'));
+    try {
+      writeFileSync(join(dir, 'a.ts'), '// mentions ALPHA_ONE\nconst x = process.env.BETA_TWO;\n');
+      writeFileSync(join(dir, 'b.md'), 'GAMMA_THREE\n');
+      mkdirSync(join(dir, 'node_modules'));
+      writeFileSync(join(dir, 'node_modules', 'c.js'), 'DELTA_FOUR\n');
+      const got = await scanNamedTokens([dir]);
+      expect(got.has('ALPHA_ONE')).toBe(true);
+      expect(got.has('BETA_TWO')).toBe(true);
+      expect(got.has('GAMMA_THREE')).toBe(false);
+      expect(got.has('DELTA_FOUR')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the control cannot be satisfied by this guard or the registry alone', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'env-unread-self-'));
+    try {
+      writeFileSync(join(dir, 'env-typo-guard.js'), "const SCAN_CONTROL = 'SUPABASE_URL';\n");
+      writeFileSync(join(dir, 'known-env-vars.generated.js'), 'SUPABASE_URL\n');
+      const got = await scanNamedTokens([dir]);
+      expect(got.has('SUPABASE_URL')).toBe(false);
+      expect(unreadEnvReport(['LEFTOVER_OLD_SWITCH'], got)).toContain('NOT_CHECKED');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  const linkDir = mkdtempSync(join(tmpdir(), 'env-unread-link-'));
+  const canLink = (() => {
+    try {
+      writeFileSync(join(linkDir, 'target.txt'), 'LINKED_ONLY_NAME\n');
+      symlinkSync(join(linkDir, 'target.txt'), join(linkDir, 'link.js'));
+      return true;
+    } catch {
+      return false; // Windows without developer mode: reported as skipped, never as a pass
+    }
+  })();
+  (canLink ? it : it.skip)('does not follow a symlink to a file', async () => {
+    try {
+      expect((await scanNamedTokens([linkDir])).has('LINKED_ONLY_NAME')).toBe(false);
+    } finally {
+      rmSync(linkDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a partial scan says NOT_CHECKED even when the control was found', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'env-unread-partial-'));
+    try {
+      writeFileSync(join(dir, 'config.js'), 'process.env.SUPABASE_URL\n');
+      const got = await scanNamedTokens([dir, join(dir, 'gone')]);
+      expect(got.has('SUPABASE_URL')).toBe(true);
+      expect(got.unreadable).toBe(1);
+      const line = unreadEnvReport(['SUPABASE_URL', 'LEFTOVER_OLD_SWITCH'], got);
+      expect(line).toContain('NOT_CHECKED: 1 file(s) or folder(s)');
+      expect(line).not.toContain('LEFTOVER_OLD_SWITCH');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A FIFO with a code extension: readFile on it never returns. Needs mkfifo, so POSIX only.
+  (process.platform === 'win32' ? it.skip : it)('skips a FIFO instead of hanging on it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'env-unread-fifo-'));
+    try {
+      writeFileSync(join(dir, 'config.js'), 'process.env.SUPABASE_URL\n');
+      expect(spawnSync('mkfifo', [join(dir, 'pipe.js')]).status).toBe(0);
+      const timeout = new Promise<'hung'>((r) => setTimeout(() => r('hung'), 3000).unref());
+      const got = await Promise.race([scanNamedTokens([dir]), timeout]);
+      expect(got).not.toBe('hung');
+      expect((got as Awaited<ReturnType<typeof scanNamedTokens>>).has('SUPABASE_URL')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('on this repo, finds the control and a name read only through a helper', async () => {
+    const got = await scanNamedTokens([join(__dirname, '..', 'src'), join(__dirname, '..', 'scripts')]);
+    expect(got.unreadable).toBe(0);
+    expect(got.has('SUPABASE_URL')).toBe(true);
+    expect(got.has('HAL_PERSIST_RULER')).toBe(true); // read as envTrue('...'), not process.env.X
+    expect(got.has('ZZ_NOT_A_NAME_ANYWHERE_0')).toBe(false);
+  });
+
+  it('end to end: scans the given roots, reads only process.env keys, and logs one line', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'env-unread-e2e-'));
+    const saved = { ...process.env };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      writeFileSync(join(dir, 'config.js'), 'const u = process.env.SUPABASE_URL;\n');
+      process.env.SUPABASE_URL = 'http://localhost:54321';
+      process.env.LEFTOVER_E2E_SWITCH = 'secret-value-must-not-print';
+      await reportUnreadEnvNames([dir]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0]![0]);
+      expect(line).toContain('LEFTOVER_E2E_SWITCH');
+      expect(line).not.toContain('secret-value-must-not-print');
+
+      warn.mockClear();
+      await reportUnreadEnvNames([join(dir, 'missing')]); // a scan that sees nothing
+      expect(String(warn.mock.calls[0]![0])).toContain('NOT_CHECKED');
+    } finally {
+      warn.mockRestore();
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
