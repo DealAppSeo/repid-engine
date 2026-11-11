@@ -65,10 +65,12 @@ describe('regex budget — the guarantee under the heuristic', () => {
     // an order-of-magnitude gap, so it is not a tuned threshold.
     //
     // It is measured in a FRESH child process that loads only this module (see the
-    // helper). It used to be measured in the jest worker itself, where "the whole
-    // process" is every test file that worker ran before this one. That version read
-    // 248–776 ms of CPU in a 600 ms window on at least 8 CI attempts, 2026-11-09..11,
-    // including main.
+    // helper). It used to be measured in the jest worker itself, and failed there on
+    // at least 8 CI attempts 2026-11-09..11, main included, reading 248–776 ms in a
+    // 600 ms window. Measured on Linux CI (repid-engine #1539): the jest worker burned
+    // 607 ms in a 600 ms window BEFORE any regex worker existed, then fell to ~5 ms;
+    // a fresh process read 0.3–0.8% clean and 100% leaked. The noise was the host,
+    // not the thread. Which host work (GC of a 690 MB heap, or other) is not isolated.
     const child = await measureInFreshProcess({ leak: false, ...FRESH });
     expect(child.status).toBe('timeout');
     expect(child.cpuMs).toBeLessThan(child.wallMs * 0.4);
