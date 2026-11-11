@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { drawSample } from '../scripts/t12/audit-run';
+import { auditDay, argProblem, dayPopulation, drandRoundAfter, drawSample, DRAND_QUICKNET, lastClosedDay, populationRecord } from '../scripts/t12/audit-run';
 
 const SQL_DIR = join(__dirname, '..', 'ops', 't12', 'audit');
 const WRITE = /\b(insert|update|delete|merge|upsert|drop|alter|create|grant|revoke|truncate|comment\s+on|copy|call|do)\b/i;
@@ -59,5 +59,98 @@ describe('drawSample', () => {
       expect(d.entry).toBe(pool[d.index]);
     }
     expect(drawSample([], 'x')).toBeNull();
+  });
+});
+
+describe('the beacon draw cannot be predicted before the population closes', () => {
+  // Round 33853811 was fetched live on 2026-11-11; its time follows from genesis + (round - 1) * period.
+  const known = 33853811;
+  const knownAt = (DRAND_QUICKNET.genesis + (known - 1) * DRAND_QUICKNET.period) * 1000;
+
+  it('picks the first round strictly after the cutoff, never one at or before it', () => {
+    for (const cutoff of [knownAt - 1, knownAt, knownAt + 1, knownAt + 2999, knownAt + 3000]) {
+      const { round, atMs } = drandRoundAfter(cutoff);
+      expect(atMs).toBeGreaterThan(cutoff);
+      expect(atMs - DRAND_QUICKNET.period * 1000).toBeLessThanOrEqual(cutoff);
+      expect(atMs).toBe((DRAND_QUICKNET.genesis + (round - 1) * DRAND_QUICKNET.period) * 1000);
+    }
+    expect(drandRoundAfter(knownAt - 1).round).toBe(known);
+    expect(drandRoundAfter(knownAt).round).toBe(known + 1);
+  });
+
+  it('draws from exactly one UTC day, by time, not by string', () => {
+    const w = auditDay('2026-11-10')!;
+    expect(w.endMs - w.startMs).toBe(24 * 60 * 60 * 1000 - 1);
+    const entries = [
+      { pr: 1, ts: '2026-11-09T23:59:59.999Z' },
+      { pr: 2, ts: '2026-11-10T00:00:00Z' },
+      { pr: 3, ts: '2026-11-10T23:59:59Z' },
+      { pr: 4, ts: '2026-11-11T00:00:00Z' },
+      { pr: 5, ts: 'not a time' },
+    ];
+    expect(dayPopulation(entries, w).map((e) => e.ts)).toEqual(['2026-11-10T00:00:00Z', '2026-11-10T23:59:59Z']);
+  });
+
+  it('accepts only a real date, so a day cannot be bent into a free window', () => {
+    for (const bad of ['2026-11-31', '2026-13-01', '2026-11-10T12:00:00Z', '', '2026-1-10']) expect(auditDay(bad)).toBeNull();
+    expect(drandRoundAfter(auditDay('2026-11-10')!.endMs).atMs).toBeGreaterThan(auditDay('2026-11-10')!.endMs);
+  });
+
+  it('a beacon asked for never falls back to the fixed seed', () => {
+    const base = ['node', 'audit-run.ts', '--out', 'x'];
+    const run = (...a: string[]) => argProblem([...base, ...a]);
+    expect(run('--beacon', 'drand', '--day', '2026-11-10')).toBeNull();
+    expect(argProblem(base)).toBeNull();
+    expect(run('--ledger', 'l.jsonl', '--since', '2026-11-04', '--seed', 'audit-2026-11-10')).toBeNull();
+    expect(run('--beacon', 'Drand', '--day', '2026-11-10')).toContain('must be drand');
+    expect(run('--day', '2026-11-10', '--beacon')).toContain('needs a value');
+    expect(run('--beacon', '--day', '2026-11-10')).toContain('needs a value');
+    expect(run('--day', '2026-11-10')).toContain('only for --beacon drand');
+    // Every spelling the old parser skipped silently is refused, before anything is read.
+    for (const stray of ['--beacon=drand', '--becon', '-beacon', '—beacon', '--cutoff', 'drand']) {
+      expect(run(stray, 'drand', '--day', '2026-11-10')).toContain('unexpected');
+    }
+    expect(run('--beacon', 'drand', '--day', '2026-11-10', '--day', '2026-11-09')).toContain('once');
+  });
+
+  // Strix on #1534: three ways a seen beacon could still steer the draw.
+  it('takes only the last closed UTC day', () => {
+    expect(lastClosedDay(Date.parse('2026-11-11T00:00:01Z'))).toBe('2026-11-10');
+    expect(lastClosedDay(Date.parse('2026-11-11T23:59:59Z'))).toBe('2026-11-10');
+    const src = readFileSync(join(__dirname, '..', 'scripts', 't12', 'audit-run.ts'), 'utf8');
+    expect(src).toContain('if (day !== closed) throw new Error');
+  });
+
+  it('places a row in the day only when its time names its zone', () => {
+    const w = auditDay('2026-11-10')!;
+    const rows = [
+      { pr: 'a', ts: '2026-11-10T12:00:00' }, // no zone: Date.parse would read it as the runner's local time
+      { pr: 'b', ts: '2026-11-11T08:00:00+09:00' }, // 2026-11-10T23:00Z, inside
+      { pr: 'c', ts: '2026-11-10T20:00:00-05:00' }, // 2026-11-11T01:00Z, outside
+    ];
+    expect(dayPopulation(rows, w).map((e) => e.pr)).toEqual(['b']);
+  });
+
+  it('draws the same entry however the ledger lines are ordered, and records what it drew from', () => {
+    const w = auditDay('2026-11-10')!;
+    const rows = ['1529', '1530', '1531', '1532', '1533'].map((pr, i) => ({ pr: `DealAppSeo/repid-engine#${pr}`, ts: `2026-11-10T0${i}:00:00Z` }));
+    const seed = `drand-quicknet:1:${'ab'.repeat(32)}`;
+    const forward = dayPopulation(rows, w);
+    const reversed = dayPopulation([...rows].reverse(), w);
+    expect(drawSample(reversed, seed)!.entry).toEqual(drawSample(forward, seed)!.entry);
+    expect(populationRecord(reversed, 'x').pool_sha256).toBe(populationRecord(forward, 'x').pool_sha256);
+    expect(populationRecord(forward, 'x').prs).toHaveLength(5);
+    expect(populationRecord(forward.slice(1), 'x').pool_sha256).not.toBe(populationRecord(forward, 'x').pool_sha256);
+    expect(populationRecord(forward, 'x').ledger_sha256).not.toBe(populationRecord(forward, 'y').ledger_sha256);
+    // A repeated line for a PR cannot resize the pool, and case or locale cannot reorder it.
+    const padded = dayPopulation([...rows, { ...rows[2]!, ts: '2026-11-10T09:00:00Z' }, rows[4]!], w);
+    expect(padded.map((e) => e.pr)).toEqual(forward.map((e) => e.pr));
+    expect(dayPopulation([{ pr: 'b', ts: '2026-11-10T01:00:00Z' }, { pr: 'B', ts: '2026-11-10T01:00:00Z' }, { pr: 'a', ts: '2026-11-10T01:00:00Z' }], w).map((e) => e.pr)).toEqual(['B', 'a', 'b']);
+  });
+
+  it('the runner refuses a free start or seed alongside the beacon', () => {
+    const src = readFileSync(join(__dirname, '..', 'scripts', 't12', 'audit-run.ts'), 'utf8');
+    expect(src).toContain("if (since || arg('seed')) throw new Error");
+    expect(src).not.toMatch(/arg\('cutoff'\)/);
   });
 });
