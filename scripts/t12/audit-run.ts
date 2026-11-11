@@ -86,13 +86,18 @@ export function lastClosedDay(nowMs: number): string {
 // Date.parse reads a time with no zone as LOCAL time, so the runner's TZ would move rows in or out of the day.
 const ZONED = /(?:Z|[+-]\d{2}:\d{2})$/;
 
-/** The entries of that day, in a canonical order (by PR, then time) so reordering the ledger's lines cannot
- *  move a chosen entry onto the drawn index. Compared as times, not strings (`…:04Z` vs `…:04.000Z`). An
- *  entry whose time has no explicit zone, or does not parse, cannot be placed in the day and is left out. */
+// Code-unit order, not localeCompare: a locale-aware sort would let the runner's locale reorder the pool.
+const cmp = (x: string, y: string): number => (x < y ? -1 : x > y ? 1 : 0);
+
+/** The entries of that day, one per PR, in a canonical order (PR, then time) so neither reordering the
+ *  ledger's lines nor repeating one can move a chosen entry onto the drawn index. Times are compared as
+ *  instants (`…:04Z` vs `…:04.000Z`). An entry whose time names no zone, or does not parse, is left out. */
 export function dayPopulation<T extends { ts?: string; pr?: unknown }>(entries: readonly T[], w: { startMs: number; endMs: number }): T[] {
-  return entries
+  const inDay = entries
     .filter((e) => { const ts = String(e.ts ?? ''); const t = Date.parse(ts); return ZONED.test(ts) && t >= w.startMs && t <= w.endMs; })
-    .sort((a, b) => String(a.pr).localeCompare(String(b.pr)) || String(a.ts).localeCompare(String(b.ts)));
+    .sort((a, b) => cmp(String(a.pr), String(b.pr)) || Date.parse(String(a.ts)) - Date.parse(String(b.ts)));
+  // A PR merges once; a repeated line would only resize the pool, so keep the earliest per PR.
+  return inDay.filter((e, i) => i === 0 || String(e.pr) !== String(inDay[i - 1]!.pr));
 }
 
 /** What a third party needs to redraw and to check the pool against the source of record (e.g. GitHub's

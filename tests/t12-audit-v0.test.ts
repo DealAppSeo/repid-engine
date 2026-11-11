@@ -82,11 +82,11 @@ describe('the beacon draw cannot be predicted before the population closes', () 
     const w = auditDay('2026-11-10')!;
     expect(w.endMs - w.startMs).toBe(24 * 60 * 60 * 1000 - 1);
     const entries = [
-      { ts: '2026-11-09T23:59:59.999Z' },
-      { ts: '2026-11-10T00:00:00Z' },
-      { ts: '2026-11-10T23:59:59Z' },
-      { ts: '2026-11-11T00:00:00Z' },
-      { ts: 'not a time' },
+      { pr: 1, ts: '2026-11-09T23:59:59.999Z' },
+      { pr: 2, ts: '2026-11-10T00:00:00Z' },
+      { pr: 3, ts: '2026-11-10T23:59:59Z' },
+      { pr: 4, ts: '2026-11-11T00:00:00Z' },
+      { pr: 5, ts: 'not a time' },
     ];
     expect(dayPopulation(entries, w).map((e) => e.ts)).toEqual(['2026-11-10T00:00:00Z', '2026-11-10T23:59:59Z']);
   });
@@ -142,6 +142,10 @@ describe('the beacon draw cannot be predicted before the population closes', () 
     expect(populationRecord(forward, 'x').prs).toHaveLength(5);
     expect(populationRecord(forward.slice(1), 'x').pool_sha256).not.toBe(populationRecord(forward, 'x').pool_sha256);
     expect(populationRecord(forward, 'x').ledger_sha256).not.toBe(populationRecord(forward, 'y').ledger_sha256);
+    // A repeated line for a PR cannot resize the pool, and case or locale cannot reorder it.
+    const padded = dayPopulation([...rows, { ...rows[2]!, ts: '2026-11-10T09:00:00Z' }, rows[4]!], w);
+    expect(padded.map((e) => e.pr)).toEqual(forward.map((e) => e.pr));
+    expect(dayPopulation([{ pr: 'b', ts: '2026-11-10T01:00:00Z' }, { pr: 'B', ts: '2026-11-10T01:00:00Z' }, { pr: 'a', ts: '2026-11-10T01:00:00Z' }], w).map((e) => e.pr)).toEqual(['B', 'a', 'b']);
   });
 
   it('the runner refuses a free start or seed alongside the beacon', () => {
