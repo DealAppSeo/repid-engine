@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { closedPopulation, drandRoundAfter, drawSample, DRAND_QUICKNET } from '../scripts/t12/audit-run';
+import { auditDay, dayPopulation, drandRoundAfter, drawSample, DRAND_QUICKNET } from '../scripts/t12/audit-run';
 
 const SQL_DIR = join(__dirname, '..', 'ops', 't12', 'audit');
 const WRITE = /\b(insert|update|delete|merge|upsert|drop|alter|create|grant|revoke|truncate|comment\s+on|copy|call|do)\b/i;
@@ -78,15 +78,27 @@ describe('the beacon draw cannot be predicted before the population closes', () 
     expect(drandRoundAfter(knownAt).round).toBe(known + 1);
   });
 
-  it('closes the population at the cutoff, by time, not by string', () => {
-    const cutoff = Date.parse('2026-11-10T20:31:04Z');
+  it('draws from exactly one UTC day, by time, not by string', () => {
+    const w = auditDay('2026-11-10')!;
+    expect(w.endMs - w.startMs).toBe(24 * 60 * 60 * 1000 - 1);
     const entries = [
-      { ts: '2026-11-10T20:31:03Z' },
-      { ts: '2026-11-10T20:31:04Z' },
-      { ts: '2026-11-10T20:31:04.001Z' },
+      { ts: '2026-11-09T23:59:59.999Z' },
+      { ts: '2026-11-10T00:00:00Z' },
+      { ts: '2026-11-10T23:59:59Z' },
+      { ts: '2026-11-11T00:00:00Z' },
       { ts: 'not a time' },
     ];
-    expect(closedPopulation(entries, '', cutoff).map((e) => e.ts)).toEqual(['2026-11-10T20:31:03Z', '2026-11-10T20:31:04Z']);
-    expect(closedPopulation(entries, '').length).toBe(4);
+    expect(dayPopulation(entries, w).map((e) => e.ts)).toEqual(['2026-11-10T00:00:00Z', '2026-11-10T23:59:59Z']);
+  });
+
+  it('accepts only a real date, so a day cannot be bent into a free window', () => {
+    for (const bad of ['2026-11-31', '2026-13-01', '2026-11-10T12:00:00Z', '', '2026-1-10']) expect(auditDay(bad)).toBeNull();
+    expect(drandRoundAfter(auditDay('2026-11-10')!.endMs).atMs).toBeGreaterThan(auditDay('2026-11-10')!.endMs);
+  });
+
+  it('the runner refuses a free start or seed alongside the beacon', () => {
+    const src = readFileSync(join(__dirname, '..', 'scripts', 't12', 'audit-run.ts'), 'utf8');
+    expect(src).toContain("if (since || arg('seed')) throw new Error");
+    expect(src).not.toMatch(/arg\('cutoff'\)/);
   });
 });
