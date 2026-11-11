@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { auditDay, argProblem, dayPopulation, drandRoundAfter, drawSample, DRAND_QUICKNET } from '../scripts/t12/audit-run';
+import { auditDay, argProblem, dayPopulation, drandRoundAfter, drawSample, DRAND_QUICKNET, lastClosedDay, populationRecord } from '../scripts/t12/audit-run';
 
 const SQL_DIR = join(__dirname, '..', 'ops', 't12', 'audit');
 const WRITE = /\b(insert|update|delete|merge|upsert|drop|alter|create|grant|revoke|truncate|comment\s+on|copy|call|do)\b/i;
@@ -111,6 +111,37 @@ describe('the beacon draw cannot be predicted before the population closes', () 
       expect(run(stray, 'drand', '--day', '2026-11-10')).toContain('unexpected');
     }
     expect(run('--beacon', 'drand', '--day', '2026-11-10', '--day', '2026-11-09')).toContain('once');
+  });
+
+  // Strix on #1534: three ways a seen beacon could still steer the draw.
+  it('takes only the last closed UTC day', () => {
+    expect(lastClosedDay(Date.parse('2026-11-11T00:00:01Z'))).toBe('2026-11-10');
+    expect(lastClosedDay(Date.parse('2026-11-11T23:59:59Z'))).toBe('2026-11-10');
+    const src = readFileSync(join(__dirname, '..', 'scripts', 't12', 'audit-run.ts'), 'utf8');
+    expect(src).toContain('if (day !== closed) throw new Error');
+  });
+
+  it('places a row in the day only when its time names its zone', () => {
+    const w = auditDay('2026-11-10')!;
+    const rows = [
+      { pr: 'a', ts: '2026-11-10T12:00:00' }, // no zone: Date.parse would read it as the runner's local time
+      { pr: 'b', ts: '2026-11-11T08:00:00+09:00' }, // 2026-11-10T23:00Z, inside
+      { pr: 'c', ts: '2026-11-10T20:00:00-05:00' }, // 2026-11-11T01:00Z, outside
+    ];
+    expect(dayPopulation(rows, w).map((e) => e.pr)).toEqual(['b']);
+  });
+
+  it('draws the same entry however the ledger lines are ordered, and records what it drew from', () => {
+    const w = auditDay('2026-11-10')!;
+    const rows = ['1529', '1530', '1531', '1532', '1533'].map((pr, i) => ({ pr: `DealAppSeo/repid-engine#${pr}`, ts: `2026-11-10T0${i}:00:00Z` }));
+    const seed = `drand-quicknet:1:${'ab'.repeat(32)}`;
+    const forward = dayPopulation(rows, w);
+    const reversed = dayPopulation([...rows].reverse(), w);
+    expect(drawSample(reversed, seed)!.entry).toEqual(drawSample(forward, seed)!.entry);
+    expect(populationRecord(reversed, 'x').pool_sha256).toBe(populationRecord(forward, 'x').pool_sha256);
+    expect(populationRecord(forward, 'x').prs).toHaveLength(5);
+    expect(populationRecord(forward.slice(1), 'x').pool_sha256).not.toBe(populationRecord(forward, 'x').pool_sha256);
+    expect(populationRecord(forward, 'x').ledger_sha256).not.toBe(populationRecord(forward, 'y').ledger_sha256);
   });
 
   it('the runner refuses a free start or seed alongside the beacon', () => {

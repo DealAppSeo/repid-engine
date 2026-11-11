@@ -10,7 +10,10 @@
  * --beacon drand draws from exactly one UTC day's entries, seeded with the first drand quicknet round
  * AFTER that day ends: public, unpredictable until it happens, and re-fetchable by anyone. The day is
  * the only choice the auditor makes. A free cutoff or start would let an auditor who has already seen
- * the beacon try windows until the draw lands where they want, so --since is refused with --beacon.
+ * the beacon try windows until the draw lands where they want, so --since is refused with --beacon, and
+ * the day must be the last closed UTC day (an older day's round is already public). The pool is put in a
+ * canonical order and recorded with its digest and the ledger's, so reordering lines cannot steer the
+ * draw and an added or removed entry shows up against the source of record.
  * A round still in the future is NOT_CHECKED, never a fallback to a fixed seed.
  *
  * Exit 0 = report written. Exit 2 = NOT_CHECKED (no DATABASE_URL, or a query failed); nothing is written then.
@@ -74,10 +77,29 @@ export function auditDay(day: string): { startMs: number; endMs: number } | null
   return { startMs, endMs: startMs + 24 * 60 * 60 * 1000 - 1 };
 }
 
-/** The entries of that day. Compared as times, not strings: the ledger writes `…:04Z`, toISOString `…:04.000Z`.
- *  An entry with no parseable time cannot be placed in the day, so it is left out. */
-export function dayPopulation<T extends { ts?: string }>(entries: readonly T[], w: { startMs: number; endMs: number }): T[] {
-  return entries.filter((e) => { const t = Date.parse(String(e.ts ?? '')); return t >= w.startMs && t <= w.endMs; });
+/** The only day a beacon draw may take: the most recent UTC day that has fully ended. Any older day's
+ *  round is already public, so letting the auditor pick one would let them pick the draw (Strix on #1534). */
+export function lastClosedDay(nowMs: number): string {
+  return new Date(nowMs - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+// Date.parse reads a time with no zone as LOCAL time, so the runner's TZ would move rows in or out of the day.
+const ZONED = /(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** The entries of that day, in a canonical order (by PR, then time) so reordering the ledger's lines cannot
+ *  move a chosen entry onto the drawn index. Compared as times, not strings (`…:04Z` vs `…:04.000Z`). An
+ *  entry whose time has no explicit zone, or does not parse, cannot be placed in the day and is left out. */
+export function dayPopulation<T extends { ts?: string; pr?: unknown }>(entries: readonly T[], w: { startMs: number; endMs: number }): T[] {
+  return entries
+    .filter((e) => { const ts = String(e.ts ?? ''); const t = Date.parse(ts); return ZONED.test(ts) && t >= w.startMs && t <= w.endMs; })
+    .sort((a, b) => String(a.pr).localeCompare(String(b.pr)) || String(a.ts).localeCompare(String(b.ts)));
+}
+
+/** What a third party needs to redraw and to check the pool against the source of record (e.g. GitHub's
+ *  merged PRs for that day): the PRs in canonical order and digests of the pool and of the whole ledger. */
+export function populationRecord(pool: readonly { pr?: unknown }[], ledgerBytes: string) {
+  const prs = pool.map((e) => String(e.pr));
+  return { prs, pool_sha256: createHash('sha256').update(JSON.stringify(prs)).digest('hex'), ledger_sha256: createHash('sha256').update(ledgerBytes).digest('hex') };
 }
 
 const arg = (name: string, dflt?: string): string | undefined => {
@@ -128,6 +150,8 @@ async function main(): Promise<void> {
     const day = arg('day') ?? '';
     const w = auditDay(day);
     if (!w) throw new Error('--beacon drand needs --day YYYY-MM-DD (a real UTC date)');
+    const closed = lastClosedDay(Date.now());
+    if (day !== closed) throw new Error(`--beacon drand draws only the last closed UTC day, ${closed}: any older day's round is already public`);
     window = { day, ...w };
     const { round, atMs } = drandRoundAfter(w.endMs);
     if (Date.now() < atMs) throw new Error(`drand round ${round} is at ${new Date(atMs).toISOString()}, still in the future`);
@@ -137,14 +161,20 @@ async function main(): Promise<void> {
     beacon = { round, at: new Date(atMs).toISOString(), randomness: b.randomness! };
     seed = `drand-quicknet:${round}:${b.randomness}`;
   }
-  let sample: { seed: string; beacon: typeof beacon; day: string | null; pool: number; index: number; entry: unknown } | 'NOT_CHECKED: no ledger' = 'NOT_CHECKED: no ledger';
+  let sample: Record<string, unknown> | string = 'NOT_CHECKED: no ledger';
   if (ledger && existsSync(ledger)) {
-    const parsed = readFileSync(ledger, 'utf8').split('\n').filter(Boolean)
+    const bytes = readFileSync(ledger, 'utf8');
+    const parsed = bytes.split('\n').filter(Boolean)
       .map((l) => { try { return JSON.parse(l) as { ts?: string; pr?: unknown }; } catch { return null; } })
       .filter((e): e is { ts?: string; pr?: unknown } => !!e && typeof e.pr !== 'undefined');
     const pool = window ? dayPopulation(parsed, window) : parsed.filter((e) => String(e.ts ?? '') >= String(since));
     const d = drawSample(pool, seed);
-    if (d) sample = { seed, beacon, day: window?.day ?? null, pool: pool.length, index: d.index, entry: d.entry };
+    // The pool is recorded so a third party can redraw it AND check it against the source of record; the
+    // ledger is operator-written, so an added or removed entry is caught by that check, not prevented here.
+    const population = window ? populationRecord(pool, bytes) : null;
+    sample = d
+      ? { seed, beacon, day: window?.day ?? null, population, pool: pool.length, index: d.index, entry: d.entry }
+      : `NOT_CHECKED: nothing to draw (pool of 0${window ? ` for ${window.day}` : ''})`;
   }
 
   mkdirSync(out, { recursive: true });
