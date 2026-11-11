@@ -204,6 +204,11 @@ describe('the local route streams', () => {
     expect(readAnswer(sse(['x']))).toBeNull(); // the unstreamed reader does not take a stream, so both are tried
   });
 
+  it('gives no answer for a stream cut off before [DONE] (Strix asked on #1536)', () => {
+    expect(readStreamedAnswer(events(['{"files":[{"path":"t.ts","content":"o']))).toBeNull();
+    expect(readStreamedAnswer(events(['{"files":[]}']) + DONE)).toBe('{"files":[]}');
+  });
+
   it('gives no answer, never half of one, for a malformed or empty stream', () => {
     expect(readStreamedAnswer(`${sse(['a'])}`.replace('data: [DONE]', 'data: {not json'))).toBeNull();
     expect(readStreamedAnswer(DONE)).toBeNull();

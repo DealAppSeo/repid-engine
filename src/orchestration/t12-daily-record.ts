@@ -15,13 +15,38 @@ export interface DailyRecord {
   schema: typeof DAILY_RECORD_SCHEMA;
   date: string;
   source: 'synthetic' | 'real';
-  tasks: { attempted: number; accepted: number; rejected: number; not_checked: number; integrated: number; waiting_for_capacity: number };
+  tasks: { attempted: number; accepted: number; rejected: number; not_checked: number; integrated: number; waiting_for_capacity: number; maker_refused: number };
   leases: { claims: number; stage_claims: number; expired_and_recovered: number; released: number };
   belts: { checked_out: number; denied: number };
   providers: ProviderUse[];
   tests: Array<{ task: string; verdict: 'approved' | 'rejected' | 'not_checked'; commit: string | null; exit: number | null; controls: number; reason: string | null }>;
+  /** Why the lane refused a model's output before any check: a code from a closed set, never the reason text. */
+  refusals: Array<{ task: string; code: MakerRefusalCode }>;
   receipts: Array<{ task: string; count: number; last_hash: string; chain_ok: boolean }>;
   reputation: { scored: false; anchored: false; reason: string };
+}
+
+export type MakerRefusalCode = 'no_json' | 'invalid_json' | 'no_files' | 'file_missing_path_or_content' | 'path_outside_lease' | 'no_change' | 'belt_denied' | 'other';
+
+const FILE_SET = 'model output was not a valid file set inside the lease: ';
+
+/**
+ * The code for a maker_failed reason, matched against the lane's own phrases (t12-lane-git.ts, t12-lane-runner.ts).
+ * Two of those reasons embed model text (an out-of-lease path, a JSON parser message that quotes the reply), so the
+ * text is never copied. ponytail: a crafted path can at worst flip invalid_json and path_outside_lease; it cannot
+ * put words in the record. Upgrade path: carry a code from the lane itself if that ever matters.
+ */
+export function makerRefusalCode(reason: string): MakerRefusalCode {
+  if (reason === 'the model produced no change') return 'no_change';
+  if (reason.startsWith('belt denied')) return 'belt_denied';
+  if (!reason.startsWith(FILE_SET)) return 'other';
+  const rest = reason.slice(FILE_SET.length);
+  if (rest === 'no JSON object in the reply') return 'no_json';
+  if (rest === 'no files in the reply') return 'no_files';
+  if (rest === 'a file is missing its path or content') return 'file_missing_path_or_content';
+  if (rest.startsWith('invalid JSON: ')) return 'invalid_json';
+  if (rest.endsWith(' is outside the lease')) return 'path_outside_lease';
+  return 'other';
 }
 
 interface Row { state: LaneState }
@@ -51,11 +76,12 @@ export function buildDailyRecord(rows: readonly Row[], date: string, source: Dai
     schema: DAILY_RECORD_SCHEMA,
     date,
     source,
-    tasks: { attempted: 0, accepted: 0, rejected: 0, not_checked: 0, integrated: 0, waiting_for_capacity: 0 },
+    tasks: { attempted: 0, accepted: 0, rejected: 0, not_checked: 0, integrated: 0, waiting_for_capacity: 0, maker_refused: 0 },
     leases: { claims: 0, stage_claims: 0, expired_and_recovered: 0, released: 0 },
     belts: { checked_out: 0, denied: 0 },
     providers: [],
     tests: [],
+    refusals: [],
     receipts: [],
     reputation: { scored: false, anchored: false, reason: 'Postponed until the work itself is reliable. Activity is not a score.' },
   };
@@ -77,6 +103,10 @@ export function buildDailyRecord(rows: readonly Row[], date: string, source: Dai
         belt_denied: () => { record.belts.denied += 1; },
         integrated: () => { record.tasks.integrated += 1; },
         waiting_for_capacity: () => { record.tasks.waiting_for_capacity += 1; },
+        maker_failed: () => {
+          record.tasks.maker_refused += 1;
+          record.refusals.push({ task, code: makerRefusalCode(r.reason) });
+        },
         check_approved: () => {
           record.tasks.accepted += 1;
           record.tests.push({ task, verdict: 'approved', commit: String(ev.commit ?? '') || null, exit: typeof ev.exit === 'number' ? ev.exit : null, controls: Array.isArray(ev.controls) ? ev.controls.length : 0, reason: null });
