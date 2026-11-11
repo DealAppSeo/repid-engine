@@ -42,19 +42,27 @@ export function drandRoundAfter(cutoffMs: number): { round: number; atMs: number
   return { round, atMs: (genesis + (round - 1) * period) * 1000 };
 }
 
-/** Why the beacon flags cannot run as given, or null. A beacon asked for is never silently a fixed seed. */
 export const AUDIT_FLAGS = ['--out', '--days', '--parent', '--ledger', '--since', '--seed', '--beacon', '--day'] as const;
+const isFlag = (a: string | undefined): boolean => a !== undefined && (AUDIT_FLAGS as readonly string[]).includes(a);
 
-export function beaconFlagProblem(argv: readonly string[]): string | null {
-  // This parser reads `--flag value` only and ignores anything else, so an unknown flag (`--becon`,
-  // `--beacon=drand`, the retired `--cutoff`) would silently drop the beacon. Refuse every one of them.
-  const unknown = argv.filter((a) => a.startsWith('--') && !(AUDIT_FLAGS as readonly string[]).includes(a));
-  if (unknown.length) return `unknown flag ${unknown.join(', ')}; flags are ${AUDIT_FLAGS.join(' ')}, each followed by its value`;
-  for (const f of ['--beacon', '--day']) if (argv.filter((a) => a === f).length > 1) return `${f} may appear once`;
-  const at = argv.indexOf('--beacon');
-  const value = at < 0 ? undefined : argv[at + 1];
-  if (at >= 0 && value !== 'drand') return `--beacon must be drand, got ${value ?? 'nothing'}`;
-  if (at < 0 && argv.includes('--day')) return '--day is only for --beacon drand';
+/**
+ * Why argv cannot run as given, or null. Strict on purpose: `arg()` reads `--flag value` and skips
+ * anything it does not recognise, so a mistyped `--becon`, `-beacon`, `—beacon`, `--beacon=drand` or the
+ * retired `--cutoff` used to drop the beacon silently and draw from the fixed seed. Every argument after
+ * the script must be a known flag followed by its value, each flag once; a beacon asked for is never a fixed seed.
+ */
+export function argProblem(argv: readonly string[]): string | null {
+  const seen = new Set<string>();
+  for (let i = 2; i < argv.length; i += 2) {
+    const f = argv[i]!;
+    if (!isFlag(f)) return `unexpected ${JSON.stringify(f)}: every argument is one of ${AUDIT_FLAGS.join(' ')}, followed by its value`;
+    if (seen.has(f)) return `${f} may appear once`;
+    seen.add(f);
+    if (argv[i + 1] === undefined || isFlag(argv[i + 1])) return `${f} needs a value`;
+  }
+  const beacon = seen.has('--beacon') ? argv[argv.indexOf('--beacon') + 1] : undefined;
+  if (seen.has('--beacon') && beacon !== 'drand') return `--beacon must be drand, got ${JSON.stringify(beacon)}`;
+  if (!seen.has('--beacon') && seen.has('--day')) return '--day is only for --beacon drand';
   return null;
 }
 
@@ -89,10 +97,9 @@ async function main(): Promise<void> {
   const parent = arg('parent', 't12-known-answer-v2')!;
   const today = new Date().toISOString().slice(0, 10);
   if (!out) throw new Error('--out <dir> is required');
-  // Checked on the flag's PRESENCE, not its value: `--beacon Drand`, a typo, or a trailing `--beacon`
-  // with no value must stop the run, never fall back to the fixed seed it was meant to replace.
-  const beaconProblem = beaconFlagProblem(process.argv);
-  if (beaconProblem) throw new Error(beaconProblem);
+  // Before anything is read: a beacon asked for in any spelling stops here unless it is exactly right.
+  const problem = argProblem(process.argv);
+  if (problem) throw new Error(problem);
   if (!process.env.DATABASE_URL) {
     console.error('NOT_CHECKED: DATABASE_URL is not set, so nothing was read.');
     process.exit(2);

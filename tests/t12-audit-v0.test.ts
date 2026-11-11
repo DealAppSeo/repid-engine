@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { auditDay, beaconFlagProblem, dayPopulation, drandRoundAfter, drawSample, DRAND_QUICKNET } from '../scripts/t12/audit-run';
+import { auditDay, argProblem, dayPopulation, drandRoundAfter, drawSample, DRAND_QUICKNET } from '../scripts/t12/audit-run';
 
 const SQL_DIR = join(__dirname, '..', 'ops', 't12', 'audit');
 const WRITE = /\b(insert|update|delete|merge|upsert|drop|alter|create|grant|revoke|truncate|comment\s+on|copy|call|do)\b/i;
@@ -98,18 +98,19 @@ describe('the beacon draw cannot be predicted before the population closes', () 
 
   it('a beacon asked for never falls back to the fixed seed', () => {
     const base = ['node', 'audit-run.ts', '--out', 'x'];
-    expect(beaconFlagProblem([...base, '--beacon', 'drand', '--day', '2026-11-10'])).toBeNull();
-    expect(beaconFlagProblem(base)).toBeNull();
-    expect(beaconFlagProblem([...base, '--beacon', 'Drand', '--day', '2026-11-10'])).toContain('must be drand');
-    expect(beaconFlagProblem([...base, '--day', '2026-11-10', '--beacon'])).toContain('got nothing');
-    expect(beaconFlagProblem([...base, '--day', '2026-11-10'])).toContain('only for --beacon drand');
-    // Unknown tokens are ignored by this parser, so each spelling that would drop the beacon is refused.
-    expect(beaconFlagProblem([...base, '--beacon=drand', '--day', '2026-11-10'])).toContain('unknown flag --beacon=drand');
-    expect(beaconFlagProblem([...base, '--beacon', 'drand', '--day=2026-11-10'])).toContain('unknown flag --day=2026-11-10');
-    expect(beaconFlagProblem([...base, '--becon', 'drand', '--day', '2026-11-10'])).toContain('unknown flag --becon');
-    expect(beaconFlagProblem([...base, '--beacon', 'drand', '--cutoff', '2026-11-10T00:00:00Z'])).toContain('unknown flag --cutoff');
-    // A repeated --day would let the later value win unseen.
-    expect(beaconFlagProblem([...base, '--beacon', 'drand', '--day', '2026-11-10', '--day', '2026-11-09'])).toContain('once');
+    const run = (...a: string[]) => argProblem([...base, ...a]);
+    expect(run('--beacon', 'drand', '--day', '2026-11-10')).toBeNull();
+    expect(argProblem(base)).toBeNull();
+    expect(run('--ledger', 'l.jsonl', '--since', '2026-11-04', '--seed', 'audit-2026-11-10')).toBeNull();
+    expect(run('--beacon', 'Drand', '--day', '2026-11-10')).toContain('must be drand');
+    expect(run('--day', '2026-11-10', '--beacon')).toContain('needs a value');
+    expect(run('--beacon', '--day', '2026-11-10')).toContain('needs a value');
+    expect(run('--day', '2026-11-10')).toContain('only for --beacon drand');
+    // Every spelling the old parser skipped silently is refused, before anything is read.
+    for (const stray of ['--beacon=drand', '--becon', '-beacon', '—beacon', '--cutoff', 'drand']) {
+      expect(run(stray, 'drand', '--day', '2026-11-10')).toContain('unexpected');
+    }
+    expect(run('--beacon', 'drand', '--day', '2026-11-10', '--day', '2026-11-09')).toContain('once');
   });
 
   it('the runner refuses a free start or seed alongside the beacon', () => {
