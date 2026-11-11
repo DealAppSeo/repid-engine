@@ -152,17 +152,19 @@ export function readAnswer(text: string): string | null {
 const MAX_STREAM_CHARS = 4 * 1024 * 1024;
 
 /**
- * The text of an OpenAI-style streamed reply (`data: {...}` lines, `data: [DONE]`), or null. A malformed
- * event makes the whole answer null, never a partial one, and the joined text keeps the normal size cap.
+ * The text of an OpenAI-style streamed reply (`data: {...}` lines ending in `data: [DONE]`), or null. A malformed
+ * event, or a stream that stops before `[DONE]` (a cut connection), makes the whole answer null, never a partial
+ * one. The joined text keeps the normal size cap.
  */
 export function readStreamedAnswer(raw: string): string | null {
   if (raw.length === 0 || raw.length > MAX_STREAM_CHARS || !/^data:/m.test(raw)) return null;
   let out = '';
+  let done = false;
   for (const line of raw.split('\n')) {
     const l = line.trim();
     if (!l.startsWith('data:')) continue;
     const data = l.slice(5).trim();
-    if (data === '[DONE]') break;
+    if (data === '[DONE]') { done = true; break; }
     try {
       const piece = (JSON.parse(data) as { choices?: Array<{ delta?: { content?: unknown } }> })?.choices?.[0]?.delta?.content;
       if (typeof piece === 'string') out += piece;
@@ -170,7 +172,7 @@ export function readStreamedAnswer(raw: string): string | null {
       return null;
     }
   }
-  return out.trim() !== '' && out.length <= MAX_BODY_CHARS ? out : null;
+  return done && out.trim() !== '' && out.length <= MAX_BODY_CHARS ? out : null;
 }
 
 export interface T12AskResult extends T12WaveResult {

@@ -1,7 +1,7 @@
 /** The daily work record and the missed-run signal. Pure logic; no database and no network. */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildDailyRecord, plainReason } from '../src/orchestration/t12-daily-record';
+import { buildDailyRecord, makerRefusalCode, plainReason } from '../src/orchestration/t12-daily-record';
 import { judgeRuns, type RunRow } from '../src/orchestration/t12-missed-run';
 import { validateSpec, type DecisionReceipt, type LaneState } from '../src/orchestration/t12-lane-store';
 
@@ -40,6 +40,32 @@ describe('daily record', () => {
     const rows = [row('a', [receipt('route_attempt', at, { provider: 'groq', status: 200 })])];
     expect(buildDailyRecord(rows, DAY, 'real').providers[0]).toMatchObject({ verified_free: null, free_basis: expect.stringContaining('NOT_CHECKED') });
     expect(buildDailyRecord(rows, DAY, 'real', [{ host: 'groq', verified: true, evidence: 'billing page, 2026-11-09' }]).providers[0]).toMatchObject({ verified_free: true, free_basis: 'billing page, 2026-11-09' });
+  });
+
+  // Study T12-CTX-AB-2026-11-10-v2, pair 2: two outputs were refused before any check and the record could not say why.
+  it('says why the lane refused an output, as a code, never the model text inside the reason', () => {
+    const set = 'model output was not a valid file set inside the lease: ';
+    const hostilePath = `${set}![x](https://evil.test/p.png)<img src=x> is outside the lease`;
+    const hostileJson = `${set}invalid JSON: Unexpected token 'S', "SECRET=abc <b>" is not valid JSON`;
+    const r = buildDailyRecord([
+      row('a', [receipt('claimed', at), receipt('maker_failed', at, {}, hostilePath)]),
+      row('b', [receipt('claimed', at), receipt('maker_failed', at, {}, hostileJson)]),
+      row('c', [receipt('claimed', at), receipt('maker_failed', at, {}, 'the model produced no change')]),
+      row('d', [receipt('claimed', at), receipt('released', at, {}, 'NOT_CHECKED: tried local')]),
+    ], DAY, 'real');
+    expect(r.tasks.maker_refused).toBe(3);
+    expect(r.leases.released).toBe(1);
+    expect(r.refusals).toEqual([{ task: 'a', code: 'path_outside_lease' }, { task: 'b', code: 'invalid_json' }, { task: 'c', code: 'no_change' }]);
+    expect(JSON.stringify(r)).not.toMatch(/evil\.test|<img|SECRET|<b>/);
+  });
+
+  it('maps every lane refusal phrase to its own code', () => {
+    const set = 'model output was not a valid file set inside the lease: ';
+    expect(makerRefusalCode(`${set}no JSON object in the reply`)).toBe('no_json');
+    expect(makerRefusalCode(`${set}no files in the reply`)).toBe('no_files');
+    expect(makerRefusalCode(`${set}a file is missing its path or content`)).toBe('file_missing_path_or_content');
+    expect(makerRefusalCode('belt denied: no grant')).toBe('belt_denied');
+    expect(makerRefusalCode('something new')).toBe('other');
   });
 
   it('does not score anyone for being busy', () => {
