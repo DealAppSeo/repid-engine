@@ -146,7 +146,8 @@ jobs:
       # Keep ONLY the work record, so a run can be audited from its files: verdicts, the short
       # reasons, receipt-chain checks. The record is built to publish a plain reason and never what a
       # model-written test printed (tests/t12-record-and-signal.test.ts), which is why maker.json,
-      # checker.json and the transfer directory are NOT uploaded. The job summary has the same record,
+      # checker.json and everything else in the transfer directory are NOT uploaded (only its *.bundle
+      # files, below: the deliverable, which holds no output). The job summary has the same record,
       # but neither the REST API nor a logged-out page shows it.
       - name: Keep the day's work record
         if: always()
