@@ -13,7 +13,7 @@ describe('T12 audit v0 is read-only', () => {
   const files = readdirSync(SQL_DIR).filter((f) => f.endsWith('.sql'));
 
   it('finds the audit SQL files', () => {
-    expect(files.sort()).toEqual(['capability-record.sql', 'live-repid-independence.sql']);
+    expect(files.sort()).toEqual(['capability-record.sql', 'live-repid-independence.sql', 'role-migration-prod-compat.sql']);
   });
 
   it.each(files)('%s contains no write or DDL statement', (f) => {

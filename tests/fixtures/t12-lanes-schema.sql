@@ -1,7 +1,16 @@
 -- SYNTHETIC test schema for the T12 lane tests: table definitions and made-up rows, with no data
--- from any real system. Its constraints, trigger functions and reaper match production's definitions
--- as of 2026-11-07 (pg_get_constraintdef / pg_get_functiondef), because the lanes are shaped by how
--- those behave. Update this file if those definitions change.
+-- from any real system. Its constraints, the three trigger functions below and the reaper match
+-- production's definitions as of 2026-11-07 (pg_get_constraintdef / pg_get_functiondef), because the
+-- lanes are shaped by how those behave. Update this file if those definitions change.
+--
+-- NOT every production trigger is here. This header used to say the trigger functions matched
+-- production, which read as "all of them"; production has eight enabled BEFORE triggers on
+-- trinity_tasks and this file carries two of them, plus trg_auto_escalate, which production has
+-- DISABLED. The six it omits (auto_fix_task_status, trg_auto_lineage, trg_enable_enforce_artifact,
+-- trg_protect_key_tasks, trigger_throttle_healing, update_trinity_tasks_updated_at) were read on
+-- 2026-11-11 and do nothing to a lane row: each acts only on a status, title or parent column a lane
+-- row never holds, or sets updated_at. All run as the caller, so one that did fire would need a
+-- grant the lane roles lack. Re-check with ops/t12/audit/role-migration-prod-compat.sql.
 
 DROP TABLE IF EXISTS trinity_tasks CASCADE;
 DROP TABLE IF EXISTS trinity_changelog CASCADE;

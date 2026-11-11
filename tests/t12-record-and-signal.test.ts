@@ -130,12 +130,17 @@ describe('the workflows stay inert and least-privilege', () => {
     expect(checker).not.toMatch(/_API_KEY|secrets\.|T12_FREE_WAVE/);
   });
 
-  it('the G2.5 workflow keeps only the sanitized work record as an artifact', () => {
+  it('the G2.5 workflow keeps only the sanitized work record and the deliverable bundle', () => {
     const g25 = read('t12-g25-dogfood.yml').split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
     const paths = [...g25.matchAll(/^\s*path:\s*(.+)$/gm)].map((m) => m[1]!.trim());
-    // Raw maker/checker output can hold what a model-written test printed; only the record is safe to keep.
-    expect(paths).toEqual(['${{ runner.temp }}/daily-record.json']);
-    expect(g25).not.toMatch(/path:.*(maker\.json|checker\.json|transfer|\.log)/);
+    // Raw maker/checker output can hold what a model-written test printed, so it is never kept. The bundle
+    // is different: it is the deliverable (the maker's one commit, no output), whose sha256 the task row and
+    // receipt chain record, and without it nothing can be bound to the bytes once the job's database is gone.
+    // The supervisor already carries the same bundles between jobs as an artifact. This test used to forbid
+    // every transfer path; it now allows exactly the bundle glob and still refuses the rest.
+    expect(paths).toEqual(['${{ runner.temp }}/daily-record.json', '${{ runner.temp }}/transfer/*.bundle']);
+    expect(g25).not.toMatch(/path:.*(maker\.json|checker\.json|\.log)/);
+    expect(paths.filter((p) => p.includes('transfer'))).toEqual(['${{ runner.temp }}/transfer/*.bundle']);
   });
 
   it('the G2.5 task is valid, low risk and has a control that applies to the seed', () => {
