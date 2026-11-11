@@ -5,6 +5,7 @@ import {
   activeWorkerCount,
 } from '../src/services/regex-budget';
 import { hasBacktrackingRisk, verifyTaskDeterministically } from '../src/services/task-verify-leg';
+import { measureInFreshProcess } from './helpers/regex-budget-fresh-process';
 
 /**
  * The point of these tests is ONE claim: the budget bounds harm for patterns the
@@ -24,7 +25,9 @@ import { hasBacktrackingRisk, verifyTaskDeterministically } from '../src/service
 const GROUPLESS_BLOWUP = 'a*a*a*a*a*a*a*a*a*b';
 const LONG_SUBJECT = 'a'.repeat(20_000); // MAX_SUBJECT_LEN, i.e. what the grader really passes
 
-jest.setTimeout(30_000);
+jest.setTimeout(60_000);
+
+const FRESH = { pattern: GROUPLESS_BLOWUP, subjectLength: LONG_SUBJECT.length, budgetMs: 200 };
 
 describe('regex budget — the guarantee under the heuristic', () => {
   test('the heuristic ACCEPTS a groupless catastrophic pattern (this is the gap)', () => {
@@ -60,20 +63,29 @@ describe('regex budget — the guarantee under the heuristic', () => {
     // threads included. The module cannot fabricate it. Measured on this hardware:
     // terminated 0–3% of wall, leaked 77–97%. The 40% gate sits in the middle of
     // an order-of-magnitude gap, so it is not a tuned threshold.
-    const r = await matchWithBudget(GROUPLESS_BLOWUP, 'i', LONG_SUBJECT, 200);
-    expect(r.status).toBe('timeout');
+    //
+    // It is measured in a FRESH child process that loads only this module (see the
+    // helper). It used to be measured in the jest worker itself, where "the whole
+    // process" is every test file that worker ran before this one. That version read
+    // 248–776 ms of CPU in a 600 ms window on at least 8 CI attempts, 2026-11-09..11,
+    // including main.
+    const child = await measureInFreshProcess({ leak: false, ...FRESH });
+    expect(child.status).toBe('timeout');
+    expect(child.cpuMs).toBeLessThan(child.wallMs * 0.4);
+    // A terminated worker leaves nothing alive, so the child exits by itself.
+    expect(child.exitedOnItsOwn).toBe(true);
+  });
 
-    // Sampled only AFTER the promise settles, so this measures what happens once
-    // the caller has been told the match is over — which is exactly when a leaked
-    // thread is invisible and free to keep running.
-    const cpuBefore = process.cpuUsage();
-    const wallBefore = Date.now();
-    await new Promise((res) => setTimeout(res, 600));
-    const cpu = process.cpuUsage(cpuBefore);
-    const wallMs = Date.now() - wallBefore;
-    const cpuMs = (cpu.user + cpu.system) / 1000;
-
-    expect(cpuMs).toBeLessThan(wallMs * 0.4);
+  test('control: the same instrument sees a worker that was never terminated', async () => {
+    // Without this, a green run above could mean the instrument cannot see a leak at
+    // all. The child disables Worker.prototype.terminate before loading the REAL
+    // module: the promise still resolves as a timeout, the worker keeps spinning, and
+    // the module's own counter cannot be consulted. The parent must kill the child.
+    const leaked = await measureInFreshProcess({ leak: true, ...FRESH });
+    expect(leaked.status).toBe('timeout');
+    expect(leaked.cpuMs).toBeGreaterThanOrEqual(leaked.wallMs * 0.4);
+    expect(leaked.exitedOnItsOwn).toBe(false);
+    expect(leaked.exit.signal).toBe('SIGKILL');
   });
 
   test('the live-worker counter also returns to zero (operational aid, not the proof)', async () => {
