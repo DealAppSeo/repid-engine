@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { drawSample } from '../scripts/t12/audit-run';
+import { closedPopulation, drandRoundAfter, drawSample, DRAND_QUICKNET } from '../scripts/t12/audit-run';
 
 const SQL_DIR = join(__dirname, '..', 'ops', 't12', 'audit');
 const WRITE = /\b(insert|update|delete|merge|upsert|drop|alter|create|grant|revoke|truncate|comment\s+on|copy|call|do)\b/i;
@@ -59,5 +59,34 @@ describe('drawSample', () => {
       expect(d.entry).toBe(pool[d.index]);
     }
     expect(drawSample([], 'x')).toBeNull();
+  });
+});
+
+describe('the beacon draw cannot be predicted before the population closes', () => {
+  // Round 33853811 was fetched live on 2026-11-11; its time follows from genesis + (round - 1) * period.
+  const known = 33853811;
+  const knownAt = (DRAND_QUICKNET.genesis + (known - 1) * DRAND_QUICKNET.period) * 1000;
+
+  it('picks the first round strictly after the cutoff, never one at or before it', () => {
+    for (const cutoff of [knownAt - 1, knownAt, knownAt + 1, knownAt + 2999, knownAt + 3000]) {
+      const { round, atMs } = drandRoundAfter(cutoff);
+      expect(atMs).toBeGreaterThan(cutoff);
+      expect(atMs - DRAND_QUICKNET.period * 1000).toBeLessThanOrEqual(cutoff);
+      expect(atMs).toBe((DRAND_QUICKNET.genesis + (round - 1) * DRAND_QUICKNET.period) * 1000);
+    }
+    expect(drandRoundAfter(knownAt - 1).round).toBe(known);
+    expect(drandRoundAfter(knownAt).round).toBe(known + 1);
+  });
+
+  it('closes the population at the cutoff, by time, not by string', () => {
+    const cutoff = Date.parse('2026-11-10T20:31:04Z');
+    const entries = [
+      { ts: '2026-11-10T20:31:03Z' },
+      { ts: '2026-11-10T20:31:04Z' },
+      { ts: '2026-11-10T20:31:04.001Z' },
+      { ts: 'not a time' },
+    ];
+    expect(closedPopulation(entries, '', cutoff).map((e) => e.ts)).toEqual(['2026-11-10T20:31:03Z', '2026-11-10T20:31:04Z']);
+    expect(closedPopulation(entries, '').length).toBe(4);
   });
 });

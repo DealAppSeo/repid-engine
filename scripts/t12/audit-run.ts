@@ -3,7 +3,13 @@
  * merged-PR draw for the fenced GrokCode auditor.
  *
  *   DATABASE_URL=... npx ts-node --transpile-only scripts/t12/audit-run.ts --out <dir>
- *     [--days 7] [--parent t12-known-answer-v2] [--ledger <merge-ledger.jsonl>] [--since YYYY-MM-DD] [--seed <text>]
+ *     [--days 7] [--parent t12-known-answer-v2] [--ledger <merge-ledger.jsonl>] [--since YYYY-MM-DD]
+ *     [--seed <text> | --beacon drand --cutoff <ISO time>]
+ *
+ * --seed is a fixed text, so anyone who knows it can predict the draw before the work is done.
+ * --beacon drand closes the population at --cutoff and seeds the draw with the first drand quicknet
+ * round AFTER the cutoff: public, unpredictable until it happens, and re-fetchable by anyone. A round
+ * still in the future is NOT_CHECKED, never a fallback to a fixed seed.
  *
  * Exit 0 = report written. Exit 2 = NOT_CHECKED (no DATABASE_URL, or a query failed); nothing is written then.
  * Every query runs inside BEGIN READ ONLY and the transaction is rolled back. This script cannot move RepID.
@@ -22,6 +28,23 @@ export function drawSample<T>(entries: readonly T[], seed: string): { index: num
   if (entries.length === 0) return null;
   const index = createHash('sha256').update(seed).digest().readUInt32BE(0) % entries.length;
   return { index, entry: entries[index]! };
+}
+
+/** drand quicknet, read from https://api.drand.sh/<hash>/info on 2026-11-11. */
+export const DRAND_QUICKNET = { hash: '52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971', genesis: 1692803367, period: 3 } as const;
+
+/** The first quicknet round whose time is strictly after the cutoff, and that time in ms. */
+export function drandRoundAfter(cutoffMs: number): { round: number; atMs: number } {
+  const { genesis, period } = DRAND_QUICKNET;
+  const round = Math.floor((Math.floor(cutoffMs / 1000) - genesis) / period) + 2;
+  return { round, atMs: (genesis + (round - 1) * period) * 1000 };
+}
+
+/** The entries the draw may pick: on or after `since`, and no later than the cutoff that closes the population. */
+export function closedPopulation<T extends { ts?: string }>(entries: readonly T[], since: string, cutoffMs?: number): T[] {
+  // Compared as times, not strings: the ledger writes `…:04Z` and toISOString writes `…:04.000Z`. An entry
+  // with no parseable time cannot be shown to precede the cutoff, so a closed population leaves it out.
+  return entries.filter((e) => String(e.ts ?? '') >= since && (cutoffMs === undefined || Date.parse(String(e.ts ?? '')) <= cutoffMs));
 }
 
 const arg = (name: string, dflt?: string): string | undefined => {
@@ -61,14 +84,27 @@ async function main(): Promise<void> {
 
   const ledger = arg('ledger');
   const since = arg('since', '');
-  const seed = arg('seed', `audit-${today}`)!;
-  let sample: { seed: string; pool: number; index: number; entry: unknown } | 'NOT_CHECKED: no ledger' = 'NOT_CHECKED: no ledger';
+  const cutoff = arg('cutoff');
+  let seed = arg('seed', `audit-${today}`)!;
+  let beacon: { round: number; at: string; randomness: string } | null = null;
+  if (arg('beacon') === 'drand') {
+    if (!cutoff || Number.isNaN(Date.parse(cutoff))) throw new Error('--beacon drand needs --cutoff <ISO time>');
+    const { round, atMs } = drandRoundAfter(Date.parse(cutoff));
+    if (Date.now() < atMs) throw new Error(`drand round ${round} is at ${new Date(atMs).toISOString()}, still in the future`);
+    const r = await fetch(`https://api.drand.sh/${DRAND_QUICKNET.hash}/public/${round}`);
+    const b = (await r.json()) as { round?: number; randomness?: string };
+    if (!r.ok || b.round !== round || !/^[0-9a-f]{64}$/.test(b.randomness ?? '')) throw new Error(`drand round ${round} did not come back`);
+    beacon = { round, at: new Date(atMs).toISOString(), randomness: b.randomness! };
+    seed = `drand-quicknet:${round}:${b.randomness}`;
+  }
+  let sample: { seed: string; beacon: typeof beacon; cutoff: string | null; pool: number; index: number; entry: unknown } | 'NOT_CHECKED: no ledger' = 'NOT_CHECKED: no ledger';
   if (ledger && existsSync(ledger)) {
-    const pool = readFileSync(ledger, 'utf8').split('\n').filter(Boolean)
+    const parsed = readFileSync(ledger, 'utf8').split('\n').filter(Boolean)
       .map((l) => { try { return JSON.parse(l) as { ts?: string; pr?: unknown }; } catch { return null; } })
-      .filter((e): e is { ts?: string; pr?: unknown } => !!e && typeof e.pr !== 'undefined' && String(e.ts ?? '') >= String(since));
+      .filter((e): e is { ts?: string; pr?: unknown } => !!e && typeof e.pr !== 'undefined');
+    const pool = closedPopulation(parsed, String(since), beacon ? Date.parse(cutoff!) : undefined);
     const d = drawSample(pool, seed);
-    if (d) sample = { seed, pool: pool.length, index: d.index, entry: d.entry };
+    if (d) sample = { seed, beacon, cutoff: beacon ? cutoff! : null, pool: pool.length, index: d.index, entry: d.entry };
   }
 
   mkdirSync(out, { recursive: true });
