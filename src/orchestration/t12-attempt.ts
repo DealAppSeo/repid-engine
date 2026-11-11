@@ -104,7 +104,12 @@ export function t12Target(host: string, env: Env = process.env): T12Target | nul
     const base = t12LocalBase(env);
     if (!base) return null;
     const url = `${base.replace(/\/+$/, '')}/chat/completions`;
-    return { url, key: null, model: env.T12_LOCAL_MODEL?.trim() || 'local' };
+    // Streamed, so the headers arrive at once. Unstreamed, a local model sends none until it has finished,
+    // and Node's fetch gives up at its default 300 s headers timeout whatever timeoutMs says: measured in
+    // study T12-CTX-AB-2026-11-10-v1, where the longer-prompt arm failed at 304.7 s with a 600 s timeout set.
+    // Limit that remains: a streamed reply's headers come with the first token, so reading the prompt alone
+    // must still finish inside 300 s. Generation after that is bounded by timeoutMs.
+    return { url, key: null, model: env.T12_LOCAL_MODEL?.trim() || 'local', body: { stream: true } };
   }
   if (!Object.prototype.hasOwnProperty.call(T12_ROUTES, host)) return null;
   const route = T12_ROUTES[host]!;
@@ -141,6 +146,31 @@ export function readAnswer(text: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** A streamed reply is roughly 200 bytes per token of server-sent events, so it gets its own raw cap. */
+const MAX_STREAM_CHARS = 4 * 1024 * 1024;
+
+/**
+ * The text of an OpenAI-style streamed reply (`data: {...}` lines, `data: [DONE]`), or null. A malformed
+ * event makes the whole answer null, never a partial one, and the joined text keeps the normal size cap.
+ */
+export function readStreamedAnswer(raw: string): string | null {
+  if (raw.length === 0 || raw.length > MAX_STREAM_CHARS || !/^data:/m.test(raw)) return null;
+  let out = '';
+  for (const line of raw.split('\n')) {
+    const l = line.trim();
+    if (!l.startsWith('data:')) continue;
+    const data = l.slice(5).trim();
+    if (data === '[DONE]') break;
+    try {
+      const piece = (JSON.parse(data) as { choices?: Array<{ delta?: { content?: unknown } }> })?.choices?.[0]?.delta?.content;
+      if (typeof piece === 'string') out += piece;
+    } catch {
+      return null;
+    }
+  }
+  return out.trim() !== '' && out.length <= MAX_BODY_CHARS ? out : null;
 }
 
 export interface T12AskResult extends T12WaveResult {
@@ -213,7 +243,9 @@ export async function t12Ask(
         await record(res.status, `http_${res.status}`);
         return { status: res.status };
       }
-      const answer = readAnswer(await res.text());
+      const raw = await res.text();
+      // A stream is read only where one was asked for (the local route); a cloud reply is never read as one.
+      const answer = readAnswer(raw) ?? (target.body?.stream === true ? readStreamedAnswer(raw) : null);
       if (answer === null) {
         await record(res.status, 'empty_answer');
         return { status: T12_EMPTY_ANSWER };

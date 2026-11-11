@@ -5,7 +5,9 @@ const dbFrom = jest.fn();
 jest.mock('../src/db', () => ({ db: { from: dbFrom, rpc: jest.fn() } }));
 
 import { PROVIDER_URLS } from '../src/egress/provider-hosts';
-import { readAnswer, retryAfterMs, t12Ask, t12BoundaryOn, t12Target, T12_MAX_RETRY_AFTER_MS } from '../src/orchestration/t12-attempt';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { readAnswer, readStreamedAnswer, retryAfterMs, t12Ask, t12BoundaryOn, t12Target, T12_MAX_RETRY_AFTER_MS } from '../src/orchestration/t12-attempt';
 
 const ON = {
   T12_FREE_WAVE: 'true',
@@ -174,5 +176,65 @@ describe('the real chokepoint (no fetchImpl): groq still reaches groq under LOCA
 describe('Retry-After is capped', () => {
   it('an absurd header cannot park the loop for years', () => {
     expect(retryAfterMs('99999999')).toBe(T12_MAX_RETRY_AFTER_MS);
+  });
+});
+
+// Study T12-CTX-AB-2026-11-10-v1: an unstreamed local reply sends no headers until the model finishes, and Node's
+// fetch gives up at its default 300 s headers timeout whatever timeoutMs says. The local route now streams.
+const DONE = 'data: [DONE]\n\n';
+const events = (pieces: string[]) => pieces.map((c) => `data: ${JSON.stringify({ object: 'chat.completion.chunk', model: 'qwen2.5-coder:7b', choices: [{ index: 0, delta: { role: 'assistant', content: c }, finish_reason: null }] })}\n\n`).join('');
+const sse = (pieces: string[]) => events(pieces) + DONE;
+
+describe('the local route streams', () => {
+  it('asks the local host, and only the local host, for a streamed reply', () => {
+    expect(t12Target('local', ON)!.body).toEqual({ stream: true });
+    expect(t12Target('groq', ON)!.body).not.toHaveProperty('stream');
+    expect(t12Target('cerebras', ON)!.body).not.toHaveProperty('stream');
+  });
+
+  it('reads a stream only from the host it asked to stream (Claude-Grok on #1536)', async () => {
+    const { impl } = fakeFetch({ local: 'throw', groq: { status: 200, body: sse(['from groq']) }, cerebras: { status: 500 } });
+    expect(await t12Ask('q', { env: ON, fetchImpl: impl })).toMatchObject({ outcome: 'NOT_CHECKED', text: null });
+    const local = fakeFetch({ local: { status: 200, body: sse(['from local']) } });
+    expect(await t12Ask('q', { env: ON, fetchImpl: local.impl })).toMatchObject({ outcome: 'answered', host: 'local', text: 'from local' });
+  });
+
+  it('joins a streamed reply into the same text an unstreamed one gives', () => {
+    expect(readStreamedAnswer(sse(['{"files":', '[]}']))).toBe('{"files":[]}');
+    expect(readAnswer(sse(['x']))).toBeNull(); // the unstreamed reader does not take a stream, so both are tried
+  });
+
+  it('gives no answer, never half of one, for a malformed or empty stream', () => {
+    expect(readStreamedAnswer(`${sse(['a'])}`.replace('data: [DONE]', 'data: {not json'))).toBeNull();
+    expect(readStreamedAnswer(DONE)).toBeNull();
+    expect(readStreamedAnswer('{"choices":[]}')).toBeNull();
+    expect(readStreamedAnswer(`data: ${'x'.repeat(5 * 1024 * 1024)}`)).toBeNull();
+  });
+
+  it('a real local server that streams answers through the real fetch path', async () => {
+    let asked: Record<string, unknown> = {};
+    const server = createServer((req, res) => {
+      let b = '';
+      req.on('data', (d) => { b += d; });
+      req.on('end', () => {
+        asked = JSON.parse(b);
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        const parts = ['{"files":[{"path":"t.ts",', '"content":"ok"}]}'];
+        let i = 0;
+        const tick = setInterval(() => {
+          if (i < parts.length) res.write(events([parts[i++]!]));
+          else { res.end(DONE); clearInterval(tick); }
+        }, 50);
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const env = { T12_FREE_WAVE: 'true', T12_LOCAL_BASE_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1` };
+      const r = await t12Ask('q', { env, order: ['local'], timeoutMs: 10_000 });
+      expect(asked.stream).toBe(true);
+      expect(r).toMatchObject({ outcome: 'answered', host: 'local', text: '{"files":[{"path":"t.ts","content":"ok"}]}' });
+    } finally {
+      server.close();
+    }
   });
 });
