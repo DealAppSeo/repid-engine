@@ -43,9 +43,13 @@ export function drandRoundAfter(cutoffMs: number): { round: number; atMs: number
 }
 
 /** Why the beacon flags cannot run as given, or null. A beacon asked for is never silently a fixed seed. */
+export const AUDIT_FLAGS = ['--out', '--days', '--parent', '--ledger', '--since', '--seed', '--beacon', '--day'] as const;
+
 export function beaconFlagProblem(argv: readonly string[]): string | null {
-  // This parser reads `--flag value` only; `--beacon=drand` would otherwise be an unknown token, ignored.
-  if (argv.some((a) => /^--(beacon|day|seed|since)=/.test(a))) return 'write --beacon drand --day YYYY-MM-DD as separate words, not with =';
+  // This parser reads `--flag value` only and ignores anything else, so an unknown flag (`--becon`,
+  // `--beacon=drand`, the retired `--cutoff`) would silently drop the beacon. Refuse every one of them.
+  const unknown = argv.filter((a) => a.startsWith('--') && !(AUDIT_FLAGS as readonly string[]).includes(a));
+  if (unknown.length) return `unknown flag ${unknown.join(', ')}; flags are ${AUDIT_FLAGS.join(' ')}, each followed by its value`;
   for (const f of ['--beacon', '--day']) if (argv.filter((a) => a === f).length > 1) return `${f} may appear once`;
   const at = argv.indexOf('--beacon');
   const value = at < 0 ? undefined : argv[at + 1];

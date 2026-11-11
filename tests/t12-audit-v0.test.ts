@@ -103,9 +103,11 @@ describe('the beacon draw cannot be predicted before the population closes', () 
     expect(beaconFlagProblem([...base, '--beacon', 'Drand', '--day', '2026-11-10'])).toContain('must be drand');
     expect(beaconFlagProblem([...base, '--day', '2026-11-10', '--beacon'])).toContain('got nothing');
     expect(beaconFlagProblem([...base, '--day', '2026-11-10'])).toContain('only for --beacon drand');
-    // `=` forms are unknown tokens to this parser, so without a refusal they would be silently ignored.
-    expect(beaconFlagProblem([...base, '--beacon=drand', '--day', '2026-11-10'])).toContain('separate words');
-    expect(beaconFlagProblem([...base, '--beacon', 'drand', '--day=2026-11-10'])).toContain('separate words');
+    // Unknown tokens are ignored by this parser, so each spelling that would drop the beacon is refused.
+    expect(beaconFlagProblem([...base, '--beacon=drand', '--day', '2026-11-10'])).toContain('unknown flag --beacon=drand');
+    expect(beaconFlagProblem([...base, '--beacon', 'drand', '--day=2026-11-10'])).toContain('unknown flag --day=2026-11-10');
+    expect(beaconFlagProblem([...base, '--becon', 'drand', '--day', '2026-11-10'])).toContain('unknown flag --becon');
+    expect(beaconFlagProblem([...base, '--beacon', 'drand', '--cutoff', '2026-11-10T00:00:00Z'])).toContain('unknown flag --cutoff');
     // A repeated --day would let the later value win unseen.
     expect(beaconFlagProblem([...base, '--beacon', 'drand', '--day', '2026-11-10', '--day', '2026-11-09'])).toContain('once');
   });
