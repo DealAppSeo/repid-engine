@@ -435,19 +435,25 @@ describePg('durable lanes on real Postgres', () => {
   it('three lanes cannot hold the same file, and the lock lasts until the check passes', async () => {
     const shared = { paths: ['tests/shared.test.mjs'], verify: { runner: 'node-test' as const, target: 'tests/shared.test.mjs', controls: CONTROL } };
     await seed(spec('s1', shared), spec('s2', shared), spec('s3', shared), spec('free'));
-    const results = await Promise.all([L1, L2, L3].map((l) => claimMake(db, l)));
+    const lanes = [L1, L2, L3];
+    const results = await Promise.all(lanes.map((l) => claimMake(db, l)));
     const claimed = results.flatMap((r) => (r.kind === 'claimed' ? [r.handle] : []));
     expect(claimed.map((h) => h.spec.id).sort()).toEqual(['free', 's1']);
     expect(results.filter((r) => r.kind === 'none')).toHaveLength(1);
 
+    // Which lane wins s1 is a race, so the roles below are read from the results, never assumed. This test used
+    // to name L2 as the checker; when L2 happened to make s1 it was correctly refused its own work, and the test
+    // failed (repid-engine #1537 CI, 2026-11-11). The idle lane made nothing, so it may check anything.
     const s1 = claimed.find((h) => h.spec.id === 's1')!;
+    const idle = lanes[results.findIndex((r) => r.kind === 'none')]!;
+    expect(idle).not.toBe(s1.actor);
     await submit(db, s1, sub('s1'));
-    expect((await claimMake(db, L3)).kind).toBe('none');
+    expect((await claimMake(db, idle)).kind).toBe('none');
 
-    const check = await claimStage(db, 'awaiting_check', L2);
+    const check = await claimStage(db, 'awaiting_check', idle);
     expect(check?.spec.id).toBe('s1');
     await recordVerdict(db, check!, approve(check!));
-    const next = await claimOne(L3);
+    const next = await claimOne(idle);
     expect(next.spec.id).toBe('s2');
   }, 30_000);
 
