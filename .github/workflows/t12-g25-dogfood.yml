@@ -39,6 +39,15 @@ on:
         description: 'Per-host model timeout for provider=local, 10000 to 600000'
         required: false
         default: '300000'
+      context_variant:
+        description: 'Study arm: none = the spec as written; ctx-v1 = the spec plus its committed packet in ops/t12/ab/ctx-v1/'
+        type: choice
+        options: ['none', 'ctx-v1']
+        default: 'none'
+      expect_base:
+        description: 'Stop unless the target main is exactly this commit (empty = no check)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -64,6 +73,8 @@ jobs:
       TARGET: DealAppSeo/${{ inputs.target }}
       SPECS_FILE: ${{ inputs.target == 'trustshell' && 'ops/t12/specs.jsonl' || 'ops/t12/g25/specs.jsonl' }}
       SPEC_ID: ${{ inputs.spec_id }}
+      CONTEXT_VARIANT: ${{ inputs.context_variant }}
+      EXPECT_BASE: ${{ inputs.expect_base }}
       PROVIDER: ${{ inputs.provider }}
       FREE_EVIDENCE: ${{ inputs.free_evidence }}
     steps:
@@ -82,17 +93,10 @@ jobs:
                   node -e "console.log(JSON.stringify([{host:'groq',verified:true,evidence:process.env.FREE_EVIDENCE}]))" > "$RUNNER_TEMP/free.json" ;;
             *) echo "::error::provider must be local or groq"; exit 2 ;;
           esac
+      # A study arm changes only the task prompt: the packet is appended, and paths, verify target and
+      # controls stay byte-identical. The packet's sha256 is printed so a trial can be tied to its bytes.
       - name: Pick the specs this run may claim
-        run: |
-          node -e "
-            const fs = require('fs');
-            const all = fs.readFileSync(process.env.SPECS_FILE, 'utf8').split('\n').filter((l) => l.trim());
-            const id = process.env.SPEC_ID.trim();
-            const keep = id ? all.filter((l) => JSON.parse(l).id === id) : all;
-            if (keep.length === 0) { console.error('::error::no spec with id ' + id + ' in ' + process.env.SPECS_FILE); process.exit(2); }
-            fs.writeFileSync(process.env.RUNNER_TEMP + '/specs.jsonl', keep.join('\n') + '\n');
-            console.log(JSON.stringify({ file: process.env.SPECS_FILE, specs: keep.map((l) => JSON.parse(l).id) }));
-          "
+        run: node scripts/t12/pick-specs.cjs "$SPECS_FILE" "$RUNNER_TEMP/specs.jsonl" "$SPEC_ID" "$CONTEXT_VARIANT"
       - name: Prepare the throwaway database and two clones
         run: |
           psql() { docker exec -i "$(docker ps -qf ancestor=postgres:17)" psql -v ON_ERROR_STOP=1 -U postgres -q "$@"; }
@@ -101,6 +105,10 @@ jobs:
           git clone -q "https://github.com/$TARGET" "$RUNNER_TEMP/maker"
           git clone -q "https://github.com/$TARGET" "$RUNNER_TEMP/checker"
           docker pull -q node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+          # The lanes build on the target's main as it is now. A paired study needs both arms on one commit.
+          base="$(git -C "$RUNNER_TEMP/maker" rev-parse HEAD)"
+          echo "target base: $base"
+          if [ -n "$EXPECT_BASE" ] && [ "$base" != "$EXPECT_BASE" ]; then echo "::error::target main is $base, not $EXPECT_BASE"; exit 2; fi
       - name: Start a model on this machine
         if: inputs.provider == 'local'
         env:
@@ -110,6 +118,8 @@ jobs:
           (OLLAMA_HOST=127.0.0.1:11434 ollama serve > /dev/null 2>&1 &)
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/tags > /dev/null && break; sleep 2; done
           ollama pull "$MODEL"
+          # The tag can move; the ID is the model the trial actually used.
+          ollama list | grep -F "${MODEL%%:*}" || true
       - name: Maker
         env:
           DATABASE_URL: postgres://t12_lane_maker@127.0.0.1:5432/postgres
