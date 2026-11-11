@@ -107,6 +107,8 @@ export function t12Target(host: string, env: Env = process.env): T12Target | nul
     // Streamed, so the headers arrive at once. Unstreamed, a local model sends none until it has finished,
     // and Node's fetch gives up at its default 300 s headers timeout whatever timeoutMs says: measured in
     // study T12-CTX-AB-2026-11-10-v1, where the longer-prompt arm failed at 304.7 s with a 600 s timeout set.
+    // Limit that remains: a streamed reply's headers come with the first token, so reading the prompt alone
+    // must still finish inside 300 s. Generation after that is bounded by timeoutMs.
     return { url, key: null, model: env.T12_LOCAL_MODEL?.trim() || 'local', body: { stream: true } };
   }
   if (!Object.prototype.hasOwnProperty.call(T12_ROUTES, host)) return null;
@@ -242,7 +244,8 @@ export async function t12Ask(
         return { status: res.status };
       }
       const raw = await res.text();
-      const answer = readAnswer(raw) ?? readStreamedAnswer(raw);
+      // A stream is read only where one was asked for (the local route); a cloud reply is never read as one.
+      const answer = readAnswer(raw) ?? (target.body?.stream === true ? readStreamedAnswer(raw) : null);
       if (answer === null) {
         await record(res.status, 'empty_answer');
         return { status: T12_EMPTY_ANSWER };

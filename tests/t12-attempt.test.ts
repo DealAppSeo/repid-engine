@@ -192,6 +192,13 @@ describe('the local route streams', () => {
     expect(t12Target('cerebras', ON)!.body).not.toHaveProperty('stream');
   });
 
+  it('reads a stream only from the host it asked to stream (Claude-Grok on #1536)', async () => {
+    const { impl } = fakeFetch({ local: 'throw', groq: { status: 200, body: sse(['from groq']) }, cerebras: { status: 500 } });
+    expect(await t12Ask('q', { env: ON, fetchImpl: impl })).toMatchObject({ outcome: 'NOT_CHECKED', text: null });
+    const local = fakeFetch({ local: { status: 200, body: sse(['from local']) } });
+    expect(await t12Ask('q', { env: ON, fetchImpl: local.impl })).toMatchObject({ outcome: 'answered', host: 'local', text: 'from local' });
+  });
+
   it('joins a streamed reply into the same text an unstreamed one gives', () => {
     expect(readStreamedAnswer(sse(['{"files":', '[]}']))).toBe('{"files":[]}');
     expect(readAnswer(sse(['x']))).toBeNull(); // the unstreamed reader does not take a stream, so both are tried
