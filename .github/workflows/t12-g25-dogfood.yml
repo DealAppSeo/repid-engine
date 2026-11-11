@@ -1,4 +1,4 @@
-# G2.5: one real free-model task on a disposable public repository, with a throwaway database. INERT.
+# G2.5: one real free-model task on a lane-allowlisted public repository, with a throwaway database. INERT.
 #
 # Does nothing unless the owner sets T12_G25_ENABLED to true. Manual only, no schedule. Never publishes:
 # there is no integrator here and no push credential anywhere in this file. Do not arm it until the
@@ -26,6 +26,19 @@ on:
         description: 'For groq: where the free plan was confirmed, and when'
         required: false
         default: ''
+      target:
+        description: 'Lane repository: the sandbox (its own specs) or trustshell (ops/t12/specs.jsonl)'
+        type: choice
+        options: ['t12-dogfood-sandbox', 'trustshell']
+        default: 't12-dogfood-sandbox'
+      spec_id:
+        description: 'Run only this spec id from the target specs file (empty = the whole file)'
+        required: false
+        default: ''
+      ask_timeout_ms:
+        description: 'Per-host model timeout for provider=local, 10000 to 600000'
+        required: false
+        default: '300000'
 
 permissions:
   contents: read
@@ -48,7 +61,9 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      TARGET: DealAppSeo/t12-dogfood-sandbox
+      TARGET: DealAppSeo/${{ inputs.target }}
+      SPECS_FILE: ${{ inputs.target == 'trustshell' && 'ops/t12/specs.jsonl' || 'ops/t12/g25/specs.jsonl' }}
+      SPEC_ID: ${{ inputs.spec_id }}
       PROVIDER: ${{ inputs.provider }}
       FREE_EVIDENCE: ${{ inputs.free_evidence }}
     steps:
@@ -67,6 +82,17 @@ jobs:
                   node -e "console.log(JSON.stringify([{host:'groq',verified:true,evidence:process.env.FREE_EVIDENCE}]))" > "$RUNNER_TEMP/free.json" ;;
             *) echo "::error::provider must be local or groq"; exit 2 ;;
           esac
+      - name: Pick the specs this run may claim
+        run: |
+          node -e "
+            const fs = require('fs');
+            const all = fs.readFileSync(process.env.SPECS_FILE, 'utf8').split('\n').filter((l) => l.trim());
+            const id = process.env.SPEC_ID.trim();
+            const keep = id ? all.filter((l) => JSON.parse(l).id === id) : all;
+            if (keep.length === 0) { console.error('::error::no spec with id ' + id + ' in ' + process.env.SPECS_FILE); process.exit(2); }
+            fs.writeFileSync(process.env.RUNNER_TEMP + '/specs.jsonl', keep.join('\n') + '\n');
+            console.log(JSON.stringify({ file: process.env.SPECS_FILE, specs: keep.map((l) => JSON.parse(l).id) }));
+          "
       - name: Prepare the throwaway database and two clones
         run: |
           psql() { docker exec -i "$(docker ps -qf ancestor=postgres:17)" psql -v ON_ERROR_STOP=1 -U postgres -q "$@"; }
@@ -92,10 +118,13 @@ jobs:
           T12_LOCAL_BASE_URL: ${{ inputs.provider == 'local' && 'http://127.0.0.1:11434/v1' || '' }}
           T12_LOCAL_MODEL: ${{ inputs.model }}
           GROQ_API_KEY: ${{ inputs.provider == 'groq' && secrets.T12_GROQ_API_KEY || '' }}
+          ASK_TIMEOUT_MS: ${{ inputs.ask_timeout_ms }}
         run: |
-          npx ts-node --transpile-only scripts/t12/lanes.ts --role maker --lane-name trinity-lane-1 --wake human_prompt --specs ops/t12/g25/specs.jsonl \
+          timeout_flag=()
+          if [ "$PROVIDER" = local ]; then timeout_flag=(--ask-timeout-ms "$ASK_TIMEOUT_MS"); fi
+          npx ts-node --transpile-only scripts/t12/lanes.ts --role maker --lane-name trinity-lane-1 --wake human_prompt --specs "$RUNNER_TEMP/specs.jsonl" \
             --repo "$TARGET=$RUNNER_TEMP/maker" --work-root "$RUNNER_TEMP/w1" --ready-target 1 --daily-cap 1 --transfer-out "$RUNNER_TEMP/transfer" \
-            > "$RUNNER_TEMP/maker.json" 2> /dev/null
+            "${timeout_flag[@]}" > "$RUNNER_TEMP/maker.json" 2> /dev/null
           node -e "const r=require(process.env.RUNNER_TEMP+'/maker.json');console.log(JSON.stringify({made:r.made,errors:r.errors.length,stoppedBy:r.stoppedBy,paused:r.paused}))"
       - name: Checker
         env:
@@ -104,7 +133,7 @@ jobs:
           T12_LANES_ALLOW_EXEC: 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/transfer"
-          npx ts-node --transpile-only scripts/t12/lanes.ts --role checker --lane-name trinity-lane-2 --wake human_prompt --specs ops/t12/g25/specs.jsonl \
+          npx ts-node --transpile-only scripts/t12/lanes.ts --role checker --lane-name trinity-lane-2 --wake human_prompt --specs "$RUNNER_TEMP/specs.jsonl" \
             --repo "$TARGET=$RUNNER_TEMP/checker" --work-root "$RUNNER_TEMP/w2" --transfer-in "$RUNNER_TEMP/transfer" \
             > "$RUNNER_TEMP/checker.json" 2> /dev/null
           node -e "const r=require(process.env.RUNNER_TEMP+'/checker.json');console.log(JSON.stringify({approved:r.approved,rejected:r.rejected,notChecked:r.notChecked,errors:r.errors.length,stoppedBy:r.stoppedBy}))"
@@ -125,5 +154,16 @@ jobs:
         with:
           name: t12-g25-daily-record
           path: ${{ runner.temp }}/daily-record.json
+          if-no-files-found: warn
+          retention-days: 30
+      # The deliverable itself: the maker's commit as a git bundle, whose sha256 the task row and the
+      # receipt chain both record. Kept so a receipt can name these bytes and a stranger can re-run the
+      # check. It holds only the model's commit on top of the target's public history, no test output.
+      - name: Keep the deliverable bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t12-g25-deliverable
+          path: ${{ runner.temp }}/transfer/*.bundle
           if-no-files-found: warn
           retention-days: 30

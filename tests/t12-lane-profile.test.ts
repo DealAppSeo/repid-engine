@@ -75,6 +75,16 @@ describe('the real CLI refuses a privileged environment', () => {
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('must not be set together');
   }, 120_000);
+  it('bounds the model timeout, and grants a long one only to a local model', () => {
+    const env = { T12_LANES_ENABLED: 'true', DATABASE_URL: 'postgres://nobody@127.0.0.1:1/x' };
+    const base = ['--specs', 'ops/t12/specs.jsonl', '--work-root', 'y', '--ask-timeout-ms'];
+    const tooLong = cli([...base, '900000'], { ...env, T12_LOCAL_BASE_URL: 'http://127.0.0.1:11434/v1' });
+    expect(tooLong.status).toBe(2);
+    expect(tooLong.stderr).toContain('from 10000 to 600000');
+    const remote = cli([...base, '300000'], { ...env, T12_LOCAL_BASE_URL: 'https://example.com/v1' });
+    expect(remote.status).toBe(2);
+    expect(remote.stderr).toContain('only for a local model');
+  }, 120_000);
   it('boots with no Supabase service key at all', () => {
     const r = cli(['--work-root', 'y'], { T12_LANES_ENABLED: 'true', DATABASE_URL: 'postgres://nobody@127.0.0.1:1/x' });
     expect(r.status).toBe(2);

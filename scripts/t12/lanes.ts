@@ -20,6 +20,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { Pool } from 'pg';
 import { assertLocalDataStore } from '../../src/selfhost/egress-guard';
 import { createRoutedAsk } from '../../src/orchestration/t12-lane-route';
+import { t12LocalBase } from '../../src/orchestration/t12-free-wave';
 import { createGitAdapters, ghPrClient } from '../../src/orchestration/t12-lane-git';
 import { laneFlags, runLanes, type LaneRole } from '../../src/orchestration/t12-lane-runner';
 import { dbPrivilege, laneRoleProblem, privilegedEnvPresent, reachableDefiners } from '../../src/orchestration/t12-lane-profile';
@@ -54,6 +55,12 @@ async function main(): Promise<void> {
   const workRoot = arg('work-root');
   if (!specsPath || !existsSync(specsPath)) notChecked('--specs must name a JSONL file of lane specs.');
   if (!workRoot) notChecked('--work-root is required.');
+  // A local CPU model can need minutes for a code answer. The timeout covers every host this run asks,
+  // so it is accepted only with a local model configured; it buys waiting, never spend.
+  const askTimeout = arg('ask-timeout-ms');
+  const timeoutMs = askTimeout === undefined ? undefined : Number(askTimeout);
+  if (timeoutMs !== undefined && !(Number.isInteger(timeoutMs) && timeoutMs >= 10_000 && timeoutMs <= 600_000)) notChecked('--ask-timeout-ms must be an integer from 10000 to 600000.');
+  if (timeoutMs !== undefined && !t12LocalBase(process.env)) notChecked('--ask-timeout-ms is only for a local model; set T12_LOCAL_BASE_URL to a loopback host.');
 
   const repoDirs: Record<string, string> = {};
   for (const r of allArgs('repo')) {
@@ -88,7 +95,7 @@ async function main(): Promise<void> {
     haltClient: pgHaltClient(db) as never,
     wake,
     lanes,
-    adapters: createGitAdapters({ repoDirs, workRoot, ask: createRoutedAsk(db), allowExec: flags.allowExec, pr: ghPrClient, transfer }),
+    adapters: createGitAdapters({ repoDirs, workRoot, ask: createRoutedAsk(db, { timeoutMs }), allowExec: flags.allowExec, pr: ghPrClient, transfer }),
     publishEnabled: flags.publish,
     checkEnabled: flags.allowExec,
     // Claim only rows this run has a clone for; LANE_REPOS still bounds what any row may name.
