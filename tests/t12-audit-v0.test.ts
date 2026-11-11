@@ -103,6 +103,11 @@ describe('the beacon draw cannot be predicted before the population closes', () 
     expect(beaconFlagProblem([...base, '--beacon', 'Drand', '--day', '2026-11-10'])).toContain('must be drand');
     expect(beaconFlagProblem([...base, '--day', '2026-11-10', '--beacon'])).toContain('got nothing');
     expect(beaconFlagProblem([...base, '--day', '2026-11-10'])).toContain('only for --beacon drand');
+    // `=` forms are unknown tokens to this parser, so without a refusal they would be silently ignored.
+    expect(beaconFlagProblem([...base, '--beacon=drand', '--day', '2026-11-10'])).toContain('separate words');
+    expect(beaconFlagProblem([...base, '--beacon', 'drand', '--day=2026-11-10'])).toContain('separate words');
+    // A repeated --day would let the later value win unseen.
+    expect(beaconFlagProblem([...base, '--beacon', 'drand', '--day', '2026-11-10', '--day', '2026-11-09'])).toContain('once');
   });
 
   it('the runner refuses a free start or seed alongside the beacon', () => {
