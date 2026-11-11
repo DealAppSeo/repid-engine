@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { auditDay, dayPopulation, drandRoundAfter, drawSample, DRAND_QUICKNET } from '../scripts/t12/audit-run';
+import { auditDay, beaconFlagProblem, dayPopulation, drandRoundAfter, drawSample, DRAND_QUICKNET } from '../scripts/t12/audit-run';
 
 const SQL_DIR = join(__dirname, '..', 'ops', 't12', 'audit');
 const WRITE = /\b(insert|update|delete|merge|upsert|drop|alter|create|grant|revoke|truncate|comment\s+on|copy|call|do)\b/i;
@@ -94,6 +94,15 @@ describe('the beacon draw cannot be predicted before the population closes', () 
   it('accepts only a real date, so a day cannot be bent into a free window', () => {
     for (const bad of ['2026-11-31', '2026-13-01', '2026-11-10T12:00:00Z', '', '2026-1-10']) expect(auditDay(bad)).toBeNull();
     expect(drandRoundAfter(auditDay('2026-11-10')!.endMs).atMs).toBeGreaterThan(auditDay('2026-11-10')!.endMs);
+  });
+
+  it('a beacon asked for never falls back to the fixed seed', () => {
+    const base = ['node', 'audit-run.ts', '--out', 'x'];
+    expect(beaconFlagProblem([...base, '--beacon', 'drand', '--day', '2026-11-10'])).toBeNull();
+    expect(beaconFlagProblem(base)).toBeNull();
+    expect(beaconFlagProblem([...base, '--beacon', 'Drand', '--day', '2026-11-10'])).toContain('must be drand');
+    expect(beaconFlagProblem([...base, '--day', '2026-11-10', '--beacon'])).toContain('got nothing');
+    expect(beaconFlagProblem([...base, '--day', '2026-11-10'])).toContain('only for --beacon drand');
   });
 
   it('the runner refuses a free start or seed alongside the beacon', () => {

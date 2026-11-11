@@ -42,6 +42,15 @@ export function drandRoundAfter(cutoffMs: number): { round: number; atMs: number
   return { round, atMs: (genesis + (round - 1) * period) * 1000 };
 }
 
+/** Why the beacon flags cannot run as given, or null. A beacon asked for is never silently a fixed seed. */
+export function beaconFlagProblem(argv: readonly string[]): string | null {
+  const at = argv.indexOf('--beacon');
+  const value = at < 0 ? undefined : argv[at + 1];
+  if (at >= 0 && value !== 'drand') return `--beacon must be drand, got ${value ?? 'nothing'}`;
+  if (at < 0 && argv.includes('--day')) return '--day is only for --beacon drand';
+  return null;
+}
+
 /** One UTC day as a closed window, or null if `day` is not a real YYYY-MM-DD date. */
 export function auditDay(day: string): { startMs: number; endMs: number } | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
@@ -73,6 +82,10 @@ async function main(): Promise<void> {
   const parent = arg('parent', 't12-known-answer-v2')!;
   const today = new Date().toISOString().slice(0, 10);
   if (!out) throw new Error('--out <dir> is required');
+  // Checked on the flag's PRESENCE, not its value: `--beacon Drand`, a typo, or a trailing `--beacon`
+  // with no value must stop the run, never fall back to the fixed seed it was meant to replace.
+  const beaconProblem = beaconFlagProblem(process.argv);
+  if (beaconProblem) throw new Error(beaconProblem);
   if (!process.env.DATABASE_URL) {
     console.error('NOT_CHECKED: DATABASE_URL is not set, so nothing was read.');
     process.exit(2);
