@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { drawSample, flipByte, rankKey, shapeOf, wilson } from '../scripts/zkp/zk-truth-table';
+import { drawSample, flipByte, rankKey, redrawSql, shapeOf, wilson } from '../scripts/zkp/zk-truth-table';
 
 // The P-15 table is only worth publishing if anyone can redraw the same rows from the seed.
 describe('zk-truth-table seeded draw', () => {
@@ -23,9 +23,16 @@ describe('zk-truth-table seeded draw', () => {
     expect([...keys].sort()).toEqual(keys);
   });
 
-  it('shapeOf sorts keys and names a missing statement', () => {
+  it('shapeOf sorts keys, and puts {} with null as the SQL does (one NULL partition)', () => {
     expect(shapeOf({ threshold: 1, repid_score: 2 })).toBe('repid_score,threshold');
     expect(shapeOf(null)).toBe('(none)');
+    expect(shapeOf({})).toBe('(none)');
+  });
+
+  it('redrawSql quotes the seed, so a quote cannot break or change the printed query', () => {
+    const sql = redrawSql("p15'x", 79860, 10);
+    expect(sql).toContain("convert_to('p15''x:' || id");
+    expect(sql).toContain('id <= 79860) x where rn <= 10;');
   });
 
   it('flipByte changes exactly one byte', () => {

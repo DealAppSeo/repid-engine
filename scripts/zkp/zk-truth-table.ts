@@ -44,8 +44,9 @@
  * PowerShell, from the repo root after `npm install --legacy-peer-deps`:
  *   node --env-file=<path to your env file> -r ts-node/register scripts/zkp/zk-truth-table.ts --seed p15-2026-11-13
  *
- * EXIT: 0 no leg FAILED (binding stays NOT_CHECKED) · 1 a leg FAILED or a control broke ·
- *       2 NOT_CHECKED: no credentials, or the positive control did not verify.
+ * EXIT: 0 every leg and control ran and none FAILED (binding stays NOT_CHECKED by construction) ·
+ *       1 a leg FAILED or a control broke · 2 NOT_CHECKED: no credentials, the positive control did
+ *       not verify, or any other leg or control could not run.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -65,15 +66,24 @@ const PAYLOAD = ['string', 'string', 'bytes32', 'uint256', 'string', 'uint64']; 
 const FAKE_UID = '0x' + 'dead'.repeat(15) + 'beef';
 const BINDING_REASON =
   'evidence-bundle@1: zk_commitment = sha256(agentId|score|tier|nonce|proverCommitment); nonce and proverCommitment are not stored, so the anchored leaf cannot be recomputed from the proof statement (D-150)';
-const PROVES = 'threshold < repid_score <= threshold + 65536, all public, transcript-bound to agent_id; tier not bound';
+const PROVES = 'threshold < repid_score <= threshold + 65536, all public; agent_id bound only by an 8-bit PoW; tier not bound';
+const ZERO_UID = '0x' + '0'.repeat(64);
 
 // ── pure helpers (tests/zk-truth-table-sample.test.ts) ─────────────────────────────────────────
 export function rankKey(seed: string, id: number): string {
   return createHash('sha256').update(`${seed}:${id}`).digest('hex');
 }
+/** Sorted keys. A statement with no keys ({} or null) is '(none)', the same group as the SQL's NULL partition. */
 export function shapeOf(statement: unknown): string {
   if (!statement || typeof statement !== 'object' || Array.isArray(statement)) return '(none)';
-  return Object.keys(statement).sort().join(',');
+  return Object.keys(statement).sort().join(',') || '(none)';
+}
+/** The SQL that redraws drawSample's rows. The seed is quoted for SQL, so a ' in it cannot break the query. */
+export function redrawSql(seed: string, maxId: number, k: number): string {
+  const s = seed.replace(/'/g, "''");
+  return `select id from (select id, row_number() over (partition by (select string_agg(k, ',' order by k) from jsonb_object_keys(statement) k)
+    order by encode(sha256(convert_to('${s}:' || id, 'UTF8')), 'hex')) rn from repid_zkp_proofs
+    where scheme='plonky3_range_check' and is_real and id <= ${maxId}) x where rn <= ${k};`;
 }
 /** First k ids per shape by rankKey; returned in rank order. */
 export function drawSample(pop: { id: number; shape: string }[], seed: string, k: number): number[] {
@@ -130,15 +140,16 @@ interface AnchorInfo { anchor: Verdict; anchor_detail: string; included: Verdict
 
 async function checkAnchor(db: SupabaseClient, eas: Contract, uid: string): Promise<AnchorInfo> {
   const nc = (d: string): AnchorInfo => ({ anchor: 'NOT_CHECKED', anchor_detail: d, included: 'NOT_CHECKED', included_detail: d, ids: new Set() });
-  let att: { uid: string; schema: string; time: bigint; revocationTime: bigint; attester: string; data: string };
+  let att: { uid: string; schema: string; time: bigint; expirationTime: bigint; revocationTime: bigint; attester: string; data: string };
   try { att = await eas.getFunction('getAttestation').staticCall(uid); } catch (e) { return nc(`eth_call failed: ${(e as Error).message.slice(0, 120)}`); }
   if (att.uid.toLowerCase() !== uid.toLowerCase()) {
     return { anchor: 'FAILED', anchor_detail: 'getAttestation returned the empty struct: no such attestation', included: 'FAILED', included_detail: 'no on-chain payload', ids: new Set() };
   }
   const revoked = att.revocationTime !== 0n;
+  const expired = att.expirationTime !== 0n && att.expirationTime < BigInt(Math.floor(Date.now() / 1000));
   const when = new Date(Number(att.time) * 1000).toISOString();
-  const anchor: Verdict = revoked ? 'FAILED' : 'VERIFIED';
-  const anchor_detail = `${revoked ? 'REVOKED' : 'exists, not revoked'}; schema ${att.schema.slice(0, 10)}…; attester ${att.attester.slice(0, 10)}…; time ${when}`;
+  const anchor: Verdict = revoked || expired ? 'FAILED' : 'VERIFIED';
+  const anchor_detail = `${revoked ? 'REVOKED' : expired ? 'EXPIRED' : 'exists, not revoked, not expired'}; schema ${att.schema.slice(0, 10)}…; attester ${att.attester.slice(0, 10)}…; time ${when}`;
 
   let onchainRoot: string;
   try { onchainRoot = String(AbiCoder.defaultAbiCoder().decode(PAYLOAD, att.data)[2]).toLowerCase(); } catch (e) {
@@ -153,15 +164,20 @@ async function checkAnchor(db: SupabaseClient, eas: Contract, uid: string): Prom
     rows.push(...(data as typeof rows));
     if (!data || data.length < 1000) break;
   }
-  const { data: batch } = await db.from('eas_anchor_batches').select('hash_scheme').eq('eas_uid', uid).limit(1);
-  const scheme = (batch?.[0] as { hash_scheme?: string } | undefined)?.hash_scheme || 'keccak256';
+  if (!rows.length) return { anchor, anchor_detail, included: 'FAILED', included_detail: 'the DB attributes no rows to this uid', ids: new Set() };
+  // The batch row names the hash scheme. A failed lookup is NOT_CHECKED; a missing row (the one batch
+  // whose audit insert was lost, BEAT26) falls back to the worker's default and says so.
+  const { data: batch, error: batchErr } = await db.from('eas_anchor_batches').select('hash_scheme').eq('eas_uid', uid).limit(1);
+  if (batchErr) return { anchor, anchor_detail, included: 'NOT_CHECKED', included_detail: `hash_scheme lookup failed: ${batchErr.message}`, ids: new Set() };
+  const named = (batch?.[0] as { hash_scheme?: string } | undefined)?.hash_scheme;
+  const scheme = named || 'keccak256';
   const commitments = rows.map((r) => r.zk_commitment);
   const { root } = rootFromCommitments(commitments, scheme);
   const ok = root.toLowerCase() === onchainRoot;
   return {
     anchor, anchor_detail, ids: new Set(rows.map((r) => r.id)), onchainRoot, commitments, scheme,
     included: ok ? 'VERIFIED' : 'FAILED',
-    included_detail: `${rows.length} leaves, ${scheme}: recomputed root ${ok ? '==' : '!='} on-chain root ${onchainRoot.slice(0, 12)}…`,
+    included_detail: `${rows.length} leaves, ${scheme}${named ? '' : ' (no batch row: default)'}: recomputed root ${ok ? '==' : '!='} on-chain root ${onchainRoot.slice(0, 12)}…`,
   };
 }
 
@@ -204,17 +220,15 @@ async function main(): Promise<number> {
   if (idsArg) {
     const raw = existsSync(idsArg) ? readFileSync(idsArg, 'utf8') : idsArg;
     picks = raw.split(/[\s,]+/).filter(Boolean).map((t) => { const [i, w] = t.split(':'); return { id: Number(i), weight: w ? Number(w) : null }; });
-  } else if (seed) {
+  } else if (seed && Number.isInteger(k) && k > 0) {
     picks = drawSample(pop, seed, k).map((id) => ({ id, weight: null }));
-  } else { console.log('usage: --seed <s> [--per-stratum k] | --ids <file|list>   [--max-id n] [--out path]'); return 2; }
+  } else { console.log('usage: --seed <s> [--per-stratum <positive integer>] | --ids <file|list>   [--max-id n] [--out path]'); return 2; }
 
   console.log(`population: is_real plonky3_range_check, id <= ${maxId}: ${pop.length} rows in ${strata.size} statement shapes`);
   for (const [s, n] of strata) console.log(`  ${n.toString().padStart(6)}  {${s}}`);
   if (seed && !idsArg) {
     console.log(`sample: seed "${seed}", ${k} per shape → ${picks.length} rows. Redraw in SQL:`);
-    console.log(`  select id from (select id, row_number() over (partition by (select string_agg(k, ',' order by k) from jsonb_object_keys(statement) k)
-    order by encode(sha256(convert_to('${seed}:' || id, 'UTF8')), 'hex')) rn from repid_zkp_proofs
-    where scheme='plonky3_range_check' and is_real and id <= ${maxId}) x where rn <= ${k};`);
+    console.log(`  ${redrawSql(seed, maxId, k)}`);
   }
 
   const anchors = new Map<string, AnchorInfo>();
@@ -272,9 +286,16 @@ async function main(): Promise<number> {
       if (lastErr) { r['event'] = 'NOT_CHECKED'; r['event_detail'] = `query failed: ${lastErr.message}`; }
       else if (!last?.length) { r['event'] = 'FAILED'; r['event_detail'] = 'no score event for this agent at or before the proof'; }
       else {
-        const after = (last[0] as { repid_after: number | null }).repid_after;
-        r['event'] = after === st.repid_score ? 'VERIFIED' : 'FAILED';
-        r['event_detail'] = `latest score event at proof time ended at ${after}; proven ${st.repid_score}`;
+        // Every event at that same instant: if they disagree, the ledger's score at proof time is ambiguous.
+        const at = (last[0] as { created_at: string }).created_at;
+        const { data: tied, error: tieErr } = await db.from('repid_score_events').select('repid_after').eq('agent_id', row.agent_id).eq('created_at', at);
+        const values = [...new Set(((tied ?? last) as { repid_after: number | null }[]).map((e) => e.repid_after))];
+        if (tieErr) { r['event'] = 'NOT_CHECKED'; r['event_detail'] = `tie query failed: ${tieErr.message}`; }
+        else if (values.length > 1) { r['event'] = 'NOT_CHECKED'; r['event_detail'] = `${tied!.length} score events share the latest instant and end at ${values.join('/')}; proven ${st.repid_score}`; }
+        else {
+          r['event'] = values[0] === st.repid_score ? 'VERIFIED' : 'FAILED';
+          r['event_detail'] = `latest score event at proof time ended at ${values[0]}; proven ${st.repid_score}`;
+        }
       }
     }
     if (row.job_id) {
@@ -318,11 +339,14 @@ async function main(): Promise<number> {
     const accepted = flips.filter((f) => f.verified).length;
     const deser = flips.filter((f) => !f.verified && /deser/i.test(f.error ?? '')).length;
     const kinds = [...new Set(flips.filter((f) => !f.verified && !/deser/i.test(f.error ?? '')).map((f) => (f.error ?? '').slice(0, 40)))];
-    expect('flip_one_proof_byte', accepted > 0, false, `16 single-byte flips of a real ${len}-byte proof: ${16 - accepted} rejected (${deser} at deserialisation, ${16 - accepted - deser} by verification${kinds.length ? `: ${kinds.join(' | ')}` : ''}), ${accepted} accepted`);
+    // OK needs every flip rejected AND at least one rejected by the STARK check, not the parser: a
+    // parser that refuses every tampered byte would otherwise pass this without the verifier running.
+    const byVerify = 16 - accepted - deser;
+    expect('flip_one_proof_byte', accepted > 0 || byVerify === 0, false, `16 single-byte flips of a real ${len}-byte proof: ${16 - accepted} rejected (${deser} at deserialisation, ${byVerify} by verification${kinds.length ? `: ${kinds.join(' | ')}` : ''}), ${accepted} accepted`);
     const s = verifyRangeCheck(firstVerified.bytes, { ...firstVerified.st, repid_score: firstVerified.st.repid_score + 1 });
     expect('score_plus_one', s.verified, false, `same proof, claimed score +1 → ${s.verified ? 'ACCEPTED' : 'rejected'}`);
     const a = verifyRangeCheck(firstVerified.bytes, { ...firstVerified.st, agent_id: '00000000-0000-4000-8000-0000000000cc' });
-    expect('substituted_agent_id', a.verified, false, `same proof, another agent_id → ${a.verified ? 'ACCEPTED' : 'rejected'}`);
+    expect('substituted_agent_id', a.verified, false, `same proof, ONE fabricated agent_id → ${a.verified ? 'ACCEPTED' : 'rejected'} (catches an unbound agent_id; its strength is agent_binding_rate)`);
     const t = verifyRangeCheck(firstVerified.bytes, { ...firstVerified.st, tier: firstVerified.st.tier === 'VETERAN' ? 'PROBATIONARY' : 'VETERAN' });
     expect('tier_swap_is_not_bound', t.verified, true, `same proof, another tier → ${t.verified ? 'accepted: tier is NOT bound (documented)' : 'rejected'}`);
     // A measurement, not a pass/fail control: how often the same bytes verify under a FOREIGN agent id.
@@ -336,15 +360,24 @@ async function main(): Promise<number> {
     }
     const [blo, bhi] = wilson(foreign, bindN);
     controls['agent_binding_rate'] = `MEASURED: ${foreign}/${bindN} foreign agent ids verify the same proof bytes (95% Wilson ${blo.toFixed(4)}–${bhi.toFixed(4)}; an 8-bit grind predicts 1/256 = 0.0039)`;
-  } else controls['flip_one_proof_byte'] = 'NOT_CHECKED: no sampled proof verified, so there was no real proof to tamper with';
+  } else {
+    for (const n of ['flip_one_proof_byte', 'score_plus_one', 'substituted_agent_id', 'tier_swap_is_not_bound', 'agent_binding_rate']) {
+      controls[n] = 'NOT_CHECKED: no sampled proof verified, so there was no real proof to tamper with';
+    }
+  }
   try {
-    const z = await eas.getFunction('getAttestation').staticCall(FAKE_UID);
-    expect('fabricated_uid_absent', String(z.uid).toLowerCase() === FAKE_UID, false, `getAttestation(0xdead…beef) → ${String(z.uid) === '0x' + '0'.repeat(64) ? 'empty struct' : String(z.uid)}`);
+    // "Absent" means the all-zero uid. Any other reply, including a different non-zero uid, is BROKEN.
+    const z = String((await eas.getFunction('getAttestation').staticCall(FAKE_UID)).uid).toLowerCase();
+    expect('fabricated_uid_absent', z !== ZERO_UID, false, `getAttestation(0xdead…beef) → ${z === ZERO_UID ? 'empty struct' : z}`);
   } catch (e) { controls['fabricated_uid_absent'] = `NOT_CHECKED: ${(e as Error).message.slice(0, 80)}`; }
   if (firstAnchor?.commitments?.length && firstAnchor.onchainRoot) {
-    const bent = [...firstAnchor.commitments]; bent[0] = bent[0]!.slice(0, -1) + (bent[0]!.endsWith('0') ? '1' : '0');
-    const { root } = rootFromCommitments(bent, firstAnchor.scheme);
-    expect('altered_leaf_changes_root', root.toLowerCase() === firstAnchor.onchainRoot, false, `one commitment's last hex digit changed → root ${root.toLowerCase() === firstAnchor.onchainRoot ? 'STILL MATCHES' : 'no longer matches'}`);
+    // Alter the first leaf, then the last: a root function that skipped either end would leave one green.
+    const ends = [...new Set([0, firstAnchor.commitments.length - 1])];
+    const still = ends.filter((i) => {
+      const bent = [...firstAnchor!.commitments!]; bent[i] = bent[i]!.slice(0, -1) + (bent[i]!.endsWith('0') ? '1' : '0');
+      return rootFromCommitments(bent, firstAnchor!.scheme).root.toLowerCase() === firstAnchor!.onchainRoot;
+    });
+    expect('altered_leaf_changes_root', still.length > 0, false, `leaf ${ends.join(' and leaf ')} each altered by one hex digit → root ${still.length ? `STILL MATCHES for leaf ${still.join(',')}` : 'no longer matches'}`);
   } else controls['altered_leaf_changes_root'] = 'NOT_CHECKED: no anchor root was reproduced';
 
   // Summary, with its ruler.
@@ -405,7 +438,12 @@ async function main(): Promise<number> {
   }
   const anyFailed = results.some((r) => legs.some((l) => r[l] === 'FAILED'))
     || (anchorCensus !== null && Object.values(anchorCensus['uid_verdicts'] as Record<string, Record<Verdict, number>>).some((t) => t.FAILED > 0));
-  return !controlsOk || anyFailed ? 1 : 0;
+  // A leg or control that could not run is not a pass. binding is NOT_CHECKED by construction (@1), so it
+  // alone does not count; any other NOT_CHECKED makes the run NOT_CHECKED rather than green.
+  const anyNotChecked = results.some((r) => legs.some((l) => l !== 'binding' && r[l] === 'NOT_CHECKED'))
+    || Object.values(controls).some((v) => v.startsWith('NOT_CHECKED'))
+    || (anchorCensus !== null && Object.values(anchorCensus['uid_verdicts'] as Record<string, Record<Verdict, number>>).some((t) => t.NOT_CHECKED > 0));
+  return !controlsOk || anyFailed ? 1 : anyNotChecked ? 2 : 0;
 }
 
 if (require.main === module) {
