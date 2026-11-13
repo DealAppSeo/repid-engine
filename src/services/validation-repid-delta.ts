@@ -7,6 +7,7 @@ import { factCheck, buildFactCheckProviders, factCheckOptsFromEnv } from '../hal
 import { maybeWriteOnChainReputation } from './onchain-reputation-trigger';
 import { ownerDistinctShadowEnabled, logOwnerDistinctShadow } from './owner-distinct-shadow';
 import { gateSettlementDeltas } from './same-owner-settlement';
+import { checkDelivery, deliveryCheckMode } from './service-delivery-check';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 /**
@@ -338,7 +339,14 @@ export async function applyServiceFulfilledDeltas(
   // nothing runs. ON: one log line of what the rule would do, not awaited, deltas untouched.
   if (ownerDistinctShadowEnabled()) void logOwnerDistinctShadow(contract);
 
-  // HAL enrichment (2026-05-22): evaluate the deliverable text and pass a real
+  // WHAT HAL JUDGES HERE (corrected 2026-11-13, D-170): `payload.content` is the BUYER's input, not
+  // the provider's delivery (`fullContract.result`). On a verification contract it is the claim to be
+  // checked, so a veto means "HAL thinks the claim is false", not "the provider did bad work"; on
+  // storage it is the blob to store. This comment used to say "the deliverable text", and P-10 built
+  // a credit gate on that reading before Strix caught it. `deliverable` / `answer_text` below keep
+  // their old names. Whether the delivery checks out is service-delivery-check.ts, in shadow.
+  //
+  // HAL enrichment (2026-05-22): evaluate the payload text and pass a real
   // HAL verdict into the SERVICE_FULFILLED score-event rows below. NON-FATAL —
   // any failure (eval error, missing payload) falls back to undefined, so
   // applyValidationEvent uses its 0.5/clean default and fulfillment still
@@ -408,6 +416,17 @@ export async function applyServiceFulfilledDeltas(
     halOverride = undefined;
   }
 
+  // SERVICE_DELIVERY_CHECK_MODE (service-delivery-check.ts, D-170), SHADOW ONLY: off = no new key;
+  // shadow = the provider row records whether the DELIVERY checks out. No delta reads it.
+  const deliveryCheck = deliveryCheckMode() === 'off' ? {} : {
+    delivery_check: checkDelivery({
+      serviceType: fullContract.agent_services?.service_type ?? null,
+      payload,
+      result: fullContract.result,
+      hal: halOverride,
+    }),
+  };
+
   // The two halves of one transaction. Each side now records the other, so the relationship
   // survives in the ledger instead of having to be re-derived from contract_id afterwards —
   // which only ever worked for the 0.8% of events that set it.
@@ -421,6 +440,7 @@ export async function applyServiceFulfilledDeltas(
       role: 'provider',
       counterparty_agent_id: contract.buyer_agent_id,
       ...owner.provider.meta,
+      ...deliveryCheck,
       answer_text: deliverable,
       prompt_text: promptText,
       // Default 'service_contract', NOT 'general' — put paid contract work in its
