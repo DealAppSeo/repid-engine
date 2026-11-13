@@ -23,6 +23,10 @@
  * with an empty or unparseable body is NOT an answer: it is reported as a non-2xx so the wave
  * tries the next host, and it can never end the wave looking like success. A 429 passes its
  * Retry-After back. Stores nothing; writes no row.
+ *
+ * Each host tried is reported to onAttempt with one reason from a closed set: answered, rate_limited, http_<status>,
+ * empty_answer, stream_cut, timeout, network_error, no_credentials, egress_refused. t12-daily-record.ts reads that
+ * reason, not the status: an empty or cut-off 2xx carries status 200 and is not an answer.
  */
 import { providerFetch } from '../egress/provider-fetch';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
@@ -175,6 +179,12 @@ export function readStreamedAnswer(raw: string): string | null {
   return done && out.trim() !== '' && out.length <= MAX_BODY_CHARS ? out : null;
 }
 
+/** A stream that sent events and stopped without `[DONE]`: cut off, which is not the same as an empty answer. */
+export const streamCutOff = (raw: string): boolean => /^\s*data:/m.test(raw) && !/^\s*data:\s*\[DONE\]\s*$/m.test(raw);
+
+/** undici's own header and body timers fire whatever timeoutMs says (study T12-CTX-AB-2026-11-10-v1); that is still a timeout. */
+const UNDICI_TIMEOUTS = new Set(['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
+
 export interface T12AskResult extends T12WaveResult {
   /** The answering host's text. Null unless outcome is 'answered'. */
   text: string | null;
@@ -228,6 +238,7 @@ export async function t12Ask(
     if (target.key) headers.Authorization = `Bearer ${target.key}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let responded = false;
     try {
       const res = await fetchImpl(target.url, {
         method: 'POST',
@@ -236,6 +247,7 @@ export async function t12Ask(
         signal: controller.signal,
         body: JSON.stringify({ model: target.model, messages: [{ role: 'user', content: prompt }], ...target.body }),
       });
+      responded = true;
       if (res.status === 429) {
         const ra = retryAfterMs(res.headers?.get('retry-after') ?? null);
         await record(429, 'rate_limited', ra);
@@ -249,14 +261,16 @@ export async function t12Ask(
       // A stream is read only where one was asked for (the local route); a cloud reply is never read as one.
       const answer = readAnswer(raw) ?? (target.body?.stream === true ? readStreamedAnswer(raw) : null);
       if (answer === null) {
-        await record(res.status, 'empty_answer');
+        await record(res.status, target.body?.stream === true && streamCutOff(raw) ? 'stream_cut' : 'empty_answer');
         return { status: T12_EMPTY_ANSWER };
       }
       answers.set(host, answer);
       await record(res.status, 'answered');
       return { status: res.status };
     } catch (e) {
-      await record(null, controller.signal.aborted ? 'timeout' : 'network_error');
+      // Closed set: timeout, stream_cut (the reply started, then broke), network_error (no reply at all).
+      const timedOut = controller.signal.aborted || UNDICI_TIMEOUTS.has(String((e as { cause?: { code?: unknown } })?.cause?.code));
+      await record(null, timedOut ? 'timeout' : responded ? 'stream_cut' : 'network_error');
       throw e;
     } finally {
       clearTimeout(timer);

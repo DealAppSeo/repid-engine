@@ -13,8 +13,8 @@ const at = `${DAY}T03:00:00.000Z`;
 describe('daily record', () => {
   it('counts the work from receipts', () => {
     const r = buildDailyRecord([
-      row('a', [receipt('claimed', at), receipt('belt_checked_out', at), receipt('route_attempt', at, { provider: 'groq', status: 200 }), receipt('stage_claimed', at), receipt('check_approved', at, { commit: 'abc', exit: 0, controls: [{}, {}] }), receipt('integrated', at)]),
-      row('b', [receipt('claimed', at), receipt('lease_reaped', at), receipt('route_attempt', at, { provider: 'groq', status: 429 }), receipt('check_rejected', at, {}, 'wrote outside its lease')]),
+      row('a', [receipt('claimed', at), receipt('belt_checked_out', at), receipt('route_attempt', at, { provider: 'groq', status: 200, reason: 'answered' }), receipt('stage_claimed', at), receipt('check_approved', at, { commit: 'abc', exit: 0, controls: [{}, {}] }), receipt('integrated', at)]),
+      row('b', [receipt('claimed', at), receipt('lease_reaped', at), receipt('route_attempt', at, { provider: 'groq', status: 429, reason: 'rate_limited' }), receipt('check_rejected', at, {}, 'wrote outside its lease')]),
     ], DAY, 'synthetic');
     expect(r.tasks).toMatchObject({ attempted: 2, accepted: 1, rejected: 1, integrated: 1 });
     expect(r.leases).toMatchObject({ claims: 2, stage_claims: 1, expired_and_recovered: 1 });
@@ -37,7 +37,7 @@ describe('daily record', () => {
   });
 
   it('never calls usage free without provider-side evidence', () => {
-    const rows = [row('a', [receipt('route_attempt', at, { provider: 'groq', status: 200 })])];
+    const rows = [row('a', [receipt('route_attempt', at, { provider: 'groq', status: 200, reason: 'answered' })])];
     expect(buildDailyRecord(rows, DAY, 'real').providers[0]).toMatchObject({ verified_free: null, free_basis: expect.stringContaining('NOT_CHECKED') });
     expect(buildDailyRecord(rows, DAY, 'real', [{ host: 'groq', verified: true, evidence: 'billing page, 2026-11-09' }]).providers[0]).toMatchObject({ verified_free: true, free_basis: 'billing page, 2026-11-09' });
   });
@@ -55,17 +55,17 @@ describe('daily record', () => {
     ], DAY, 'real');
     expect(r.tasks.maker_refused).toBe(3);
     expect(r.leases.released).toBe(1);
-    expect(r.refusals).toEqual([{ task: 'a', code: 'path_outside_lease' }, { task: 'b', code: 'invalid_json' }, { task: 'c', code: 'no_change' }]);
+    expect(r.refusals).toEqual([{ task: 'a', code: 'path_outside_lease' }, { task: 'b', code: 'invalid_json' }, { task: 'c', code: 'no_change' }]); // a: the format before path_code
     expect(JSON.stringify(r)).not.toMatch(/evil\.test|<img|SECRET|<b>/);
   });
 
   it('maps every lane refusal phrase to its own code', () => {
     const set = 'model output was not a valid file set inside the lease: ';
-    expect(makerRefusalCode(`${set}no JSON object in the reply`)).toBe('no_json');
-    expect(makerRefusalCode(`${set}no files in the reply`)).toBe('no_files');
-    expect(makerRefusalCode(`${set}a file is missing its path or content`)).toBe('file_missing_path_or_content');
-    expect(makerRefusalCode('belt denied: no grant')).toBe('belt_denied');
-    expect(makerRefusalCode('something new')).toBe('other');
+    expect(makerRefusalCode(`${set}no JSON object in the reply`)).toEqual({ code: 'no_json' });
+    expect(makerRefusalCode(`${set}no files in the reply`)).toEqual({ code: 'no_files' });
+    expect(makerRefusalCode(`${set}a file is missing its path or content`)).toEqual({ code: 'file_missing_path_or_content' });
+    expect(makerRefusalCode('belt denied: no grant')).toEqual({ code: 'belt_denied' });
+    expect(makerRefusalCode('something new')).toEqual({ code: 'other' });
   });
 
   it('does not score anyone for being busy', () => {

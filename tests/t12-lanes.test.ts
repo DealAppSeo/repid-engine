@@ -104,14 +104,14 @@ describe('maker output and environment', () => {
     expect(readMakerFiles('```json\n{"files":[{"path":"a.mjs","content":"x"}]}\n```', ['a.mjs'])).toEqual({ files: [{ path: 'a.mjs', content: 'x' }] });
   });
   it('refuses a file outside the lease and names it', () => {
-    expect(readMakerFiles('{"files":[{"path":".github/workflows/x.yml","content":"x"}]}', ['a.mjs'])).toEqual({ reason: '.github/workflows/x.yml is outside the lease' });
+    expect(readMakerFiles('{"files":[{"path":".github/workflows/x.yml","content":"x"}]}', ['a.mjs'])).toEqual({ reason: 'outside the lease (other_path): .github/workflows/x.yml' });
   });
   it('refuses prose and says so', () => expect(readMakerFiles('I could not do this.', ['a.mjs'])).toEqual({ reason: 'no JSON object in the reply' }));
   it('accepts raw newlines and tabs inside strings, which free models emit', () => {
     expect(readMakerFiles('{"files":[{"path":"a.mjs","content":"a\n\tb \\"q\\"\r\nc"}]}', ['a.mjs'])).toEqual({ files: [{ path: 'a.mjs', content: 'a\n\tb "q"\r\nc' }] });
   });
   it('a raw newline does not get a path past the lease', () => {
-    expect(readMakerFiles('{"files":[{"path":"a.mjs\n","content":"x"}]}', ['a.mjs'])).toEqual({ reason: 'a.mjs\n is outside the lease' });
+    expect(readMakerFiles('{"files":[{"path":"a.mjs\n","content":"x"}]}', ['a.mjs'])).toEqual({ reason: 'outside the lease (other_path): a.mjs\n' });
   });
   it('names the JSON error when the reply is broken', () => {
     expect(readMakerFiles('{"files":[{"path":"a.mjs","content":"x"}]}}', ['a.mjs'])).toMatchObject({ reason: expect.stringContaining('invalid JSON') });
