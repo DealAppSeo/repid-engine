@@ -22,8 +22,10 @@
  *
  * NOT CHECKED IS NOT FAILED. Two reasons are infrastructure, not a verdict on the work:
  *   hal_error     HAL threw (the writer's catch); nothing was assessed.
- *   hal_degraded  no fact-check provider answered, so the extractor fallback ran; by the writer's own
- *                 measurement it barely discriminates (gap -0.020), so its 'clean' is not a pass.
+ *   hal_degraded  fewer than 2 fact-check providers answered: either the extractor fallback ran (by
+ *                 the writer's own measurement it barely discriminates, gap -0.020) or fact-check
+ *                 returned `degraded: true` (one provider, or the local keyword-guess fallback).
+ *                 Neither 'clean' is a pass.
  * They are withheld like the rest but tagged apart, with `ungated_delta`, so a re-check can credit
  * them later. No backfill job exists yet.
  *
@@ -57,7 +59,11 @@ export function serviceHalGateMode(raw: string | undefined = process.env.SERVICE
 export function halGateReason(hal: HalVerdict, errored = false): HalGateReason | null {
   if (errored) return 'hal_error';
   if (!hal || hal.hal_signals === undefined || hal.hal_signals === null) return 'hal_not_run';
-  if ((hal.hal_signals as { mode?: unknown }).mode === 'extractor-fallback') return 'hal_degraded';
+  const signals = hal.hal_signals as { mode?: unknown; degraded?: unknown };
+  if (signals.mode === 'extractor-fallback') return 'hal_degraded';
+  // Fewer than 2 providers answered. Includes the HAL_LOCAL_FALLBACK_ENABLED keyword guess, which
+  // reports mode 'fact-check' with providers_used 1: a substring match is never a pass (Strix, #1542).
+  if (signals.mode === 'fact-check' && signals.degraded === true) return 'hal_degraded';
   switch (hal.hal_decision) {
     case 'clean': return null;
     case 'vetoed': case 'flagged': case 'abstain': return hal.hal_decision;

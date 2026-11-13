@@ -86,6 +86,9 @@ describe('the pure gate', () => {
     expect(halGateReason(undefined, true)).toBe('hal_error');
     expect(halGateReason({ hal_score: 0.1, hal_decision: 'clean', hal_signals: { mode: 'extractor-fallback' } })).toBe('hal_degraded');
     expect(halGateReason({ hal_score: 0.1, hal_decision: 'clean', hal_signals: { mode: 'extractor' } })).toBeNull(); // strictness 1 chose the extractor
+    // HAL_LOCAL_FALLBACK_ENABLED's keyword guess reports mode 'fact-check', providers_used 1, degraded true (Strix, #1542)
+    expect(halGateReason({ hal_score: 0.2, hal_decision: 'clean', hal_signals: { mode: 'fact-check', providers_used: 1, degraded: true } })).toBe('hal_degraded');
+    expect(halGateReason({ hal_score: 0.1, hal_decision: 'clean', hal_signals: { mode: 'fact-check', providers_used: 3, degraded: false } })).toBeNull();
     const e = gateServiceHal({ provider: 10, buyer: 5 }, undefined, 'enforce', true);
     expect(e.provider).toEqual({ delta: 0, meta: { service_hal_gate: { mode: 'enforce', hal_ran: false, would_not_count: 'hal_error', counted: false, ungated_delta: 10 } } });
   });
