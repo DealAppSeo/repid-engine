@@ -289,6 +289,10 @@ describing it.*
   written 2026-06-07 09:58:57Z and still writing (last 2026-09-08 12:00:54Z). The `sha256-stub`
   scheme stopped at 09:26:28Z that same morning — a clean cutover visible to the minute.
   Re-run: `select * from v_repid_zkp_scheme_truth;`
+  **"Real" means the bytes verify, not that the score is true** [MEASURED 2026-11-13, P-15]. Each
+  proof shows `threshold < repid_score` for numbers the statement already makes public; agent_id is
+  bound only by an 8-bit proof-of-work, and anyone with the public prover can mint a valid proof for
+  any agent and score. `scripts/zkp/zk-truth-table.ts` re-verifies a seeded sample and every anchor.
   **A filename is a label.** `-stub` in a name is not evidence about production, and this file
   turned that label into a documented fact that a later reader repeated. LESSONS rule 4.
   Still true: the `/prove/trade_auth` bridge in `plonky3-real.ts` has **no default URL**, so it
