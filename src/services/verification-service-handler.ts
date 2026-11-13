@@ -4,8 +4,8 @@ import { rpcCall } from '../clients/rpc-with-failover';
 import { getActiveNetwork } from '../config/network';
 import { BASE_SEPOLIA_CHAIN_ID } from './testnet-only';
 import type { ServiceContractRow } from '../types';
-
-type ClaimIs = 'TRUE' | 'FALSE' | 'UNDETERMINED';
+// One pattern, shared with the shadow delivery check: a claim this handler can read is a claim it can score.
+import { BASE_SEPOLIA_CHAIN_ID_CLAIM, type ClaimIs } from './service-delivery-check';
 
 /** What a chain-id claim was checked against. Present only when a read was attempted. */
 interface VerifiedAgainst {
@@ -20,11 +20,6 @@ interface VerifiedAgainst {
 
 /** Per-endpoint bound. rpcCall rotates to the next endpoint on timeout, so the worst case is 3 x this. */
 const CHAIN_READ_TIMEOUT_MS = 5_000;
-
-// ponytail: one claim shape, read against Base Sepolia only. The content must be exactly
-// "[The] Base Sepolia chain id is <n>[.]". Any other phrasing, another chain, or a compound claim
-// falls to the validator vote, unchecked. Widen this when a second verifiable claim type is bought.
-const BASE_SEPOLIA_CHAIN_ID_CLAIM = /^\s*(?:the\s+)?base sepolia chain id is (\d+)\.?\s*$/i;
 
 /**
  * Read eth_chainId from the configured Base Sepolia RPC and judge the claim against it.

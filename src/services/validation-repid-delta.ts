@@ -7,7 +7,7 @@ import { factCheck, buildFactCheckProviders, factCheckOptsFromEnv } from '../hal
 import { maybeWriteOnChainReputation } from './onchain-reputation-trigger';
 import { ownerDistinctShadowEnabled, logOwnerDistinctShadow } from './owner-distinct-shadow';
 import { gateSettlementDeltas } from './same-owner-settlement';
-import { gateServiceHal } from './service-hal-gate';
+import { checkDelivery, deliveryCheckMode } from './service-delivery-check';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 /**
@@ -332,11 +332,21 @@ export async function applyServiceFulfilledDeltas(
     provider: isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.provider,
     buyer: isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.buyer,
   });
+  const providerDelta = owner.provider.delta;
+  const buyerDelta = owner.buyer.delta;
+
   // Owner-distinct counterparty rule, SHADOW ONLY (services/owner-distinct-shadow.ts). Flag OFF:
   // nothing runs. ON: one log line of what the rule would do, not awaited, deltas untouched.
   if (ownerDistinctShadowEnabled()) void logOwnerDistinctShadow(contract);
 
-  // HAL enrichment (2026-05-22): evaluate the deliverable text and pass a real
+  // WHAT HAL JUDGES HERE (corrected 2026-11-13, D-170): `payload.content` is the BUYER's input, not
+  // the provider's delivery (`fullContract.result`). On a verification contract it is the claim to be
+  // checked, so a veto means "HAL thinks the claim is false", not "the provider did bad work"; on
+  // storage it is the blob to store. This comment used to say "the deliverable text", and P-10 built
+  // a credit gate on that reading before Strix caught it. `deliverable` / `answer_text` below keep
+  // their old names. Whether the delivery checks out is service-delivery-check.ts, in shadow.
+  //
+  // HAL enrichment (2026-05-22): evaluate the payload text and pass a real
   // HAL verdict into the SERVICE_FULFILLED score-event rows below. NON-FATAL —
   // any failure (eval error, missing payload) falls back to undefined, so
   // applyValidationEvent uses its 0.5/clean default and fulfillment still
@@ -347,7 +357,6 @@ export async function applyServiceFulfilledDeltas(
 
   let deliverable = '';
   let promptText = '';
-  let halErrored = false;
 
   try {
     deliverable = typeof payload.content === 'string' ? payload.content : '';
@@ -405,15 +414,18 @@ export async function applyServiceFulfilledDeltas(
       halErr?.message ?? String(halErr),
     );
     halOverride = undefined;
-    halErrored = true;
   }
 
-  // SERVICE_HAL_GATE_MODE (service-hal-gate.ts, D-144), applied after the same-owner gate:
-  // off = untouched, no new keys; shadow = tagged, untouched; enforce = 0 when HAL did not run or
-  // did not pass the deliverable. Withheld, never subtracted.
-  const hal = gateServiceHal({ provider: owner.provider.delta, buyer: owner.buyer.delta }, halOverride, undefined, halErrored);
-  const providerDelta = hal.provider.delta;
-  const buyerDelta = hal.buyer.delta;
+  // SERVICE_DELIVERY_CHECK_MODE (service-delivery-check.ts, D-170), SHADOW ONLY: off = no new key;
+  // shadow = the provider row records whether the DELIVERY checks out. No delta reads it.
+  const deliveryCheck = deliveryCheckMode() === 'off' ? {} : {
+    delivery_check: checkDelivery({
+      serviceType: fullContract.agent_services?.service_type ?? null,
+      payload,
+      result: fullContract.result,
+      hal: halOverride,
+    }),
+  };
 
   // The two halves of one transaction. Each side now records the other, so the relationship
   // survives in the ledger instead of having to be re-derived from contract_id afterwards —
@@ -428,7 +440,7 @@ export async function applyServiceFulfilledDeltas(
       role: 'provider',
       counterparty_agent_id: contract.buyer_agent_id,
       ...owner.provider.meta,
-      ...hal.provider.meta,
+      ...deliveryCheck,
       answer_text: deliverable,
       prompt_text: promptText,
       // Default 'service_contract', NOT 'general' — put paid contract work in its
@@ -468,7 +480,6 @@ export async function applyServiceFulfilledDeltas(
       role: 'buyer',
       counterparty_agent_id: contract.provider_agent_id,
       ...owner.buyer.meta,
-      ...hal.buyer.meta,
       answer_text: deliverable,
       prompt_text: promptText,
       // Default 'service_contract', NOT 'general' — put paid contract work in its
@@ -511,14 +522,9 @@ export async function applyServiceFulfilledDeltas(
         // enforce a same/unknown-owner trade gets no inline write below AND this row is born processed,
         // because FeedbackLoopWorker (which polls processed_at IS NULL) is what writes it once the payment
         // confirms. shadow: recorded, written as today. off: no new keys.
-        // SERVICE_HAL_GATE_MODE=enforce skips it the same way. The reason recorded is the one that
-        // actually withheld the row, so a HAL skip never reads as a same-owner skip or vice versa.
         const ownerTag = owner.provider.meta.same_owner_settlement;
-        const halTag = hal.provider.meta.service_hal_gate;
-        const withheldBy = ownerTag?.counted === false ? ownerTag.would_not_count
-          : halTag?.counted === false ? halTag.would_not_count : null;
-        const skipOnChain = withheldBy !== null;
-        const notCounted = withheldBy ?? ownerTag?.would_not_count ?? halTag?.would_not_count ?? null;
+        const notCounted = ownerTag?.would_not_count ?? null;
+        const skipOnChain = ownerTag?.counted === false;
 
         const { data: insertedEvent, error: insertErr } = await db.from('repid_events').insert({
           subject_id: contract.provider_agent_id,
@@ -548,7 +554,7 @@ export async function applyServiceFulfilledDeltas(
           );
         } else if (skipOnChain) {
           console.log(
-            `[applyServiceFulfilledDeltas] onchain_skipped: ${notCounted} for contract ${contract.id} (${ownerTag?.counted === false ? 'SAME_OWNER_SETTLEMENT_MODE' : 'SERVICE_HAL_GATE_MODE'}=enforce); bridge row written closed`,
+            `[applyServiceFulfilledDeltas] onchain_skipped: ${notCounted} for contract ${contract.id} (SAME_OWNER_SETTLEMENT_MODE=enforce); bridge row written closed`,
           );
         } else {
           console.log(`[applyServiceFulfilledDeltas] repid_events bridge insert SUCCEEDED for contract ${contract.id}`);

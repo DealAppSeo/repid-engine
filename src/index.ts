@@ -1002,8 +1002,8 @@ if (!IS_TEST) {
     console.log(`[repid-engine] Environment: ${config.nodeEnv}`);
     // Loud at boot: whether same-owner A2A trades earn RepID (off/shadow = yes, enforce = no).
     console.log(`[same-owner-settlement] SAME_OWNER_SETTLEMENT_MODE resolved to '${sameOwnerSettlementMode()}'`);
-    // Loud at boot: whether a SERVICE_FULFILLED award needs a real, passing HAL verdict (enforce) or not (off/shadow).
-    console.log(`[service-hal-gate] SERVICE_HAL_GATE_MODE resolved to '${serviceHalGateMode()}'`);
+    // Loud at boot: whether SERVICE_FULFILLED rows record a shadow delivery check (no mode changes a number).
+    console.log(`[service-delivery-check] SERVICE_DELIVERY_CHECK_MODE resolved to '${deliveryCheckMode()}'`);
     // B16: the classify voters' daily canary (a known-true and a known-false claim per voter),
     // reported at GET /api/v1/classify/stats. CLASSIFY_CANARY=off disables it. Never blocks boot.
     startClassifyCanary();
@@ -1536,7 +1536,7 @@ import { startHitlReconciliationJob } from './services/hitl-reconciliation-job';
 import { startFailedReceiptSettler } from './services/failed-receipt-settler';
 import { DisputeResolutionWorker } from './workers/dispute-resolution-worker';
 import { sameOwnerSettlementMode } from './scoring/grounding';
-import { serviceHalGateMode } from './services/service-hal-gate';
+import { deliveryCheckMode } from './services/service-delivery-check';
 
 startValidationWorker();
 startHitlExpirationJob();
