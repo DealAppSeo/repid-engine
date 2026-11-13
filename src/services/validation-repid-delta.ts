@@ -7,6 +7,7 @@ import { factCheck, buildFactCheckProviders, factCheckOptsFromEnv } from '../hal
 import { maybeWriteOnChainReputation } from './onchain-reputation-trigger';
 import { ownerDistinctShadowEnabled, logOwnerDistinctShadow } from './owner-distinct-shadow';
 import { gateSettlementDeltas } from './same-owner-settlement';
+import { gateServiceHal } from './service-hal-gate';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 /**
@@ -331,9 +332,6 @@ export async function applyServiceFulfilledDeltas(
     provider: isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.provider,
     buyer: isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.buyer,
   });
-  const providerDelta = owner.provider.delta;
-  const buyerDelta = owner.buyer.delta;
-
   // Owner-distinct counterparty rule, SHADOW ONLY (services/owner-distinct-shadow.ts). Flag OFF:
   // nothing runs. ON: one log line of what the rule would do, not awaited, deltas untouched.
   if (ownerDistinctShadowEnabled()) void logOwnerDistinctShadow(contract);
@@ -349,6 +347,7 @@ export async function applyServiceFulfilledDeltas(
 
   let deliverable = '';
   let promptText = '';
+  let halErrored = false;
 
   try {
     deliverable = typeof payload.content === 'string' ? payload.content : '';
@@ -406,7 +405,15 @@ export async function applyServiceFulfilledDeltas(
       halErr?.message ?? String(halErr),
     );
     halOverride = undefined;
+    halErrored = true;
   }
+
+  // SERVICE_HAL_GATE_MODE (service-hal-gate.ts, D-144), applied after the same-owner gate:
+  // off = untouched, no new keys; shadow = tagged, untouched; enforce = 0 when HAL did not run or
+  // did not pass the deliverable. Withheld, never subtracted.
+  const hal = gateServiceHal({ provider: owner.provider.delta, buyer: owner.buyer.delta }, halOverride, undefined, halErrored);
+  const providerDelta = hal.provider.delta;
+  const buyerDelta = hal.buyer.delta;
 
   // The two halves of one transaction. Each side now records the other, so the relationship
   // survives in the ledger instead of having to be re-derived from contract_id afterwards —
@@ -421,6 +428,7 @@ export async function applyServiceFulfilledDeltas(
       role: 'provider',
       counterparty_agent_id: contract.buyer_agent_id,
       ...owner.provider.meta,
+      ...hal.provider.meta,
       answer_text: deliverable,
       prompt_text: promptText,
       // Default 'service_contract', NOT 'general' — put paid contract work in its
@@ -460,6 +468,7 @@ export async function applyServiceFulfilledDeltas(
       role: 'buyer',
       counterparty_agent_id: contract.provider_agent_id,
       ...owner.buyer.meta,
+      ...hal.buyer.meta,
       answer_text: deliverable,
       prompt_text: promptText,
       // Default 'service_contract', NOT 'general' — put paid contract work in its
@@ -502,9 +511,14 @@ export async function applyServiceFulfilledDeltas(
         // enforce a same/unknown-owner trade gets no inline write below AND this row is born processed,
         // because FeedbackLoopWorker (which polls processed_at IS NULL) is what writes it once the payment
         // confirms. shadow: recorded, written as today. off: no new keys.
+        // SERVICE_HAL_GATE_MODE=enforce skips it the same way. The reason recorded is the one that
+        // actually withheld the row, so a HAL skip never reads as a same-owner skip or vice versa.
         const ownerTag = owner.provider.meta.same_owner_settlement;
-        const notCounted = ownerTag?.would_not_count ?? null;
-        const skipOnChain = ownerTag?.counted === false;
+        const halTag = hal.provider.meta.service_hal_gate;
+        const withheldBy = ownerTag?.counted === false ? ownerTag.would_not_count
+          : halTag?.counted === false ? halTag.would_not_count : null;
+        const skipOnChain = withheldBy !== null;
+        const notCounted = withheldBy ?? ownerTag?.would_not_count ?? halTag?.would_not_count ?? null;
 
         const { data: insertedEvent, error: insertErr } = await db.from('repid_events').insert({
           subject_id: contract.provider_agent_id,
@@ -534,7 +548,7 @@ export async function applyServiceFulfilledDeltas(
           );
         } else if (skipOnChain) {
           console.log(
-            `[applyServiceFulfilledDeltas] onchain_skipped: ${notCounted} for contract ${contract.id} (SAME_OWNER_SETTLEMENT_MODE=enforce); bridge row written closed`,
+            `[applyServiceFulfilledDeltas] onchain_skipped: ${notCounted} for contract ${contract.id} (${ownerTag?.counted === false ? 'SAME_OWNER_SETTLEMENT_MODE' : 'SERVICE_HAL_GATE_MODE'}=enforce); bridge row written closed`,
           );
         } else {
           console.log(`[applyServiceFulfilledDeltas] repid_events bridge insert SUCCEEDED for contract ${contract.id}`);

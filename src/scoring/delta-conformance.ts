@@ -61,7 +61,7 @@ export interface RowVerdict {
 
 /** The spec table, rendered into the report so the doc and the check are one source. */
 export const DELTA_SPEC: Array<{ check: string; event: string; rule: string; source: string }> = [
-  { check: 'A2A_FULFILLED', event: 'SERVICE_FULFILLED', rule: `provider +${SERVICE_FULFILLED_DELTAS.provider}, buyer +${SERVICE_FULFILLED_DELTAS.buyer}; 0 if simulated or withheld as same-owner (SAME_OWNER_SETTLEMENT_MODE=enforce)`, source: 'services/validation-repid-delta.ts SERVICE_FULFILLED_DELTAS' },
+  { check: 'A2A_FULFILLED', event: 'SERVICE_FULFILLED', rule: `provider +${SERVICE_FULFILLED_DELTAS.provider}, buyer +${SERVICE_FULFILLED_DELTAS.buyer}; 0 if simulated, withheld as same-owner (SAME_OWNER_SETTLEMENT_MODE=enforce), or withheld because HAL did not run or did not pass the deliverable (SERVICE_HAL_GATE_MODE=enforce)`, source: 'services/validation-repid-delta.ts SERVICE_FULFILLED_DELTAS; services/service-hal-gate.ts' },
   { check: 'A2A_SATISFIED', event: 'SERVICE_SATISFIED', rule: `provider round(${SERVICE_SATISFIED_DELTA_BASE.provider}*s), buyer round(${SERVICE_SATISFIED_DELTA_BASE.buyer}*s), s in [0,1]; 0 if simulated or withheld as same-owner (SAME_OWNER_SETTLEMENT_MODE=enforce)`, source: 'validation-repid-delta.ts SERVICE_SATISFIED_DELTA_BASE; s clamped by routes/v1/contracts.ts deriveSatisfyScore' },
   { check: 'A2A_OUTCOME', event: 'SERVICE_OUTCOME', rule: `provider round(base*w), base good ${SERVICE_OUTCOME_BASE.good} / ok 0 / bad ${SERVICE_OUTCOME_BASE.bad}, w = clamp(rater_repid/1000, .25, 2)`, source: 'validation-repid-delta.ts SERVICE_OUTCOME_BASE + RATER_WEIGHT' },
   { check: 'A2A_DISPUTE', event: 'VALIDATION_FAILED / SERVICE_FULFILLED (metadata.verdict)', rule: `provider_at_fault: provider ${SERVICE_DISPUTE_DELTAS.provider_at_fault.provider}, buyer +${SERVICE_DISPUTE_DELTAS.provider_at_fault.buyer}; buyer_at_fault: provider +${SERVICE_DISPUTE_DELTAS.buyer_at_fault.provider}, buyer ${SERVICE_DISPUTE_DELTAS.buyer_at_fault.buyer}; no_fault: none`, source: 'validation-repid-delta.ts SERVICE_DISPUTE_DELTAS (workers/dispute-resolution-worker.ts)' },
@@ -138,6 +138,8 @@ function checkUnverified(row: ScoreEventRow): RowVerdict | null {
 
 /** SAME_OWNER_SETTLEMENT_MODE=enforce withheld this settlement row (services/same-owner-settlement.ts): it earns 0. */
 const withheldSameOwner = (m: Record<string, any>): boolean => m.same_owner_settlement?.counted === false;
+/** SERVICE_HAL_GATE_MODE=enforce withheld this SERVICE_FULFILLED row (services/service-hal-gate.ts): it earns 0. */
+const withheldByHal = (m: Record<string, any>): boolean => m.service_hal_gate?.counted === false;
 
 function checkPrimary(row: ScoreEventRow): RowVerdict {
   const m = row.metadata ?? {};
@@ -178,6 +180,7 @@ function checkPrimary(row: ScoreEventRow): RowVerdict {
       if (role !== 'provider' && role !== 'buyer') return v(row, 'A2A_FULFILLED', 'NOT_CHECKED', 'no role in metadata (pre-#605 or reconciliation row)');
       if (row.delta === 0 && row.contract?.simulated === true) return v(row, 'A2A_FULFILLED', 'CONFORMS', 'simulated contract earns 0', 0);
       if (withheldSameOwner(m)) return eq(row, 'A2A_FULFILLED', 0, `fulfilled ${role} withheld: ${m.same_owner_settlement.would_not_count}`);
+      if (withheldByHal(m)) return eq(row, 'A2A_FULFILLED', 0, `fulfilled ${role} withheld by HAL gate: ${m.service_hal_gate.would_not_count}`);
       return eq(row, 'A2A_FULFILLED', SERVICE_FULFILLED_DELTAS[role as 'provider' | 'buyer'], `fulfilled ${role}`);
     }
     case 'SERVICE_SATISFIED': {
