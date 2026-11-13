@@ -116,7 +116,24 @@ function escapeRawControls(json: string): string {
 
 type MakerFiles = Array<{ path: string; content: string }>;
 
-/** The model's files or why not. Tolerates a code fence; refuses any path outside the lease. */
+/** Why a refused path is outside the lease, from the path alone. A closed set, so a record can carry it without the path. */
+export type LeasePathCode = 'same_after_normalize' | 'escapes_root' | 'other_path';
+
+/**
+ * A label for a path the lease already refused; it admits nothing. Any `..` part or an absolute path is
+ * escapes_root, checked first and never resolved, so `..\x` and `tests/../x` are never called the same as `x`.
+ * Otherwise `./`, backslashes and repeated slashes are dropped and the result compared with the lease.
+ */
+export function leasePathCode(path: string, allowed: readonly string[]): LeasePathCode {
+  const parts = path.split(/[\\/]/);
+  if (/^([\\/]|[A-Za-z]:)/.test(path) || parts.includes('..')) return 'escapes_root';
+  return allowed.includes(parts.filter((p) => p !== '' && p !== '.').join('/')) ? 'same_after_normalize' : 'other_path';
+}
+
+/**
+ * The model's files or why not. Tolerates a code fence; refuses any path outside the lease by exact match, `./x`
+ * included. The lane's code comes before the model's path in the reason, so a crafted path cannot forge the code.
+ */
 export function readMakerFiles(text: string, allowed: readonly string[]): { files: MakerFiles } | { reason: string } {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -131,7 +148,7 @@ export function readMakerFiles(text: string, allowed: readonly string[]): { file
   if (!Array.isArray(files) || files.length === 0) return { reason: 'no files in the reply' };
   for (const f of files) {
     if (typeof f?.path !== 'string' || typeof f?.content !== 'string') return { reason: 'a file is missing its path or content' };
-    if (!allowed.includes(f.path)) return { reason: `${f.path.slice(0, 120)} is outside the lease` };
+    if (!allowed.includes(f.path)) return { reason: `outside the lease (${leasePathCode(f.path, allowed)}): ${f.path.slice(0, 120)}` };
   }
   return { files: files as MakerFiles };
 }
