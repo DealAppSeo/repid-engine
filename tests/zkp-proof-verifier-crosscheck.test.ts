@@ -133,7 +133,13 @@ describe('cross-crate: a SYNTHETIC range-check proof through @hyperdag/proof-ver
     expect(r.error).toMatch(/InvalidOpeningArgument|InvalidPowWitness/);
   });
 
-  it('REJECTS a substituted agent_id — the subject is bound in the STARK', () => {
+  // This id is rejected, but agent_id is bound ONLY through the Fiat-Shamir transcript: it is in no
+  // constraint, and the trace is one row, so every committed polynomial is constant and the openings
+  // hold at any challenge. What is left is the 8-bit query proof-of-work, so about 1 in 256 OTHER
+  // agent ids also verify the same proof bytes (P-15, 2026-11-13: 5 of 2,048 seeded ids on two real
+  // proofs; `scripts/zkp/zk-truth-table.ts` re-measures it). score and threshold are in constraints
+  // and are bound. This title used to say "the subject is bound in the STARK", which overstated it.
+  it('REJECTS this substituted agent_id (binding is transcript-only, about 8 bits)', () => {
     const r = verify(PROOF_B64, { ...HONEST, agent_id: '00000000-0000-4000-8000-0000000000bb' });
     expect(r.verified).toBe(false);
     expect(r.error).toMatch(/InvalidOpeningArgument|InvalidPowWitness/);
