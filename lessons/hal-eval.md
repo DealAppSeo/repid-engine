@@ -1,4 +1,4 @@
-<!-- triggers: hal f1 provider quorum corpus eval evaluation hallucination veto classify accuracy precision recall calibration ruler -->
+<!-- triggers: hal f1 provider quorum corpus eval evaluation hallucination veto classify accuracy precision recall calibration ruler score scoring known-answer answer-key reveal commitment rehearsal -->
 # HAL / evaluation / measurement lessons
 
 Full narratives behind LESSONS §4 and §8. Appended when a brief concerns HAL or measurement.
@@ -25,3 +25,28 @@ because a provider key died must say *that*, not report a quality regression. Us
 interval for **gating** (widening is the conservative direction); never publish it as a
 calibrated probability — reputation agents adapt, so exchangeability is violated exactly on the
 adversarial cases that matter.
+
+## Score the whole set, or void the score (§7, 2026-11-14)
+A score over a set of items is only honest if the set was fixed before anyone answered and every
+item in it is either scored or voids the score. If anything can make an item drop out, whoever can
+trigger the drop wins whenever that item would have cost them: an exclusion becomes cheaper than
+the penalty it avoids.
+
+On #1544 (grading T12 known-answer work against a commit-reveal answer key) three reviews found
+three doors of the same shape within an hour:
+- **Strix:** deleting the stored commitment from a task row made the task drop out instead of
+  costing −(1 + confidence).
+- **Grok R2-1:** blanking the result after grading made the wrong answer "unscorable".
+- **Grok R2-2:** a reveal file could simply leave the wrong answers out.
+
+The first fix closed one door and did not generalise, which is why the second review found two more.
+What closed all three:
+- the set's hash is published before dispatch;
+- the reveal must cover every dispatched task;
+- each item is bound to the exact reply and claimer that were graded;
+- ANY rejection makes the run "not clean", with nothing settled.
+
+**Apply:** before fixing a finding about a score, list every path that removes an item from the
+scored set (reject, skip, not scorable, filter, missing entry, unpaged read) and ask who can trigger
+it and whether they gain. Fix them in one change, with a test per path that goes red when its check
+is removed.
