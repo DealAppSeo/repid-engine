@@ -36,9 +36,9 @@ A half-wired mechanism turns a known gap into false coverage — you stop lookin
 *Proof:* `Cannot find module 'pg'` was a worktree with no `npm install`; ~150 "failures" were Windows-only paths, all green on CI. [lessons/schema.md]
 **Apply:** separate **ENV/CONFIG** from **REAL** on a checkout without your change. An undiagnosed red never lands; a real failure is never called ENV.
 
-## 7. A measurement without its ruler is not a result
-*Proof:* HAL F1 quoted at 0.34 / 0.74 / 0.886 / 0.890 — four rulers, no answer; on 2026-08-09 F1 "fell" only because providers ran out of credit mid-run. [lessons/hal-eval.md]
-**Apply:** state "F1 = x on corpus v1 @ `hash` at N families", with per-provider failures beside it. Never compare across rulers.
+## 7. A score needs a ruler fixed first, scored whole
+*Proof:* HAL F1 at 0.34 / 0.74 / 0.886 / 0.890: four rulers; on #1544 reviewers found 3 ways a wrong answer escaped its penalty. [lessons/hal-eval.md]
+**Apply:** "F1 = x on corpus v1 @ `hash` at N families", provider failures beside it; never compare rulers. Hash the set first; score all of it or void it.
 
 ## 8. A new input channel inherits the trust of the channel it arrives on
 *Proof:* recalled memory arrives as a user-role turn, which the provenance auditor counts as sourced evidence; installing it would have disabled that auditor.
