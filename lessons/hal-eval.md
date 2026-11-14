@@ -1,16 +1,16 @@
-<!-- triggers: hal f1 provider quorum corpus eval evaluation hallucination veto classify accuracy precision recall calibration ruler score scoring known-answer answer-key reveal commitment rehearsal -->
+<!-- triggers: hal f1 provider quorum corpus eval evaluation hallucination veto classify accuracy precision recall calibration ruler known-answer answer-key commitment rehearsal -->
 # HAL / evaluation / measurement lessons
 
-Full narratives behind LESSONS §4 and §8. Appended when a brief concerns HAL or measurement.
+Full narratives behind LESSONS §3 and §7. Appended when a brief concerns HAL or measurement.
 
-## Evidence outranks the label (§4)
+## Evidence outranks the label (§3)
 `event_type` is caller-supplied, so it can never *upgrade* trust — an agent picks its own label.
 Re-classifying the RepID ledger on the hardest-to-forge artifact present (contract, on-chain
 attestation, ZK proof, settled economic impact) showed **97.5% of score gained is externally
 verifiable**, which only became knowable by ignoring the labels. Classify on the artifact, never
 on the self-reported field.
 
-## A measurement without its ruler is not a result (§8)
+## A measurement without its ruler is not a result (§7)
 HAL F1 has been quoted at **0.34 / 0.74 / 0.886 / 0.890** — four different corpora and
 configurations, so "did HAL improve?" has no answer as posed. On 2026-08-09 F1 appeared to fall
 0.908 → 0.877; the cause was **providers running out of credit mid-run**, not a quality change —
