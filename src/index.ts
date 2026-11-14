@@ -73,6 +73,7 @@ import stakeRouter from './routes/stake';
 import { llmRouter } from './routes/route';
 import { adminCapsRouter } from './routes/admin-caps';
 import { adminFlagsRouter } from './routes/admin-flags';
+import { opsFlagsRouter } from './routes/ops-flags';
 import discoveryRouter from './routes/discovery';
 import agentCardRouter from './routes/agent-card';
 import { createAgentsOnchainRouter } from './routes/agents-onchain';
@@ -780,6 +781,8 @@ app.use('/api/v1/escalation', escalationRouter);
 app.use('/api/v1', repidAdminRouter);
 app.use('/api/v1/admin/caps', adminCapsRouter);
 app.use('/api/v1/admin/flags', adminFlagsRouter);
+// Every registered switch's state, for an operator key (REPID_API_KEYS tier ops). Read-only.
+app.use('/api/v1/ops', opsFlagsRouter);
 // Backlog item 3 (PROOF_CARRYING_RETRIEVAL_v0 P2) — stateless verifier endpoint for a
 // ProofCarryingAnswer (patent #1 answer-binding). Authed like other post-authMiddleware
 // routes; the caller supplies memory_root + citations, no server-side memory access needed.

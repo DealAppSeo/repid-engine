@@ -63,10 +63,25 @@ const BOOL_KEYS = [
   'HAL_PENALTY_REQUIRES_QUORUM',
 ] as const;
 
-/** All keys the layer looks up in one batched query. */
-const ALL_KEYS = [...BOOL_KEYS, 'HAL_STRICTNESS'] as const;
+/**
+ * All keys the layer looks up in one batched query. EXPORTED so
+ * `routes/ops-flags.ts` reports exactly the keys this layer resolves, from this
+ * list rather than a second copy of it.
+ */
+export const ALL_KEYS = [...BOOL_KEYS, 'HAL_STRICTNESS'] as const;
 
 export type HalConfigKey = (typeof ALL_KEYS)[number];
+
+/**
+ * Outcome of the repid_config read behind one getHalConfig() call.
+ * - `ok`: rows came from a successful read (fresh, or cached within the TTL).
+ * - `failed`: the latest read failed. The values fall back to env/default, or to
+ *   a stale cache. A row could be overriding them, so a reporter must say
+ *   "unknown" for these keys, not repeat the fallback values as if they were read.
+ * - `disabled`: HAL_CONFIG_FROM_DB=false. repid_config is not read at all, so
+ *   env/default is the real resolution.
+ */
+export type HalConfigDbRead = 'ok' | 'failed' | 'disabled';
 
 export interface HalConfig {
   /** Per-provider enable flags for the strictness-2 fact-check quorum. */
@@ -78,6 +93,8 @@ export interface HalConfig {
   penaltyRequiresQuorum: boolean;
   /** Where each resolved value came from (for loud logging / debugging). */
   source: Record<HalConfigKey, 'db' | 'env' | 'default'>;
+  /** Whether repid_config was actually read for this resolution. See HalConfigDbRead. */
+  dbRead: HalConfigDbRead;
 }
 
 // ---- defaults (must mirror the pre-existing env-default behavior exactly) ----
@@ -118,14 +135,18 @@ interface CacheEntry {
   fetchedAt: number;
 }
 let cache: CacheEntry | null = null;
-let inflight: Promise<Record<string, string>> | null = null;
+interface LoadResult {
+  rows: Record<string, string>;
+  read: HalConfigDbRead;
+}
+let inflight: Promise<LoadResult> | null = null;
 
 /** Fetch (or reuse cached) repid_config rows for HAL keys. Fail-safe. */
-async function loadRows(): Promise<Record<string, string>> {
-  if (!configFromDbEnabled()) return {};
+async function loadRows(): Promise<LoadResult> {
+  if (!configFromDbEnabled()) return { rows: {}, read: 'disabled' };
 
   const now = Date.now();
-  if (cache && now - cache.fetchedAt < TTL_MS) return cache.rows;
+  if (cache && now - cache.fetchedAt < TTL_MS) return { rows: cache.rows, read: 'ok' };
 
   // Coalesce concurrent refreshes into one query.
   if (inflight) return inflight;
@@ -142,13 +163,12 @@ async function loadRows(): Promise<Record<string, string>> {
         if (r && typeof r.key === 'string' && typeof r.value === 'string') rows[r.key] = r.value;
       }
       cache = { rows, fetchedAt: Date.now() };
-      return rows;
+      return { rows, read: 'ok' as const };
     } catch (e) {
       // FAIL SAFE: never crash HAL. Prefer a stale cache; else empty (→ env/default).
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[hal-config] repid_config read failed, falling back to env/default: ${msg}`);
-      if (cache) return cache.rows;
-      return {};
+      return { rows: cache ? cache.rows : {}, read: 'failed' as const };
     } finally {
       inflight = null;
     }
@@ -186,7 +206,7 @@ function resolveBool(
  * Never throws — degrades to env/default on any DB error.
  */
 export async function getHalConfig(): Promise<HalConfig> {
-  const rows = await loadRows();
+  const { rows, read: dbRead } = await loadRows();
   const source = {} as Record<HalConfigKey, 'db' | 'env' | 'default'>;
 
   const providers = {} as Record<(typeof PROVIDER_ENABLE_KEYS)[number], boolean>;
@@ -223,6 +243,7 @@ export async function getHalConfig(): Promise<HalConfig> {
     decisionRequiresQuorum: dq.value,
     penaltyRequiresQuorum: pq.value,
     source,
+    dbRead,
   };
 }
 

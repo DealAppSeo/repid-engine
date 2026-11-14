@@ -41,7 +41,9 @@ const router = Router();
 
 // Same resolution as routes/health.ts — Railway injects RAILWAY_GIT_COMMIT_SHA
 // at build time for GitHub-linked services. Constant for the life of a deploy.
-const DEPLOYED_COMMIT: string =
+// Exported for routes/ops-flags.ts, which imports it from here rather than make
+// a third copy: this module imports nothing that can fail, routes/health.ts does.
+export const DEPLOYED_COMMIT: string =
   process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || 'unknown';
 
 /**

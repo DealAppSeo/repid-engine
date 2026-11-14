@@ -31,6 +31,9 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * route, and none of those 5 are money/chain-write/breaker-affecting.
  *
  * Deliberately smaller than "all 111" — that is a larger, separate pass.
+ * That pass now exists as GET /api/v1/ops/flags (routes/ops-flags.ts): every
+ * registered switch, env value only, no per-flag notes. This route stays the
+ * resolved, annotated view of the gates that move money or scores.
  * ENGINE_LLM_PROXY is named in CLAUDE.md's hard lines but is excluded here: it is
  * not read via process.env anywhere in src/ today (grep confirms only a comment
  * in routing-record.ts describes a future flip), so reporting it would publish a
