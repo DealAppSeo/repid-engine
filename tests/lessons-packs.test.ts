@@ -77,6 +77,8 @@ describe('LESSONS domain packs', () => {
       it(`pack "${p.name}" fits the ${PACKS_MAX}-char budget on its own, with nothing left out`, () => {
         const sel = selectPacks([p], REPRESENTATIVE[p.name]);
         expect(sel.omitted).toEqual([]);
+        // An empty `omitted` alone would also hold if sections vanished: every section must be INCLUDED.
+        expect(sel.included).toHaveLength(splitSections(p.body).sections.length);
         expect(sel.text.length).toBeLessThanOrEqual(PACKS_MAX);
       });
     }
@@ -160,6 +162,13 @@ describe('LESSONS domain packs', () => {
       const sel = selectPacks([P1, P2], 'beta gamma and a bit of alpha', 700);
       expect(sel.included.map((x: any) => x.pack)).toEqual(['two']);
       expect(sel.omitted.map((x: any) => x.pack)).toEqual(['one']);
+    });
+
+    it('a heading with no text still gets a visible name, so the footer never lists a blank', () => {
+      const P = sectioned('pack', [['', 'x'.repeat(600)], ['Named', 'y'.repeat(600)]]);
+      const sel = selectPacks([P], '', 700);
+      expect([...sel.included, ...sel.omitted].map((s: any) => s.title)).toEqual(expect.arrayContaining(['(untitled section 1)', 'Named']));
+      for (const o of sel.omitted) expect(o.title.trim()).not.toBe('');
     });
 
     it('splitSections keeps the intro apart and never splits a section', () => {

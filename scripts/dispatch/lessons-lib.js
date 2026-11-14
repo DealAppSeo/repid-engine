@@ -89,7 +89,8 @@ function splitSections(body) {
   let cur = null;
   for (const line of lines) {
     if (/^## /.test(line)) {
-      cur = { title: line.replace(/^##\s+/, '').trim(), lines: [line] };
+      // A heading with no text would be listed in the footer as a blank name: name it instead.
+      cur = { title: line.replace(/^##\s+/, '').trim() || `(untitled section ${sections.length + 1})`, lines: [line] };
       sections.push(cur);
     } else if (cur) cur.lines.push(line);
     else intro.push(line);
