@@ -32,7 +32,7 @@ item in it is either scored or voids the score. If anything can make an item dro
 trigger the drop wins whenever that item would have cost them: an exclusion becomes cheaper than
 the penalty it avoids.
 
-On #1544 (grading T12 known-answer work against a commit-reveal answer key) three reviews found
+On #1544 (grading T12 known-answer work against a commit-reveal answer key) two reviews found
 three doors of the same shape within an hour:
 - **Strix:** deleting the stored commitment from a task row made the task drop out instead of
   costing −(1 + confidence).
