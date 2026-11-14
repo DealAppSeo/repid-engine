@@ -56,7 +56,7 @@ const mockDb = {
 jest.mock('../src/db', () => ({ db: mockDb }));
 jest.mock('../scripts/liveness-probes/_shared', () => ({ getDb: () => mockDb }));
 
-import { __setBreakerRead, breaker, BREAKER_KEYS, type BreakerKey, type BreakerRead } from '../src/middleware/circuit-breaker';
+import { __setBreakerRead, breaker, isTripped, BREAKER_KEYS, type BreakerKey, type BreakerRead } from '../src/middleware/circuit-breaker';
 import { insertScoreEvent } from '../src/scoring/score-event-writer';
 import { updateRepId } from '../src/engine/repid-update';
 import { runScoreEvent, applyValidationEvent } from '../src/scoring/pipeline';
@@ -97,6 +97,13 @@ describe('cb_disable_score_writes', () => {
   it('insertScoreEvent: tripped → throws, nothing inserted', async () => {
     __setBreakerRead(trip('cb_disable_score_writes'));
     await expect(insertScoreEvent(MOVING)).rejects.toThrow(/circuit_breaker_open: cb_disable_score_writes/);
+    expect(mockInserted).toEqual([]);
+  });
+
+  it('a fail-open status read (isTripped) does not let a later write through', async () => {
+    __setBreakerRead(unreadable('cb_disable_score_writes'));
+    expect(await isTripped('cb_disable_score_writes')).toBe(false); // status read fails open
+    await expect(insertScoreEvent(MOVING)).rejects.toThrow(/circuit_breaker_unreadable/);
     expect(mockInserted).toEqual([]);
   });
 

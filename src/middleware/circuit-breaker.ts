@@ -113,7 +113,8 @@ export async function isTripped(key: BreakerKey): Promise<boolean> {
   const { data, error } = await readRow(key);
   if (error || !data) {
     // Fail OPEN: status reads only. Write guards use assertBreakerClosed, which fails closed.
-    cache[key] = { value: false, at: now };
+    // NOT cached: the cache is shared, so a cached fail-open `false` would let assertBreakerClosed
+    // pass a write for 5s without ever reading the switch.
     return false;
   }
   const value = String((data as any).value).toLowerCase() === 'true';
