@@ -21,6 +21,7 @@
 import { randomUUID } from 'crypto';
 import { Wallet, verifyTypedData } from 'ethers';
 import { getDb } from '../liveness-probes/_shared';
+import { assertBreakerClosed } from '../../src/middleware/circuit-breaker';
 import { BehaviorProfile, AgentDecision, DecisionPayload, TradeOutcome, MockAgentState } from './types';
 
 const FORBIDDEN_UUIDS = new Set([
@@ -103,6 +104,8 @@ export class MockAgent {
 
   /** Insert a synthetic trade row + return its id. */
   async attemptTrade(d: DecisionPayload): Promise<TradeOutcome> {
+    // One of the two writers of trade_execution_log in this repo; the switch guards both.
+    await assertBreakerClosed('cb_disable_trade_execution');
     const db = getDb();
     // Synthetic pnl for EXECUTE based on profile (tests +5/+15/-3/-10/-20 ladder)
     let pnl: number | null = null;

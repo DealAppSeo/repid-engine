@@ -17,6 +17,7 @@
  */
 import * as crypto from 'crypto';
 import { db } from '../db';
+import { assertBreakerClosed } from '../middleware/circuit-breaker';
 import { halService } from '../hal/service';
 import { resolveHalStrictness } from '../scoring/pipeline';
 import { settleX402Payment } from '../services/x402-real-settler';
@@ -78,6 +79,8 @@ interface RewardResult { event_id: number | null; demoted: boolean; reasons: str
  * ponytail: demotion is recorded on the proof row, not a separate shadow table — upgrade to repid_experimental_events if that evidence needs its own surface.
  */
 async function applyRepidReward(agent: string, delta: number, meta: any): Promise<RewardResult> {
+  // Kill switch (fail closed). See middleware/circuit-breaker.ts.
+  await assertBreakerClosed('cb_disable_score_writes');
   const fence = fenceServiceAward({
     hal_decision: fenceHalDecision(meta?.hal_verdict ?? null),
     independence: 'unknown', // harness establishes none (same-controller Trinity agents); never 'independent'

@@ -21,6 +21,7 @@ import 'dotenv/config';
 import { MockAgent } from '../mock-agent';
 import { repidEarning } from '../../../src/services/repid-earning';
 import { db } from '../../../src/db';
+import { assertBreakerClosed } from '../../../src/middleware/circuit-breaker';
 
 (async () => {
   const agent = new MockAgent(`mock-aggressive-${Date.now()}`, 'aggressive');
@@ -37,6 +38,8 @@ import { db } from '../../../src/db';
   ];
 
   for (const s of pnlScenarios) {
+    // The other writer of trade_execution_log in this repo (see mock-agent.ts attemptTrade).
+    await assertBreakerClosed('cb_disable_trade_execution');
     const { data, error } = await db.from('trade_execution_log').insert({
       agent_name: agent.state.agent_name, decision: 'EXECUTE', asset: 'BTC', pair: 'BTC/USD',
       action: 'BUY', amount_usd: s.amount, pnl_realized: s.pnl, execution_mode: 'paper',

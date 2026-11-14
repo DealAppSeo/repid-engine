@@ -62,6 +62,8 @@ Expected (pre-wake):
 - `cb_disable_score_writes`      NORMAL
 - `cb_freeze_swarm_responses`    NORMAL
 
+> **Corrected 2026-11-14.** Two of these rows do not do what their names say. `cb_freeze_swarm_responses` is read by nothing: the trinity-* agents live in another repo and never consult it, so TRIPPED freezes nothing. `cb_disable_trade_execution` guards only two mock-harness scripts; no service in this repo writes `trade_execution_log`. `src/middleware/circuit-breaker.ts` names, per switch, the code that enforces it.
+
 Failure: a breaker is in an unexpected state. Reconcile via `npm run cb:resume -- <key>` or `npm run cb:kill -- <key>`. **Do not proceed with an unverified breaker state.**
 
 ### Gate 5 — Liveness probes baseline
@@ -152,7 +154,7 @@ No assistant, agent, or script proceeds without this line filled.
 2. For SOPHIA, VERITAS, SHOFET, CHESED in order:
    - `curl <trinity-url>/healthz`
    - Expect 200 with `{"status":"ok","agent":"<NAME>","version":"<X>"}` shape.
-3. If any agent returns 503 (because `cb_freeze_swarm_responses` is TRIPPED) — that's expected if you tripped it pre-wake. If you didn't, **investigate**.
+3. If any agent returns 503, **investigate**. (This step used to say a 503 was expected when `cb_freeze_swarm_responses` is TRIPPED. It never was: no agent reads that switch.)
 4. After all 4 return 200, write a single row to `trinity_agent_logs` per agent with `event_type='HEARTBEAT'` to confirm they can write upstream.
 5. Probe again: `npm run probe:trinity` should flip from RED → AMBER (heartbeats are within 24h).
 
@@ -184,7 +186,7 @@ No assistant, agent, or script proceeds without this line filled.
 
 **Pre-condition:** Phase C succeeded. Sean re-confirms `GO`.
 
-1. Flip `cb_freeze_swarm_responses` OFF if it was on:
+1. Flip `cb_freeze_swarm_responses` OFF if it was on (housekeeping only; nothing reads it):
    ```powershell
    npm run cb:resume -- cb_freeze_swarm_responses
    ```
@@ -228,15 +230,16 @@ When ready:
 If anything looks wrong at any phase:
 
 1. **Stop typing commands immediately.** Take a screenshot of the state.
-2. Trip all 6 circuit breakers:
+2. Halt the swarm and every worker loop with `trinity_system_config.emergency_halt` (the runbook SQL is in the header of `src/services/emergency-halt.ts`). `cb_freeze_swarm_responses` does not stop the swarm.
+3. Trip all 6 circuit breakers (score writes, proofs, on-chain writes and x402 settlement are enforced; see `src/middleware/circuit-breaker.ts`):
    ```powershell
    foreach ($k in 'cb_disable_x402_settlements','cb_disable_zkp_proofs','cb_disable_onchain_writes','cb_disable_trade_execution','cb_disable_score_writes','cb_freeze_swarm_responses') {
      npm run cb:kill -- $k
    }
    ```
-3. Re-run `npm run capture:post-wakeup` to capture the bad state.
-4. Investigate the screenshot, the post-wakeup capture, and the relevant logs.
-5. Do NOT re-attempt the same phase the same day. Re-baseline tomorrow with a fresh probe run.
+4. Re-run `npm run capture:post-wakeup` to capture the bad state.
+5. Investigate the screenshot, the post-wakeup capture, and the relevant logs.
+6. Do NOT re-attempt the same phase the same day. Re-baseline tomorrow with a fresh probe run.
 
 ---
 

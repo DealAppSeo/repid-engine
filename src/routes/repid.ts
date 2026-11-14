@@ -495,7 +495,8 @@ repidAdminRouter.post('/prove-repid', async (req: Request, res: Response) => {
       timestamp,
     });
   } catch (e) {
-    // LOCAL_MODE only: no proof and no HMAC stand-in, so no log row and no webhook either.
+    // LOCAL_MODE with no prover, or cb_disable_zkp_proofs tripped/unreadable: no proof and no HMAC
+    // stand-in, so no log row and no webhook either.
     if (e instanceof ProverUnavailableError) return res.status(503).json({ status: e.status, error: e.message });
     throw e;
   }

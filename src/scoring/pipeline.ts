@@ -63,6 +63,7 @@ import {
 import { resolveIssuerIdentity } from './issuer-identity';
 import { shadowProofTier } from './proof-tier-shadow'; // item 11 shadow — inert unless PROOF_TIER_SHADOW_ENABLED=true
 import { proverBaseUrl, proverAuthHeaders, proverRedirect } from '../config/prover';
+import { assertBreakerClosed, breakerAllows } from '../middleware/circuit-breaker';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -324,6 +325,9 @@ async function fetchLatestMemoryRoot(agentId: string): Promise<string | null> {
 export async function runScoreEvent(
   input: ScoreEventInput
 ): Promise<ScoreEventResult> {
+  // Kill switch: refuse before any read or write (fail closed). See middleware/circuit-breaker.ts.
+  await assertBreakerClosed('cb_disable_score_writes');
+
   // 1. Idempotency check.
   if (input.idempotency_key) {
     const existing = await loadExistingByKey(input.idempotency_key);
@@ -611,8 +615,9 @@ export async function runScoreEvent(
       '[scoring/pipeline] proof-enqueue filter: SKIP HAL_SCORE_EVENT churn proof (enforce mode)'
     );
   }
-  // No reachable prover (LOCAL_MODE allows loopback only) = no proof: no id, no queue row, no request.
-  const prover = proverBaseUrl();
+  // No reachable prover (LOCAL_MODE allows loopback only), or cb_disable_zkp_proofs tripped = no
+  // proof: no id, no queue row, no request. The score is still written.
+  const prover = (await breakerAllows('cb_disable_zkp_proofs')) ? proverBaseUrl() : null;
   const triggerProof = rawTriggerProof && !proofFilter.skip && prover !== null;
   const zk_proof_id = triggerProof ? crypto.randomUUID() : null;
 
@@ -952,6 +957,9 @@ export async function applyValidationEvent(
   metadata: Record<string, any> = {},
   halOverride?: { hal_score: number; hal_decision: HALDecision; hal_signals?: any }
 ) {
+  // Kill switch: refuse before any read or write (fail closed). See middleware/circuit-breaker.ts.
+  await assertBreakerClosed('cb_disable_score_writes');
+
   const agent = await loadAgent(agent_id);
   if (!agent) throw new Error(`Agent not found: ${agent_id}`);
 
@@ -964,8 +972,9 @@ export async function applyValidationEvent(
     eventType: event_type,
   });
 
-  // No reachable prover (LOCAL_MODE allows loopback only) = no proof: no id, no queue row, no request.
-  const prover = proverBaseUrl();
+  // No reachable prover (LOCAL_MODE allows loopback only), or cb_disable_zkp_proofs tripped = no
+  // proof: no id, no queue row, no request. The score is still written.
+  const prover = (await breakerAllows('cb_disable_zkp_proofs')) ? proverBaseUrl() : null;
   const triggerProof = prover !== null && (await shouldTriggerProof(agent_id, Math.abs(delta)));
   const zk_proof_id = triggerProof ? crypto.randomUUID() : null;
 

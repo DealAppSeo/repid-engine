@@ -401,7 +401,8 @@ router.post('/batch/prove', async (req: Request, res: Response) => {
       return { ...r, proof: result.proof, proof_source: result.proof_source, timestamp };
     }));
   } catch (e) {
-    // LOCAL_MODE only: one unavailable proof fails the batch; no HMAC stand-ins are returned.
+    // LOCAL_MODE with no prover, or cb_disable_zkp_proofs tripped/unreadable: one unavailable proof
+    // fails the batch; no HMAC stand-ins are returned.
     if (e instanceof ProverUnavailableError) return res.status(503).json({ status: e.status, error: e.message });
     throw e;
   }

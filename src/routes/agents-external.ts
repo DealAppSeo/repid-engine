@@ -32,6 +32,7 @@ import { publicIdentityFields } from '../identity/public-fields';
 import { checkAndRecordDedup, __resetLocalDedupForTests } from '../services/register-dedup';
 import { trustedClientIp } from '../middleware/client-ip';
 import { proverBaseUrl, proverAuthHeaders, proverRedirect } from '../config/prover';
+import { breaker, breakerAllows } from '../middleware/circuit-breaker';
 import { deliverSignedWebhook } from '../services/webhook-delivery';
 
 const router = Router();
@@ -286,9 +287,10 @@ router.post('/register', async (req: Request, res: Response) => {
       }
 
       const jobId = crypto.randomUUID();
-      const zkpUrl = proverBaseUrl();
-      // LOCAL_MODE with no loopback prover: proof_status says 'unavailable'; nothing is sent.
-      if (!zkpUrl) throw new Error('no prover reachable (LOCAL_MODE calls a loopback prover only)');
+      const zkpUrl = (await breakerAllows('cb_disable_zkp_proofs')) ? proverBaseUrl() : null;
+      // LOCAL_MODE with no loopback prover, or cb_disable_zkp_proofs tripped: proof_status says
+      // 'unavailable'; nothing is sent.
+      if (!zkpUrl) throw new Error('no prover reachable (LOCAL_MODE loopback only, or cb_disable_zkp_proofs tripped)');
       const { error: queueErr } = await db.from('repid_proof_queue').insert({
         job_id: jobId,
         agent_id: agentId,
@@ -469,7 +471,7 @@ router.get('/:id/card', async (req: Request, res: Response) => {
 });
 
 // POST /:id/score-event — per-agent bearer auth, full v11 reward pipeline
-router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Request, res: Response) => {
+router.post('/:id/score-event', requireApiKey(['score_event']), breaker('cb_disable_score_writes'), async (req: Request, res: Response) => {
   const agentId = String(req.params.id);
   if ((req as any).agent_id !== agentId) {
     return res.status(403).json({ error: 'API key agent_id mismatch' });
@@ -910,8 +912,9 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
     }
     await db.from('repid_agents').update(agentUpdate).eq('id', agentId);
 
-    // Async proof generation stub. No reachable prover (LOCAL_MODE: loopback only) = proof_job_id null.
-    const prover = proverBaseUrl();
+    // Async proof generation stub. No reachable prover (LOCAL_MODE: loopback only), or
+    // cb_disable_zkp_proofs tripped = proof_job_id null.
+    const prover = (await breakerAllows('cb_disable_zkp_proofs')) ? proverBaseUrl() : null;
     const proof_job_id = prover ? crypto.randomUUID() : null;
     if (prover) {
       await db.from('repid_proof_queue').insert({

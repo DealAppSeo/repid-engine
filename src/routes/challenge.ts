@@ -6,6 +6,7 @@ import { checkAndAwardBadges } from '../engine/badges';
 import { logHalProductionEvent, hashPrompt } from '../engine/production-logger';
 import { extractHALSignals } from '../hal/lib/extract';
 import { insertScoreEvent } from '../scoring/score-event-writer';
+import { breaker } from '../middleware/circuit-breaker';
 import { scoreEventGuardEnforced } from './score-event-guard';
 
 const router = Router();
@@ -17,7 +18,8 @@ const challengeRateLimit = new Map<string, { count: number; resetAt: number }>()
 
 // POST /challenge — file a constitutional challenge between two agents/humans.
 // This is the core demo endpoint for April 22.
-router.post('/challenge', async (req: Request, res: Response) => {
+// cb_disable_score_writes: 503 before any work. This route writes current_repid itself.
+router.post('/challenge', breaker('cb_disable_score_writes'), async (req: Request, res: Response) => {
   const startTime = Date.now();
   const { challengerId, defenderId, claim, evidenceText, certaintyAtClaim } = req.body ?? {};
 
