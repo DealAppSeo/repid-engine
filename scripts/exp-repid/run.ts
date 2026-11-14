@@ -14,11 +14,13 @@
  *
  *   npm run exp-repid:reveal -- <reveal.json> [--settle] [--json] [--out summary.json]
  *       Grades known-answer work whose key was COMMITTED before dispatch and REVEALED after it (a rehearsal
- *       runner's tasks). The reveal file is caller-supplied, so each item counts only if expected|nonce
- *       recomputes the answer_commitment_sha256 its task row has carried since dispatch; the rest are listed
- *       as rejected. Prints, per task, the key-graded delta beside the bridge's own fact-check delta for the
- *       same task. Without --settle it WRITES NOTHING. --settle writes SHADOW rows only, and refuses unless
- *       EXPERIMENTAL_REPID_MODE=shadow: the commit-reveal key is not ratified for active.
+ *       runner's tasks). The reveal file is caller-supplied, so each item (task_id, case_id, expected, nonce,
+ *       commitment) counts only if expected|nonce recomputes the PUBLISHED commitment and the task row still
+ *       carries that same commitment. ANY rejected item makes the run unclean: it exits 1 and settles nothing,
+ *       because an exclusion an answerer could cause must never beat the penalty. Prints, per task, the
+ *       key-graded delta beside the bridge's own fact-check delta for the same task. Without --settle it WRITES
+ *       NOTHING. --settle writes SHADOW rows only, and refuses unless EXPERIMENTAL_REPID_MODE=shadow: the
+ *       commit-reveal key is not ratified for active.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import {
@@ -30,7 +32,7 @@ import {
   settleExperimental,
   type KnownAnswerRow,
 } from '../../src/services/experimental-repid';
-import { keyVsBridge, loadBridgeDeltas, loadCommitRevealRows, parseRevealFile } from '../../src/services/commit-reveal-key';
+import { keyVsBridge, loadBridgeDeltas, loadCommitRevealRows, parseRevealFile, revealIsClean } from '../../src/services/commit-reveal-key';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -90,12 +92,16 @@ async function reveal(): Promise<void> {
   const { rows, rejected } = await loadCommitRevealRows(parseRevealFile(JSON.parse(readFileSync(file, 'utf8'))));
   const bridge = await loadBridgeDeltas(rows.map((r) => r.task_id));
   const summary = keyVsBridge(rows, bridge);
+  // Any rejection makes the whole reveal unclean (commit-reveal-key.ts header): an item an answerer can
+  // knock out must not leave the run measured on the items it chose to keep.
+  const clean = revealIsClean(rejected);
+  const report = { ...summary, rejected, clean };
   const outFile = arg('--out');
-  if (outFile) writeFileSync(outFile, JSON.stringify({ ...summary, rejected }, null, 2) + '\n');
+  if (outFile) writeFileSync(outFile, JSON.stringify(report, null, 2) + '\n');
   if (process.argv.includes('--json')) {
-    console.log(JSON.stringify({ ...summary, rejected }, null, 2));
+    console.log(JSON.stringify(report, null, 2));
   } else {
-    console.log(`reveal: ${rows.length} accepted, ${rejected.length} rejected; grading rule ${summary.version}${doSettle ? '' : '; nothing written'}`);
+    console.log(`reveal: ${rows.length} accepted, ${rejected.length} rejected; grading rule ${summary.version}${doSettle && clean ? '' : '; nothing written'}`);
     for (const x of rejected) console.log(`  REJECTED task ${x.task_id}: ${x.reason}`);
     console.log('task'.padEnd(10) + 'agent'.padEnd(18) + 'expected'.padEnd(10) + 'answer'.padEnd(10) + 'key'.padStart(7) + 'bridge'.padStart(9));
     for (const l of summary.lines) {
@@ -107,6 +113,11 @@ async function reveal(): Promise<void> {
     console.log(`key follows the answer: ${summary.key_follows_answer ? 'YES' : 'NO'}`);
     console.log(`bridge on right answers: ${t(summary.bridge_on_right)}`);
     console.log(`bridge on wrong answers: ${t(summary.bridge_on_wrong)}`);
+  }
+  if (!clean) {
+    console.error(`reveal: NOT A CLEAN MEASUREMENT. ${rejected.length} item(s) failed the commitment check (${rejected.map((x) => `${x.task_id}:${x.reason}`).join(', ')}); nothing settled.`);
+    process.exitCode = 1;
+    return;
   }
   if (!doSettle) return;
   const tally: Record<string, number> = {};

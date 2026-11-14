@@ -22,7 +22,7 @@ import {
   type ExperimentalStore,
   type KnownAnswerRow,
 } from '../../src/services/experimental-repid';
-import { keyVsBridge, loadBridgeDeltas, loadCommitRevealRows, parseRevealFile } from '../../src/services/commit-reveal-key';
+import { keyVsBridge, loadBridgeDeltas, loadCommitRevealRows, parseRevealFile, revealIsClean } from '../../src/services/commit-reveal-key';
 
 beforeAll(() => { jest.spyOn(console, 'warn').mockImplementation(() => undefined); });
 
@@ -169,25 +169,56 @@ describe('loadCommitRevealRows', () => {
     metadata: { case_id: 'c-101', answer_commitment_sha256: commitment }, ...over,
   });
 
-  test('a reveal that recomputes the dispatch-time commitment is accepted', async () => {
-    const { client } = fakeClient({ trinity_tasks: [task()], repid_agents: [{ id: APM.id, agent_id: 'trinity-apm' }] });
-    const { rows, rejected } = await loadCommitRevealRows([{ task_id: 101, case_id: 'c-101', expected: 'veto', nonce }], client);
+  const agents = [{ id: APM.id, agent_id: 'trinity-apm' }];
+
+  test('a reveal that opens the published commitment, which the row still carries, is accepted', async () => {
+    const { client } = fakeClient({ trinity_tasks: [task()], repid_agents: agents });
+    const { rows, rejected } = await loadCommitRevealRows([{ task_id: 101, case_id: 'c-101', expected: 'veto', nonce, commitment }], client);
     expect(rejected).toEqual([]);
+    expect(revealIsClean(rejected)).toBe(true);
     expect(rows).toEqual([{ task_id: '101', claimed_by: 'trinity-apm', case_id: 'c-101', result: answer('veto', 0.9), expected: 'veto', subject_agent_id: APM.id, commitment, nonce }]);
   });
 
   test('metadata stored as a JSON string is read the same way', async () => {
     const t = task({ metadata: JSON.stringify({ case_id: 'c-101', answer_commitment_sha256: commitment }) });
-    const { client } = fakeClient({ trinity_tasks: [t], repid_agents: [{ id: APM.id, agent_id: 'trinity-apm' }] });
-    const { rows } = await loadCommitRevealRows([{ task_id: '101', case_id: 'c-101', expected: 'veto', nonce }], client);
+    const { client } = fakeClient({ trinity_tasks: [t], repid_agents: agents });
+    const { rows } = await loadCommitRevealRows([{ task_id: '101', case_id: 'c-101', expected: 'veto', nonce, commitment }], client);
     expect(rows).toHaveLength(1);
+  });
+
+  test("Strix #1544: deleting a wrong answer's commitment does not improve the score, it voids the measurement", async () => {
+    // Two answers by the same agent: 102 is right, 101 is wrong (key abstain, answered a sure veto).
+    // The answerer deletes 101's commitment from its own row, hoping 101 drops out instead of costing -(1 + confidence).
+    const n2 = 'cc33';
+    const c1 = answerCommitment('abstain', nonce), c2 = answerCommitment('veto', n2);
+    const { client } = fakeClient({ trinity_tasks: [
+      task({ metadata: { case_id: 'c-101' } }), // commitment deleted after dispatch
+      task({ id: 102, metadata: { case_id: 'c-102', answer_commitment_sha256: c2 } }),
+    ], repid_agents: agents });
+    const { rows, rejected } = await loadCommitRevealRows([
+      { task_id: 101, case_id: 'c-101', expected: 'abstain', nonce, commitment: c1 },
+      { task_id: 102, case_id: 'c-102', expected: 'veto', nonce: n2, commitment: c2 },
+    ], client);
+    expect(rows.map((r) => r.task_id)).toEqual(['102']);
+    expect(rejected).toEqual([{ task_id: '101', reason: 'no_commitment' }]);
+    expect(revealIsClean(rejected)).toBe(false); // the reveal command then exits 1 and settles nothing
+  });
+
+  test('any rejection, even not_answered, makes the reveal unclean', () => {
+    expect(revealIsClean([])).toBe(true);
+    for (const reason of ['not_answered', 'unknown_agent', 'bad_reveal'] as const) {
+      expect(revealIsClean([{ task_id: '1', reason }])).toBe(false);
+    }
   });
 
   test.each([
     ['a different answer', { expected: 'pass' }, {}, 'reveal_mismatch'],
     ['a different nonce', { nonce: 'bb22' }, {}, 'reveal_mismatch'],
+    ['a published commitment the answer does not open', { commitment: answerCommitment('pass', 'aa11') }, {}, 'reveal_mismatch'],
+    ['a reveal naming no published commitment', { commitment: '' }, {}, 'bad_reveal'],
     ['a different item', { case_id: 'c-999' }, {}, 'case_id_mismatch'],
-    ['a row that never carried a commitment', {}, { metadata: { case_id: 'c-101' } }, 'no_commitment'],
+    ['a row whose commitment was deleted', {}, { metadata: { case_id: 'c-101' } }, 'no_commitment'],
+    ['a row whose commitment was replaced', {}, { metadata: { case_id: 'c-101', answer_commitment_sha256: answerCommitment('pass', 'zz99') } }, 'commitment_changed'],
     ['an unanswered row', {}, { result: null }, 'not_answered'],
     ['an unclaimed row', {}, { claimed_by: null }, 'not_answered'],
     ['an unknown claimer', {}, { claimed_by: 'trinity-ghost' }, 'unknown_agent'],
@@ -195,15 +226,16 @@ describe('loadCommitRevealRows', () => {
     ['a malformed key', { expected: 'maybe' }, {}, 'bad_reveal'],
     ['a missing nonce', { nonce: '' }, {}, 'bad_reveal'],
   ])('%s is rejected (%s)', async (_label, revealOver, taskOver, reason) => {
-    const { client } = fakeClient({ trinity_tasks: [task(taskOver)], repid_agents: [{ id: APM.id, agent_id: 'trinity-apm' }] });
-    const r = { task_id: 101 as string | number, case_id: 'c-101', expected: 'veto', nonce, ...revealOver };
+    const { client } = fakeClient({ trinity_tasks: [task(taskOver)], repid_agents: agents });
+    const r = { task_id: 101 as string | number, case_id: 'c-101', expected: 'veto', nonce, commitment, ...revealOver };
     const { rows, rejected } = await loadCommitRevealRows([r], client);
     expect(rows).toEqual([]);
     expect(rejected).toEqual([{ task_id: String(r.task_id), reason }]);
+    expect(revealIsClean(rejected)).toBe(false);
   });
 
   test('parseRevealFile takes a bare array or {items}, and refuses anything else', () => {
-    const item = { task_id: 1, case_id: 'c', expected: 'pass', nonce: 'n' };
+    const item = { task_id: 1, case_id: 'c', expected: 'pass', nonce: 'n', commitment: answerCommitment('pass', 'n') };
     expect(parseRevealFile([item])).toEqual([item]);
     expect(parseRevealFile({ items: [item] })).toEqual([item]);
     expect(() => parseRevealFile({ rows: [item] })).toThrow();

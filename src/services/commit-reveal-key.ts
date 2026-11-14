@@ -6,10 +6,17 @@
  *   metadata.case_id                   the item it asked
  *   metadata.answer_commitment_sha256  sha256("<expected>|<nonce>"), written at insert, before any worker sees it
  * and publishes the same commitments before the first dispatch. After the run it reveals
- * (task_id, case_id, expected, nonce). A reveal is caller-supplied, so it is believed only when it
- * recomputes the commitment the task row has carried since dispatch. A changed answer, a changed
- * nonce or a row that never carried a commitment is REJECTED here, and settleExperimental re-checks
- * the same recomputation before it writes anything.
+ * (task_id, case_id, expected, nonce, commitment) for every task it graded as answered, where
+ * `commitment` is the one it PUBLISHED. An item is accepted only when expected|nonce recomputes the
+ * published commitment AND the task row still carries that same commitment.
+ *
+ * WHY EVERY REJECTION BLOCKS THE MEASUREMENT (Strix, #1544). trinity_tasks.metadata is an ordinary
+ * mutable column, and a worker can write its own row. If a rejected item simply dropped out, an answerer
+ * could delete or change the commitment on items it got wrong and leave the run with a better score than
+ * the -(1 + confidence) it earned: an exclusion it can cause would beat the penalty. So a rejection is
+ * never a quiet drop. `revealIsClean` is false when ANY item is rejected, and the reveal command then
+ * refuses to report a clean measurement or settle anything. The conductor reveals only answered tasks,
+ * so even 'not_answered' means the row changed after grading.
  *
  * Reads trinity_tasks and repid_agents; writes nothing. The comparison helper is pure.
  */
@@ -17,18 +24,28 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { db } from '../db';
 import { SCORING_VERSIONS, answerCommitment, knownAnswerEvidence, parseKnownAnswer, type KnownAnswerRow } from './experimental-repid';
 
-export interface RevealItem { task_id: string | number; case_id: string; expected: string; nonce: string }
+export interface RevealItem {
+  task_id: string | number; case_id: string; expected: string; nonce: string;
+  /** The commitment as PUBLISHED before dispatch (commitments.json / the PR comment), not as read back from the row. */
+  commitment: string;
+}
 
 export type RevealRejectReason =
-  | 'bad_reveal'        // the reveal item itself is malformed
-  | 'task_not_found'    // no trinity_tasks row with that id
-  | 'case_id_mismatch'  // the row was dispatched for a different item
-  | 'no_commitment'     // the row never carried a commitment: there is nothing to check the reveal against
-  | 'reveal_mismatch'   // expected|nonce does not recompute the commitment written at dispatch
-  | 'not_answered'      // no worker claimed it, or it has no result
-  | 'unknown_agent';    // the claimer is not in repid_agents
+  | 'bad_reveal'          // the reveal item itself is malformed, or names no published commitment
+  | 'reveal_mismatch'     // expected|nonce does not recompute the published commitment
+  | 'task_not_found'      // no trinity_tasks row with that id
+  | 'case_id_mismatch'    // the row was dispatched for a different item
+  | 'no_commitment'       // the row carries no commitment now: removed after dispatch, or never written
+  | 'commitment_changed'  // the row's commitment is not the one that was published
+  | 'not_answered'        // no claimer or no result now, though the conductor graded an answer
+  | 'unknown_agent';      // the claimer is not in repid_agents
 
 export interface RevealRejection { task_id: string; reason: RevealRejectReason }
+
+/** A reveal is a clean measurement only when NOTHING was rejected (see the header for why). */
+export function revealIsClean(rejected: RevealRejection[]): boolean {
+  return rejected.length === 0;
+}
 
 const KEYS = new Set(['pass', 'veto', 'abstain']);
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -36,7 +53,7 @@ const HEX64 = /^[0-9a-f]{64}$/;
 /** Accepts a bare array or { items: [...] }. Throws on a file that is not either. */
 export function parseRevealFile(json: unknown): RevealItem[] {
   const items = Array.isArray(json) ? json : (json as { items?: unknown })?.items;
-  if (!Array.isArray(items)) throw new Error('reveal file must be an array of {task_id, case_id, expected, nonce} or {items: [...]}');
+  if (!Array.isArray(items)) throw new Error('reveal file must be an array of {task_id, case_id, expected, nonce, commitment} or {items: [...]}');
   return items as RevealItem[];
 }
 
@@ -56,10 +73,13 @@ export async function loadCommitRevealRows(
   const valid: RevealItem[] = [];
   for (const r of reveals) {
     const id = String(r?.task_id ?? '');
+    const published = String(r?.commitment ?? '').toLowerCase();
     const ok = /^\d+$/.test(id) && typeof r.case_id === 'string' && r.case_id !== '' &&
-      KEYS.has(String(r.expected)) && typeof r.nonce === 'string' && r.nonce !== '';
-    if (ok) valid.push({ ...r, task_id: id });
-    else rejected.push({ task_id: id, reason: 'bad_reveal' });
+      KEYS.has(String(r.expected)) && typeof r.nonce === 'string' && r.nonce !== '' && HEX64.test(published);
+    if (!ok) { rejected.push({ task_id: id, reason: 'bad_reveal' }); continue; }
+    // The conductor's own honesty first: its reveal must open the commitment it published.
+    if (answerCommitment(r.expected, r.nonce) !== published) { rejected.push({ task_id: id, reason: 'reveal_mismatch' }); continue; }
+    valid.push({ ...r, task_id: id, commitment: published });
   }
   if (!valid.length) return { rows: [], rejected };
 
@@ -83,9 +103,11 @@ export async function loadCommitRevealRows(
     if (!t) { rejected.push({ task_id, reason: 'task_not_found' }); continue; }
     const md = metadataOf(t.metadata);
     if (String(md.case_id ?? '') !== r.case_id) { rejected.push({ task_id, reason: 'case_id_mismatch' }); continue; }
+    // Then the row: it must still carry the very commitment that was published. Either failure is
+    // tampering or a broken dispatch, never a neutral drop: it makes the whole reveal unclean.
     const commitment = String(md.answer_commitment_sha256 ?? '').toLowerCase();
     if (!HEX64.test(commitment)) { rejected.push({ task_id, reason: 'no_commitment' }); continue; }
-    if (answerCommitment(r.expected, r.nonce) !== commitment) { rejected.push({ task_id, reason: 'reveal_mismatch' }); continue; }
+    if (commitment !== r.commitment) { rejected.push({ task_id, reason: 'commitment_changed' }); continue; }
     if (!t.claimed_by || t.result === null || t.result === undefined) { rejected.push({ task_id, reason: 'not_answered' }); continue; }
     const subject = uuidOf.get(t.claimed_by);
     if (!subject) { rejected.push({ task_id, reason: 'unknown_agent' }); continue; }
