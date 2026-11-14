@@ -18,6 +18,7 @@
  */
 
 import { db } from '../db';
+import { assertBreakerClosed } from '../middleware/circuit-breaker';
 
 export interface ScoreOutcome {
   delta: number;
@@ -137,6 +138,8 @@ export class RepIdEarningService {
    * Returns skipped='already_scored' if a previous run already recorded this trade.
    */
   async recordOutcome(tradeId: number): Promise<RecordOutcomeResult | { skipped: string; reason: string }> {
+    // Kill switch (fail closed). See middleware/circuit-breaker.ts.
+    await assertBreakerClosed('cb_disable_score_writes');
     // 1. Fetch trade
     const { data: trade, error: tradeErr } = await db
       .from('trade_execution_log')

@@ -16,6 +16,7 @@ import { localProverGate, proverAuthHeaders, proverLocalMode, proverRedirect } f
 import { createHmac } from 'crypto';
 import { markDegraded } from '../lib/degraded';
 import { buildAgentLogRow } from '../engine/agent-log-row';
+import { breakerAllows } from '../middleware/circuit-breaker';
 
 const HMAC_SECRET = process.env.PROOF_SECRET || 'repid-default-secret';
 const PROVER_TIMEOUT_MS = 5000;
@@ -83,7 +84,8 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
  * Async — calls the real prover first, falls back to HMAC.
  *
  * Tries once, retries once on timeout/network error, then falls back.
- * Hosted: never throws — every failure path returns the HMAC fallback.
+ * Hosted: every prover failure returns the HMAC fallback. It throws ProverUnavailableError only
+ * when cb_disable_zkp_proofs is tripped or unreadable: a kill switch must not hand out a stand-in.
  * LOCAL_MODE: throws ProverUnavailableError on every one of those paths.
  */
 export async function generateProofReal(
@@ -92,6 +94,9 @@ export async function generateProofReal(
   tier: string,
   timestamp: string,
 ): Promise<ProofResult> {
+  if (!(await breakerAllows('cb_disable_zkp_proofs'))) {
+    throw new ProverUnavailableError('cb_disable_zkp_proofs is tripped or unreadable');
+  }
   const body: ProveTradeAuthBody = {
     agent_id: agentId,
     requester_pubkey: requesterPubkey,

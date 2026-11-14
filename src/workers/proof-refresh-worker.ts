@@ -38,6 +38,7 @@ import crypto from 'crypto';
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
 import { shouldParkForHalt } from '../services/emergency-halt';
+import { breakerAllows } from '../middleware/circuit-breaker';
 import { localProverGate, proverAuthHeaders, proverBaseUrl, proverRedirect } from '../config/prover';
 
 const WORKER = 'proof-refresh';
@@ -214,6 +215,8 @@ export async function runOnce(cfg: RefreshConfig = readConfig(), deps: RefreshDe
   running = true;
   try {
     if (await deps.isHalted()) return summary;
+    // Kill switch (fail closed), read here rather than through deps so injected deps cannot skip it.
+    if (!(await breakerAllows('cb_disable_zkp_proofs'))) return summary;
     summary.ran = true;
 
     const rows = await deps.query(SELECT_CANDIDATES_SQL, [

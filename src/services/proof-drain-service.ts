@@ -16,6 +16,7 @@ import {
   type ProofDrainChurnMode
 } from './proof-drain-churn-guard';
 import { pageOperator } from './operator-pager';
+import { breakerAllows } from '../middleware/circuit-breaker';
 
 export interface ProofDrainServiceConfig {
   supabase: SupabaseClient;
@@ -791,6 +792,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   }
 
   async function drainOnce(): Promise<{ jobsCompleted: number; jobsFailed: number }> {
+    // Kill switch (fail closed): park before claiming anything. breakerAllows logs why.
+    if (!(await breakerAllows('cb_disable_zkp_proofs'))) return { jobsCompleted: 0, jobsFailed: 0 };
     const jobs = await withRetry('fetchPendingBatch', fetchPendingBatch);
     let completed = 0;
     let failed = 0;

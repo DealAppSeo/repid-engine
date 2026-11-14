@@ -13,10 +13,14 @@
  * RELATIONSHIP TO THE EXISTING CIRCUIT BREAKERS (checked before building this —
  * they are NOT the same thing and this does not replace them):
  * `src/middleware/circuit-breaker.ts` reads `cb_*` keys from `repid_config` and
- * blocks ONE capability at a time (x402 settlement, ZKP endpoints, on-chain
- * writes, score writes, swarm prompts), applied by wrapping specific routes. It
- * is HTTP-only — no worker tick loop consults it, so a breaker cannot stop a
- * poller. This gate is the orthogonal axis: ONE switch, EVERY mutating surface,
+ * blocks ONE capability at a time, at the writers that check it; its header
+ * names, per switch, which code that is. (This paragraph used to say breakers
+ * were "applied by wrapping specific routes" and were HTTP-only. Neither was
+ * true: the route wrapper was mounted nowhere, so four of the six switches
+ * blocked nothing until 2026-11-14. The proof switch now also parks the proof
+ * drain and refresh loops. `cb_freeze_swarm_responses` is enforced by nothing
+ * in this repo, and circuit-breaker.ts names this halt as the lever to use.)
+ * This gate is the orthogonal axis: ONE switch, EVERY mutating surface,
  * INCLUDING the tick loops. They compose (either can block a request), and
  * neither reads the other's storage.
  * OPEN QUESTION, deliberately not resolved here: two config tables now hold

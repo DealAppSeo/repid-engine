@@ -38,6 +38,7 @@
 import { db } from '../db';
 import { currentCoverage, withCoverage } from '../services/detector-coverage';
 import { assertDeltaWithinBound } from '../services/wisdom-normalize';
+import { assertBreakerClosed } from '../middleware/circuit-breaker';
 
 export type Applier = 'trigger' | 'caller';
 
@@ -172,6 +173,12 @@ export function counterpartyProblem(e: ScoreEventInsert): string | null {
 }
 
 export async function insertScoreEvent(e: ScoreEventInsert): Promise<WriteResult> {
+  // KILL SWITCH. Throws (fail closed) when cb_disable_score_writes is tripped or unreadable, and
+  // only for a row that moves a score: a zero-delta audit row (GENESIS, mirror test, a gated HAL
+  // veto) moves nothing, so it still lands. Throw, not `ok: false`: most callers never read `ok`.
+  const moves = e.applier === 'caller' ? e.repid_delta_applied !== 0 : effectiveTriggerDelta(e) !== 0;
+  if (moves) await assertBreakerClosed('cb_disable_score_writes');
+
   // PR C (audit 2606.26028): opportunity-grade delta reject, SHADOW-FIRST. An oversize delta is
   // a factor explosion or a bad call site; the 9990 backstop would silently shrink it to 9990 and
   // score a wrong number. Here we reject (throw) instead — but default to SHADOW (log what it WOULD

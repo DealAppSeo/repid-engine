@@ -14,6 +14,7 @@
  * row per adjudication (turns that table 0→real) and returns the applied deltas for verification.
  */
 import { db } from '../db';
+import { assertBreakerClosed } from '../middleware/circuit-breaker';
 import { emitOnChainOutboxEvent } from '../services/onchain-outbox';
 import type { OnChainEligibleEventType } from '../workers/feedback-loop-filters';
 import { insertScoreEvent } from '../scoring/score-event-writer';
@@ -59,6 +60,8 @@ async function resolveAgent(agent: string): Promise<{ id: string | null; current
  * NOTE: repid_score_events keys on agent_id (uuid → repid_agents.id); it has NO agent_name column.
  */
 async function applyDelta(agent: string, role: AppliedDelta['role'], delta: number, eventType: string, meta: any): Promise<AppliedDelta> {
+  // Kill switch (fail closed). See middleware/circuit-breaker.ts.
+  await assertBreakerClosed('cb_disable_score_writes');
   const { id, current_repid: before } = await resolveAgent(agent);
   // Direct apply (engine WRITER_DIRECT_APPLY pattern); trg_repid_earned_floor enforces the floor.
   await db.from('repid_agents').update({ current_repid: Math.max(0, Math.round(before + delta)), last_updated: new Date().toISOString() }).eq('agent_name', agent);

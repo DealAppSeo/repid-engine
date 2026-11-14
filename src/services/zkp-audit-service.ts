@@ -68,6 +68,7 @@
  */
 import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
 import { localProverGate, proverAuthHeaders, proverRedirect } from '../config/prover';
+import { breakerAllows } from '../middleware/circuit-breaker';
 import { buildBoundStatement } from '../zkp/proof-statement-guard';
 import { hasTruthySimFlag } from '../utils/truthy';
 import type { ServiceContractRow } from '../types';
@@ -787,6 +788,9 @@ export function createZkpAuditService(deps: ZkpAuditDeps): ZkpAuditService {
     contractId: string;
     purpose?: string;
   }): Promise<ProverResponse> {
+    if (!(await breakerAllows('cb_disable_zkp_proofs'))) {
+      throw new ZkpAuditError('PROVER_UNAVAILABLE', 'cb_disable_zkp_proofs is tripped or unreadable: no proof requested');
+    }
     const base = localProverGate((deps.proverUrl ?? '').trim());
     if (!base) {
       // DEGRADE CLOSED. The in-repo `plonky3-real.ts` would silently return an

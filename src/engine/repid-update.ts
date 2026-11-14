@@ -1,4 +1,5 @@
 import { db } from '../db';
+import { assertBreakerClosed } from '../middleware/circuit-breaker';
 import { getEcosystemNeedWeight, updateSupplyRate } from '../layers/ecosystem-need';
 import { scoreChallengeOutcome } from '../layers/challenge-scoring';
 import { properScoreReward } from '../decisioning/anfis-poa-feed';
@@ -446,6 +447,9 @@ export function shadowPredictionScore(
 }
 
 export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateResult> {
+  // Kill switch: refuse before any read or write (fail closed). See middleware/circuit-breaker.ts.
+  await assertBreakerClosed('cb_disable_score_writes');
+
   // Phase 3 dogfooding gate: co-sign -> RepID only if flag ON (default OFF until CC honest-HAL merge)
   const isDogfoodCoSignEvent = input.eventType === 'HANDOFF_COSIGN_VERIFIED' || input.eventType === 'HANDOFF_COSIGN_FALSE_PASS_SLASH';
   if (isDogfoodCoSignEvent && process.env.DOGFOOD_REPID_FROM_COSIGN !== 'true') {

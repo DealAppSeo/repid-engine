@@ -19,6 +19,7 @@
 
 import { createHmac, timingSafeEqual } from 'crypto';
 import { db } from '../db';
+import { breakerAllows } from '../middleware/circuit-breaker';
 import { emitAuditEvent } from './audit-emit';
 import { snapshotAuthority } from './stake-vault';
 import { getBuilderForAgent, recomputeBuilderRepID } from './builder-registry';
@@ -283,6 +284,11 @@ export async function resolveBet(
   // (which also enforces it).
   if ((tokenDelta > 0n && repidDelta < 0) || (tokenDelta < 0n && repidDelta > 0)) {
     return mkErrorResult(betId, 'atomic linkage violation');
+  }
+
+  // Kill switch (fail closed): the bet stays open and can be resolved after the switch is reset.
+  if (!(await breakerAllows('cb_disable_score_writes'))) {
+    return mkErrorResult(betId, 'cb_disable_score_writes is tripped or unreadable: resolution refused');
   }
 
   const { error: rpcErr } = await db.rpc('apply_linked_bet_resolution', {

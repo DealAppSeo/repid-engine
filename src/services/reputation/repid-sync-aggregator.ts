@@ -36,6 +36,7 @@
  */
 
 import { db } from '../../db';
+import { assertBreakerClosed } from '../../middleware/circuit-breaker';
 import { shouldParkForHalt } from '../emergency-halt';
 
 export interface SyncReport {
@@ -145,6 +146,8 @@ async function updateCurrentRepid(
   reason: string,
   lastEventAt: string | null
 ): Promise<void> {
+  // Kill switch (fail closed). See middleware/circuit-breaker.ts.
+  await assertBreakerClosed('cb_disable_score_writes');
   // IMPORTANT: This UPDATE passes through the LIVE trg_repid_earned_floor trigger on the DB.
   // The trigger clamps to tier_lower_bound(peak_repid). We do not bypass or pre-clamp here.
   const { error } = await db

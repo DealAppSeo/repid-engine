@@ -3,6 +3,7 @@ import { appendToAuditChain } from './auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
 import { scoreEventGuardEnforced } from '../routes/score-event-guard';
 import { insertScoreEvent } from '../scoring/score-event-writer';
+import { assertBreakerClosed } from '../middleware/circuit-breaker';
 
 /**
  * Extract provenance tags from a task for propagation to derivative events.
@@ -117,6 +118,9 @@ export async function slashRepIDForGateFail(
   const delta = reapCount > 3 ? -150 : -50;
 
   try {
+    // Kill switch (fail closed): a refusal lands in the catch below, logged; nothing is written.
+    await assertBreakerClosed('cb_disable_score_writes');
+
     // Step 1: Get UUID (cached lookup)
     const agentUuid = await getAgentUuid(db, agentName);
     if (!agentUuid) {

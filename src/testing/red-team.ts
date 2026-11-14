@@ -15,6 +15,7 @@
  */
 
 import { db } from '../db';
+import { assertBreakerClosed } from '../middleware/circuit-breaker';
 import { halService } from '../hal/service';
 import { createHash } from 'crypto';
 import { insertScoreEvent } from '../scoring/score-event-writer';
@@ -384,6 +385,8 @@ async function getAgentRepid(agentName: string): Promise<number> {
 
 async function applyRepIdDelta(agentName: string, delta: number, eventType: string, metadata: any = {}) {
   if (Math.abs(delta) < 0.001) return; // suppress zero
+  // Kill switch (fail closed). See middleware/circuit-breaker.ts.
+  await assertBreakerClosed('cb_disable_score_writes');
   const before = await getAgentRepid(agentName);
   const after = Math.max(0, Math.round(before + delta));
 

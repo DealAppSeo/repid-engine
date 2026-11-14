@@ -52,6 +52,7 @@ import { pgQuery } from '../db/direct-pg';
 import { emitOnChainOutboxEvent } from './onchain-outbox';
 import { scoreEventGuardEnforced } from '../routes/score-event-guard';
 import { insertScoreEvent as insertGuardedScoreEvent } from '../scoring/score-event-writer';
+import { breakerAllows } from '../middleware/circuit-breaker';
 
 export interface PeerVerifyScoreInput {
   queueId: number | string;
@@ -212,6 +213,10 @@ async function insertScoreEvent(params: InsertParams): Promise<ScoreEventRow | n
     );
     return null;
   }
+
+  // Kill switch (fail closed): refused like a failed insert, which every caller already handles.
+  // breakerAllows has logged why.
+  if (!(await breakerAllows('cb_disable_score_writes'))) return null;
 
   return scoreEventGuardEnforced()
     ? insertScoreEventGuarded(params)
