@@ -83,7 +83,7 @@ import { createRequire } from 'node:module';
 // The domain-pack matcher is CommonJS (see lessons-lib.js header) so the jest suite
 // can require it without the ESM-URL-scheme failure a `.mjs` import hits on Windows.
 const require_ = createRequire(import.meta.url);
-const { loadPacks, matchPacks, renderPacks } = require_('./lessons-lib.js');
+const { loadPacks, matchPacks, selectPacks, PACKS_MAX } = require_('./lessons-lib.js');
 
 /**
  * `mode` is not a style preference — it is what each CLI actually accepts,
@@ -1535,10 +1535,25 @@ function main() {
   // Domain packs matched to THIS brief by substring trigger (fail-open-safe; see
   // lessons-lib.js). loadPacks tolerates a missing dir → []. Matching on `task` is
   // deliberate: the pack is chosen by what the work is about, not by who runs it.
+  // selectPacks fills the budget section by section, every matched pack first, and
+  // returns what it left out. This line used to log "matched" for packs it then
+  // dropped silently; it now says what was injected and, loudly, what was not.
   const matchedPacks = matchPacks(task, loadPacks(LESSONS_DIR));
-  const lessonPacksText = renderPacks(matchedPacks);
+  const packSelection = selectPacks(matchedPacks, task);
+  const lessonPacksText = packSelection.text;
   if (matchedPacks.length) {
-    console.error(`[dispatch] lesson packs matched: ${matchedPacks.map((p) => p.name).join(', ')}`);
+    const count = (list, name) => list.filter((s) => s.pack === name).length;
+    console.error(
+      `[dispatch] lesson packs matched: ${matchedPacks
+        .map((p) => `${p.name} (${count(packSelection.included, p.name)}/${count(packSelection.included, p.name) + count(packSelection.omitted, p.name)} sections)`)
+        .join(', ')}`,
+    );
+    if (packSelection.omitted.length) {
+      console.error(
+        `[dispatch] lesson pack sections OMITTED for the ${PACKS_MAX}-char budget (named in the preamble footer): ` +
+          packSelection.omitted.map((o) => `${o.pack} > ${o.title}`).join('; '),
+      );
+    }
   }
 
   const preamble = [
