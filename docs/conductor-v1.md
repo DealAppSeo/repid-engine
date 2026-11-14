@@ -61,7 +61,7 @@ may read and report, and nothing else.
 | A store for who holds what | `principal_grants` table + `src/services/principal-grants.ts` | VERIFIED. 0 rows, 0 live, measured 2026-11-14 03:21Z. The store exists and nobody holds a grant yet. |
 | A child grant can't exceed its parent: capabilities, caveats, expiry | `decideMint` (G2, plus the expiry check) | VERIFIED by the acceptance test |
 | No self-grants | `decideMint` | VERIFIED by the acceptance test |
-| Revoking a grant ends everything under it | `checkAuthorization` loads the whole chain (`walkAncestors`, which fails closed), then `isChainLive` denies if any grant in it is revoked or expired | VERIFIED. The acceptance test passes the chain to `isChainLive`; `tests/accountable-root.test.ts` covers loading the chain. |
+| Revoking a grant ends everything under it | `checkAuthorization` loads the whole chain (`walkAncestors`, which fails closed), then `isChainLive` denies if any grant in it is revoked or expired | VERIFIED. The acceptance test passes the chain to `decideAuthorization`, which scans it with `isChainLive`; `tests/accountable-root.test.ts` covers loading the chain. |
 | An expired grant is denied, not soft-allowed | `isChainLive` (G5) | VERIFIED by the acceptance test |
 | Only the direct grantor can revoke, and the grantee can't block it | `decideRevoke` (G6) | VERIFIED by the acceptance test |
 | Widening needs the Owner's signature | `POST /grants` in `mvp-api.ts` | VERIFIED by reading the code. Signature tests: `tests/owner-authorization.test.ts` |
