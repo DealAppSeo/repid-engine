@@ -16,6 +16,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const lessonsPath = join(here, '..', '..', 'LESSONS.md');
@@ -27,6 +28,25 @@ try {
   process.exit(0); // no LESSONS.md → start the session anyway
 }
 
+// The domain packs (lessons/*.md) are the long-term memory behind LESSONS.md: nothing is
+// deleted to fit LESSONS' cap, the detail moves to a pack. Dispatched agents get the
+// matching sections injected. A Claude session can open files, so it gets an INDEX of
+// every pack and section and opens the one its task needs. Without this a session saw
+// only "detail is appended during dispatch" and never knew which lessons existed (2026-11-14).
+// Fail-open like the read above: a broken index must not stop a session starting.
+let index = '';
+try {
+  const { loadPacks, packIndex } = createRequire(import.meta.url)('../dispatch/lessons-lib.js');
+  const packs = loadPacks(join(here, '..', '..', 'lessons'));
+  if (packs.length) {
+    index =
+      '\n\nDomain lesson packs, the detail behind these rules. Open the one that matches ' +
+      'your task before working on it:\n' + packIndex(packs);
+  }
+} catch {
+  index = '';
+}
+
 process.stdout.write(
   JSON.stringify({
     hookSpecificOutput: {
@@ -35,7 +55,8 @@ process.stdout.write(
         'Shared operating rules for this repo (LESSONS.md) — these are injected, not ' +
         'optional; read them before working. Domain detail is appended per-task from ' +
         '`lessons/` during agent dispatch.\n\n' +
-        lessons,
+        lessons +
+        index,
     },
   }),
 );

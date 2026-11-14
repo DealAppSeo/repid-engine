@@ -78,23 +78,116 @@ function matchPacks(dispatchText, packs) {
 const PACKS_MAX = 4000;
 
 /**
- * Render matched packs as one block to append after LESSONS.md, before the brief.
- * Packs are added whole, in match order, never truncated mid-pack — a half-rule
- * silently missing its "Apply:" line is worse than a dropped pack. The FIRST pack
- * is always included even if it alone exceeds `max`, so an over-budget pack is
- * visibly too big (and gets trimmed at the source) rather than silently producing
- * an empty block that reads as "no domain lessons matched" when some did.
+ * Split a pack body into its intro (everything before the first `## ` heading) and its
+ * sections (each `## ` heading with the text under it). A pack with no `## ` headings is
+ * one section with no intro. Sections are the unit of selection: never cut mid-section.
  */
-function renderPacks(matched, max = PACKS_MAX) {
-  if (!matched || matched.length === 0) return '';
-  const parts = [];
-  let used = 0;
-  for (const p of matched) {
-    if (parts.length > 0 && used + p.body.length > max) break;
-    parts.push(p.body);
-    used += p.body.length + 2; // +2 accounts for the '\n\n' join below
+function splitSections(body) {
+  const lines = String(body || '').split(/\r?\n/);
+  const intro = [];
+  const sections = [];
+  let cur = null;
+  for (const line of lines) {
+    if (/^## /.test(line)) {
+      cur = { title: line.replace(/^##\s+/, '').trim(), lines: [line] };
+      sections.push(cur);
+    } else if (cur) cur.lines.push(line);
+    else intro.push(line);
   }
-  return parts.join('\n\n');
+  if (sections.length === 0) return { intro: '', sections: [{ title: '(whole pack)', text: String(body || '').trim() }] };
+  return { intro: intro.join('\n').trim(), sections: sections.map((s) => ({ title: s.title, text: s.lines.join('\n').trim() })) };
 }
 
-module.exports = { parseTriggers, stripTriggerHeader, loadPacks, matchPacks, renderPacks, PACKS_MAX, TRIGGER_RE };
+/** Distinct words of 4+ letters in the brief: the relevance signal for ranking sections. */
+function briefWords(brief) {
+  return [...new Set(String(brief || '').toLowerCase().match(/[a-z0-9][a-z0-9-]{3,}/g) || [])];
+}
+const triggerHits = (pack, hay) => pack.triggers.filter((t) => hay.includes(t)).length;
+const wordHits = (text, words) => { const t = text.toLowerCase(); return words.filter((w) => t.includes(w)).length; };
+
+/**
+ * Choose what to inject from the matched packs, within `max` characters.
+ *
+ * MEASURED GAP, 2026-11-14 (the reason this replaced whole-pack rendering): packs were
+ * added whole in file order, and a later pack that did not fit was DROPPED SILENTLY while
+ * the dispatcher still logged it as matched. A T12 known-answer brief matches both
+ * `dispatch` and `hal-eval`; the two together exceeded the budget, so the HAL lessons
+ * never reached the agent that most needed them. That is forgetting, not a size limit.
+ *
+ * Now:
+ *   - packs are ranked by how many of their triggers the brief hits, and sections within a
+ *     pack by how many of the brief's words they contain (both stable on ties);
+ *   - the budget is filled in rounds: in each round every pack adds its most relevant
+ *     remaining section that still fits, so every matched pack gets in (if any of its
+ *     sections fits at all) before any pack gets a second;
+ *   - a section is included whole or not at all; a pack's intro rides with its first section;
+ *   - NOTHING IS DROPPED SILENTLY: every matched section that did not fit is named in a
+ *     short footer that points at its file, and returned in `omitted` for the caller to log;
+ *   - if not even one section fits, the best one is included anyway, so an oversized
+ *     section is visibly too big (and gets trimmed at the source) rather than an empty block
+ *     that reads as "no domain lessons matched" when some did.
+ *
+ * Returns { text, included: [{ pack, title }], omitted: [{ pack, title }] }.
+ */
+function selectPacks(matched, brief = '', max = PACKS_MAX) {
+  if (!matched || matched.length === 0) return { text: '', included: [], omitted: [] };
+  const hay = String(brief || '').toLowerCase();
+  const words = briefWords(brief);
+  const ranked = matched
+    .map((p, i) => ({ p, i, hits: triggerHits(p, hay) }))
+    .sort((a, b) => b.hits - a.hits || a.i - b.i)
+    .map(({ p }) => {
+      const { intro, sections } = splitSections(p.body);
+      const order = sections
+        .map((s, j) => ({ ...s, j, hits: wordHits(s.text, words) }))
+        .sort((a, b) => b.hits - a.hits || a.j - b.j);
+      return { name: p.name, intro, sections, order, chosen: new Set() };
+    });
+
+  let used = 0;
+  const cost = (pk, s) => s.text.length + 2 + (pk.chosen.size === 0 && pk.intro ? pk.intro.length + 2 : 0);
+  // Each round, every pack takes its most relevant REMAINING section that still fits. Taking
+  // only its single best section would leave a pack with nothing whenever that one section is
+  // too big for what is left, even though a smaller section of it would fit (measured: a
+  // brief matching all four packs left one pack out entirely).
+  let added = true;
+  while (added) {
+    added = false;
+    for (const pk of ranked) {
+      const s = pk.order.find((x) => !pk.chosen.has(x.j) && used + cost(pk, x) <= max);
+      if (s) { used += cost(pk, s); pk.chosen.add(s.j); added = true; }
+    }
+  }
+  if (used === 0) { const top = ranked[0]; top.chosen.add(top.order[0].j); } // visibly too big beats silently empty
+
+  const included = [];
+  const omitted = [];
+  const blocks = [];
+  for (const pk of ranked) {
+    const kept = pk.sections.filter((_, j) => pk.chosen.has(j)); // file order reads best
+    for (const [j, s] of pk.sections.entries()) (pk.chosen.has(j) ? included : omitted).push({ pack: pk.name, title: s.title });
+    if (kept.length) blocks.push([pk.intro, ...kept.map((s) => s.text)].filter(Boolean).join('\n\n'));
+  }
+  let text = blocks.join('\n\n');
+  if (omitted.length) {
+    const byPack = new Map();
+    for (const o of omitted) byPack.set(o.pack, [...(byPack.get(o.pack) || []), o.title]);
+    text += '\n\nAlso matched, left out for space (full text in lessons/<pack>.md): ' +
+      [...byPack].map(([pack, titles]) => `${pack}: ${titles.join('; ')}`).join(' | ') + '.';
+  }
+  return { text, included, omitted };
+}
+
+/** The injected block only. Kept for callers that need just the text; see selectPacks. */
+function renderPacks(matched, max = PACKS_MAX, brief = '') {
+  return selectPacks(matched, brief, max).text;
+}
+
+/** One line per pack, for sessions that can open the files themselves: name, then section titles. */
+function packIndex(packs) {
+  return packs
+    .map((p) => `- lessons/${p.name}.md: ${splitSections(p.body).sections.map((s) => s.title).join('; ')}`)
+    .join('\n');
+}
+
+module.exports = { parseTriggers, stripTriggerHeader, loadPacks, matchPacks, splitSections, selectPacks, renderPacks, packIndex, PACKS_MAX, TRIGGER_RE };
