@@ -30,8 +30,14 @@ code caps depth at 4 (`MAX_GRANT_DEPTH`, `src/services/principal-grants.ts`).
 A message never grants authority. Only the grant record does.
 
 **What counts as authority:**
-- A live row in `principal_grants` whose whole chain is unexpired and unrevoked. It is checked
-  with `checkAuthorization()`, and when the chain can't be read the answer is NOT_CHECKED.
+- A row in `principal_grants` that `checkAuthorization()` accepts for the capability asked. It
+  denies when:
+  - any grant in the chain is revoked, expired or not yet valid;
+  - the capability or a caveat isn't covered;
+  - the chain can't be loaded completely (`walkAncestors`);
+  - a grant that widens authority has no accountable root at the top of its chain (`rootCut`).
+
+  When the chain can't be read, the answer is NOT_CHECKED, never allowed.
 - For any grant beyond read-only, the Owner's wallet signature on the exact grant settings.
   `POST /grants` in `src/routes/mvp-api.ts` already requires this:
   `isWidening` → `resolveAccountableRoot` → `checkOwnerAuthorization`.
@@ -55,7 +61,7 @@ may read and report, and nothing else.
 | A store for who holds what | `principal_grants` table + `src/services/principal-grants.ts` | VERIFIED. 0 rows, 0 live, measured 2026-11-14 03:21Z. The store exists and nobody holds a grant yet. |
 | A child grant can't exceed its parent: capabilities, caveats, expiry | `decideMint` (G2, plus the expiry check) | VERIFIED by the acceptance test |
 | No self-grants | `decideMint` | VERIFIED by the acceptance test |
-| Revoking a grant ends everything under it | `isChainLive` walks the whole ancestor chain on every check | VERIFIED by the acceptance test |
+| Revoking a grant ends everything under it | `checkAuthorization` loads the whole chain (`walkAncestors`, which fails closed), then `isChainLive` denies if any grant in it is revoked or expired | VERIFIED. The acceptance test passes the chain to `isChainLive`; `tests/accountable-root.test.ts` covers loading the chain. |
 | An expired grant is denied, not soft-allowed | `isChainLive` (G5) | VERIFIED by the acceptance test |
 | Only the direct grantor can revoke, and the grantee can't block it | `decideRevoke` (G6) | VERIFIED by the acceptance test |
 | Widening needs the Owner's signature | `POST /grants` in `mvp-api.ts` | VERIFIED by reading the code. Signature tests: `tests/owner-authorization.test.ts` |
