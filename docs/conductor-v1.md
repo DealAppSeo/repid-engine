@@ -37,7 +37,8 @@ A message never grants authority. Only the grant record does.
   - the chain can't be loaded completely (`walkAncestors`);
   - a grant that widens authority has no accountable root at the top of its chain (`rootCut`).
 
-  When the chain can't be read, the answer is NOT_CHECKED, never allowed.
+  When the chain can't be loaded completely, the answer is NOT_CHECKED (a read failed) or FAILED (an ancestor is
+  missing, `chain_dead`), never allowed.
 - For any grant beyond read-only, the Owner's wallet signature on the exact grant settings.
   `POST /grants` in `src/routes/mvp-api.ts` already requires this:
   `isWidening` → `resolveAccountableRoot` → `checkOwnerAuthorization`.
@@ -59,7 +60,7 @@ may read and report, and nothing else.
 | Need | Existing mechanism | Status |
 |---|---|---|
 | A store for who holds what | `principal_grants` table + `src/services/principal-grants.ts` | VERIFIED. 0 rows, 0 live, measured 2026-11-14 03:21Z. The store exists and nobody holds a grant yet. |
-| A child grant can't exceed its parent: capabilities, caveats, expiry | `decideMint` (G2, plus the expiry check) | VERIFIED by the acceptance test |
+| A child grant can't exceed its parent: capabilities, caveats, expiry | `decideMint` (G2, `isCaveatAttenuationOf`, plus the expiry check) | VERIFIED. Capabilities and expiry: the acceptance test. Caveats: `tests/principal-grants.test.ts` ("loosening a caveat is refused"); the acceptance test has no caveat case. |
 | No self-grants | `decideMint` | VERIFIED by the acceptance test |
 | Revoking a grant ends everything under it | `checkAuthorization` loads the whole chain (`walkAncestors`, which fails closed), then `isChainLive` denies if any grant in it is revoked or expired | VERIFIED. The acceptance test passes the chain to `decideAuthorization`, which scans it with `isChainLive`; `tests/accountable-root.test.ts` covers loading the chain. |
 | An expired grant is denied, not soft-allowed | `isChainLive` (G5) | VERIFIED by the acceptance test |
