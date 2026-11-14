@@ -20,9 +20,15 @@
  *   - delete or change the stored commitment (Strix):           no_commitment / commitment_changed
  *   - blank or rewrite the result after grading (Grok R2-1):     result_changed / result_not_graded / claimer_changed
  *   - leave the wrong answers out of the reveal file (Grok R2-2): not_revealed, plus the published-commitments hash
- * `revealIsClean` is false when ANY item is rejected, and the reveal command then refuses to report a clean
- * measurement or settle anything. A task the conductor saw NO answer to, and that still has none, is
- * `unanswered`: listed, scored nothing, and not a rejection, because nobody can use it to hide a graded answer.
+ * `revealVerdict` is clean only when NOTHING is rejected AND the reveal's commitments hash equals the one
+ * published before dispatch; with no published hash given, completeness was not checked, so it is not clean.
+ * The reveal command then refuses to report a clean measurement or settle anything. A task the conductor saw
+ * NO answer to, and that still has none, is `unanswered`: listed, scored nothing, and not a rejection.
+ *
+ * KNOWN LIMIT (Grok round 3 notes): a worker who blanks its graded result AND a conductor who writes "no answer
+ * graded" for it, together, make that task look unanswered. That needs the grader itself to lie. The check on
+ * the grader is outside this file: the conductor publishes its commitments before dispatch, and an independent
+ * checker re-grades its receipts (the Codex checkpoints in the rehearsal runner).
  *
  * Reads trinity_tasks and repid_agents; writes nothing. The comparison helper is pure.
  */
@@ -69,9 +75,30 @@ export interface RevealLoad {
   published_commitments_sha256: string;
 }
 
-/** A reveal is a clean measurement only when NOTHING was rejected (see the header for why). */
+/** No item was rejected (see the header for why one rejection is enough to void a run). */
 export function revealIsClean(rejected: RevealRejection[]): boolean {
   return rejected.length === 0;
+}
+
+export interface RevealVerdict {
+  clean: boolean;
+  /** true = matches the published hash; false = differs; null = no published hash given (NOT_CHECKED). */
+  manifest_ok: boolean | null;
+  reasons: string[];
+}
+
+/**
+ * The run's verdict. Clean ONLY when nothing was rejected AND the reveal's commitments hash equals the hash
+ * published before dispatch. A missing published hash is NOT_CHECKED, and not checked is not clean.
+ */
+export function revealVerdict(rejected: RevealRejection[], published: string | null, ruler: string): RevealVerdict {
+  const p = published ? published.trim().toLowerCase() : null;
+  const manifest_ok = p === null ? null : p === ruler;
+  const reasons: string[] = [];
+  if (manifest_ok === null) reasons.push('no published commitments hash was given (--published), so completeness against the published list was NOT_CHECKED');
+  if (manifest_ok === false) reasons.push(`the reveal's commitments hash ${ruler} is not the published ${p}`);
+  if (rejected.length) reasons.push(`${rejected.length} item(s) rejected (${rejected.map((x) => `${x.task_id}:${x.reason}`).join(', ')})`);
+  return { clean: reasons.length === 0, manifest_ok, reasons };
 }
 
 const KEYS = new Set(['pass', 'veto', 'abstain']);
@@ -130,11 +157,16 @@ export async function loadCommitRevealRows(
   const ruler = commitmentsRuler(reveal.items.filter((r) => Number.isInteger(r?.n)));
 
   // Completeness: every task dispatched under this tag with a commitment must be in the reveal.
-  const tagged = await client.from('trinity_tasks').select('id, metadata').eq('sprint_tag', reveal.tag);
-  if (tagged.error) throw new Error(`trinity_tasks tag read failed: ${tagged.error.message}`);
+  // Paged: the API returns at most 1000 rows per request, and a truncated read would silently pass tasks it never saw.
   const revealedIds = new Set(reveal.items.map((r) => String(r?.task_id ?? '')));
-  for (const t of (tagged.data ?? []) as { id: number | string; metadata: unknown }[]) {
-    if (HEX64.test(storedCommitment(t.metadata)) && !revealedIds.has(String(t.id))) rejected.push({ task_id: String(t.id), reason: 'not_revealed' });
+  for (let from = 0; ; from += 1000) {
+    const page = await client.from('trinity_tasks').select('id, metadata').eq('sprint_tag', reveal.tag).order('id').range(from, from + 999);
+    if (page.error) throw new Error(`trinity_tasks tag read failed: ${page.error.message}`);
+    const data = (page.data ?? []) as { id: number | string; metadata: unknown }[];
+    for (const t of data) {
+      if (HEX64.test(storedCommitment(t.metadata)) && !revealedIds.has(String(t.id))) rejected.push({ task_id: String(t.id), reason: 'not_revealed' });
+    }
+    if (data.length < 1000) break;
   }
   if (!valid.length) return { rows: [], rejected, unanswered, published_commitments_sha256: ruler };
 

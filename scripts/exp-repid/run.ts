@@ -33,7 +33,7 @@ import {
   settleExperimental,
   type KnownAnswerRow,
 } from '../../src/services/experimental-repid';
-import { keyVsBridge, loadBridgeDeltas, loadCommitRevealRows, parseRevealFile, revealIsClean } from '../../src/services/commit-reveal-key';
+import { keyVsBridge, loadBridgeDeltas, loadCommitRevealRows, parseRevealFile, revealVerdict } from '../../src/services/commit-reveal-key';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -104,9 +104,9 @@ async function reveal(): Promise<void> {
   // Any rejection makes the whole reveal unclean (commit-reveal-key.ts header): an item someone can knock
   // out must not leave the run measured on the items they chose to keep. So does a reveal whose commitments
   // are not the published list. With no --published, the list was not checked: NOT_CHECKED, not clean.
-  const manifest_ok = published === null ? null : published === published_commitments_sha256;
-  const clean = revealIsClean(rejected) && manifest_ok !== false;
-  const report = { ...summary, rejected, unanswered, published_commitments_sha256, manifest_ok, clean };
+  // (Grok round 3: this comment once said so while the code let a run with no --published report clean.)
+  const { clean, manifest_ok, reasons } = revealVerdict(rejected, published, published_commitments_sha256);
+  const report = { ...summary, rejected, unanswered, published_commitments_sha256, manifest_ok, clean, not_clean_reasons: reasons };
   const outFile = arg('--out');
   if (outFile) writeFileSync(outFile, JSON.stringify(report, null, 2) + '\n');
   if (process.argv.includes('--json')) {
@@ -128,11 +128,7 @@ async function reveal(): Promise<void> {
     console.log(`bridge on wrong answers: ${t(summary.bridge_on_wrong)}`);
   }
   if (!clean) {
-    const why = [
-      ...(manifest_ok === false ? [`the reveal's commitments hash ${published_commitments_sha256} is not the published ${published}`] : []),
-      ...(rejected.length ? [`${rejected.length} item(s) rejected (${rejected.map((x) => `${x.task_id}:${x.reason}`).join(', ')})`] : []),
-    ];
-    console.error(`reveal: NOT A CLEAN MEASUREMENT: ${why.join('; ')}. Nothing settled.`);
+    console.error(`reveal: NOT A CLEAN MEASUREMENT: ${reasons.join('; ')}. Nothing settled.`);
     process.exitCode = 1;
     return;
   }

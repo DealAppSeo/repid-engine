@@ -23,7 +23,7 @@ import {
   type KnownAnswerRow,
 } from '../../src/services/experimental-repid';
 import { createHash } from 'node:crypto';
-import { commitmentsRuler, keyVsBridge, loadBridgeDeltas, loadCommitRevealRows, parseRevealFile, revealIsClean } from '../../src/services/commit-reveal-key';
+import { commitmentsRuler, keyVsBridge, loadBridgeDeltas, loadCommitRevealRows, parseRevealFile, revealIsClean, revealVerdict } from '../../src/services/commit-reveal-key';
 
 beforeAll(() => { jest.spyOn(console, 'warn').mockImplementation(() => undefined); });
 
@@ -155,7 +155,14 @@ function fakeClient(tables: Record<string, any[]>) {
               },
               eq(col: string, val: unknown) {
                 asked.push(`${table}.${col}=`);
-                return Promise.resolve({ data: (tables[table] ?? []).filter((r) => r[col] === val), error: null });
+                const matched = () => (tables[table] ?? []).filter((r) => r[col] === val).sort((a, b) => Number(a.id) - Number(b.id));
+                // Like the real API: at most 1000 rows per request unless paged with range().
+                const q: any = {
+                  order() { return q; },
+                  range(from: number, to: number) { asked.push(`${table}.range(${from},${to})`); return Promise.resolve({ data: matched().slice(from, to + 1), error: null }); },
+                  then(ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) { return Promise.resolve({ data: matched().slice(0, 1000), error: null }).then(ok, bad); },
+                };
+                return q;
               },
             };
           },
@@ -238,6 +245,25 @@ describe('loadCommitRevealRows', () => {
     // a task under ANOTHER tag, or with no commitment, is not part of this run
     const other = await load([task(), task({ id: 103, sprint_tag: 'other-run' }), task({ id: 104, metadata: {} })], [item()]);
     expect(other.rejected).toEqual([]);
+  });
+
+  test('Grok R3 note: completeness pages past 1000 tagged tasks; a missing task beyond row 1000 is still caught', async () => {
+    const many = Array.from({ length: 1001 }, (_, i) => task({ id: 2000 + i, metadata: { case_id: `c-${i}`, answer_commitment_sha256: commitment } }));
+    const r = await load([task(), ...many], [item()]);
+    expect(r.rejected.filter((x) => x.reason === 'not_revealed')).toHaveLength(1001);
+    expect(r.rejected).toContainEqual({ task_id: '3000', reason: 'not_revealed' }); // the 1002nd row by id
+  });
+
+  test('revealVerdict: clean only with no rejections AND the published hash; no published hash is NOT_CHECKED', () => {
+    const ruler = 'a'.repeat(64);
+    expect(revealVerdict([], ruler, ruler)).toEqual({ clean: true, manifest_ok: true, reasons: [] });
+    expect(revealVerdict([], ruler.toUpperCase(), ruler).clean).toBe(true);
+    const none = revealVerdict([], null, ruler);
+    expect(none.clean).toBe(false);
+    expect(none.manifest_ok).toBeNull();
+    expect(none.reasons[0]).toMatch(/NOT_CHECKED/);
+    expect(revealVerdict([], 'b'.repeat(64), ruler)).toMatchObject({ clean: false, manifest_ok: false });
+    expect(revealVerdict([{ task_id: '1', reason: 'not_revealed' }], ruler, ruler)).toMatchObject({ clean: false, manifest_ok: true });
   });
 
   test('a task the conductor saw no answer to, still unanswered, is listed but is not a rejection', async () => {
