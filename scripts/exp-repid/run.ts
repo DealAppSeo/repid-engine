@@ -11,8 +11,19 @@
  *       mode EXPERIMENTAL_REPID_MODE says (unset = off = nothing written). Evidence is read from the database
  *       only, never from a file: a file is caller-supplied and could be forged. Re-running is safe: consumed
  *       evidence is refused by the table's unique indexes (already_consumed).
+ *
+ *   npm run exp-repid:reveal -- <reveal.json> [--published <sha256>] [--settle] [--json] [--out summary.json]
+ *       Grades known-answer work whose key was COMMITTED before dispatch and REVEALED after it (a rehearsal
+ *       runner's tasks). The reveal file ({ tag, items }) is caller-supplied, so it must cover every task
+ *       dispatched under its tag, each item must open its PUBLISHED commitment, and each row must still carry
+ *       that commitment and the exact reply and claimer the conductor graded (see commit-reveal-key.ts).
+ *       ANY rejected item, or a commitments hash that differs from --published, makes the run unclean: it
+ *       exits 1 and settles nothing, because an exclusion someone could cause must never beat the penalty.
+ *       Prints, per task, the key-graded delta beside the bridge's own fact-check delta for the same task.
+ *       Without --settle it WRITES NOTHING. --settle requires --published, writes SHADOW rows only, and
+ *       refuses unless EXPERIMENTAL_REPID_MODE=shadow: the commit-reveal key is not ratified for active.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import {
   ACTIVE_VERSIONS,
   experimentalRepidMode,
@@ -22,6 +33,7 @@ import {
   settleExperimental,
   type KnownAnswerRow,
 } from '../../src/services/experimental-repid';
+import { keyVsBridge, loadBridgeDeltas, loadCommitRevealRows, parseRevealFile, revealVerdict } from '../../src/services/commit-reveal-key';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -68,8 +80,74 @@ async function settle(): Promise<void> {
   if (Object.keys(tally).some((k) => k.endsWith('store_error'))) process.exitCode = 1;
 }
 
+async function reveal(): Promise<void> {
+  const file = process.argv[3];
+  if (!file || file.startsWith('--')) throw new Error('usage: run.ts reveal <reveal.json> [--published <sha256>] [--settle] [--json] [--out file]');
+  const doSettle = process.argv.includes('--settle');
+  // The commitments hash published BEFORE dispatch. Without it nobody has checked that this reveal is the whole
+  // published list, so --settle requires it; a report without it says so.
+  const published = (arg('--published') ?? '').trim().toLowerCase() || null;
+  if (doSettle && !published) {
+    console.error('reveal --settle requires --published <sha256>, the commitments hash published before dispatch. Nothing read, nothing written.');
+    process.exitCode = 2;
+    return;
+  }
+  // Refuse before reading anything: the commit-reveal key settles shadow only until it is ratified.
+  if (doSettle && experimentalRepidMode() !== 'shadow') {
+    console.error(`reveal --settle writes shadow rows only; EXPERIMENTAL_REPID_MODE is '${experimentalRepidMode()}', expected 'shadow'. Nothing read, nothing written.`);
+    process.exitCode = 2;
+    return;
+  }
+  const { rows, rejected, unanswered, published_commitments_sha256 } = await loadCommitRevealRows(parseRevealFile(JSON.parse(readFileSync(file, 'utf8'))));
+  const bridge = await loadBridgeDeltas(rows.map((r) => r.task_id));
+  const summary = keyVsBridge(rows, bridge);
+  // Any rejection makes the whole reveal unclean (commit-reveal-key.ts header): an item someone can knock
+  // out must not leave the run measured on the items they chose to keep. So does a reveal whose commitments
+  // are not the published list. With no --published, the list was not checked: NOT_CHECKED, not clean.
+  // (Grok round 3: this comment once said so while the code let a run with no --published report clean.)
+  const { clean, manifest_ok, reasons } = revealVerdict(rejected, published, published_commitments_sha256);
+  const report = { ...summary, rejected, unanswered, published_commitments_sha256, manifest_ok, clean, not_clean_reasons: reasons };
+  const outFile = arg('--out');
+  if (outFile) writeFileSync(outFile, JSON.stringify(report, null, 2) + '\n');
+  if (process.argv.includes('--json')) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(`reveal: ${rows.length} accepted, ${rejected.length} rejected; grading rule ${summary.version}${doSettle && clean ? '' : '; nothing written'}`);
+    for (const x of rejected) console.log(`  REJECTED task ${x.task_id}: ${x.reason}`);
+    if (unanswered.length) console.log(`  unanswered (scored nothing, not a rejection): ${unanswered.join(', ')}`);
+    console.log(`commitments hash of this reveal: ${published_commitments_sha256} (${manifest_ok === null ? 'NOT_CHECKED: pass --published' : manifest_ok ? 'matches the published one' : 'DOES NOT match the published one'})`);
+    console.log('task'.padEnd(10) + 'agent'.padEnd(18) + 'expected'.padEnd(10) + 'answer'.padEnd(10) + 'key'.padStart(7) + 'bridge'.padStart(9));
+    for (const l of summary.lines) {
+      const fmt = (x: number | null) => (x === null ? '-' : String(Math.round(x * 1000) / 1000));
+      console.log(l.task_id.padEnd(10) + l.agent.padEnd(18) + l.expected.padEnd(10) + String(l.decision ?? '-').padEnd(10) + fmt(l.key_delta).padStart(7) + fmt(l.bridge_delta).padStart(9));
+    }
+    const t = (x: Record<string, number>) => `up ${x.up}, down ${x.down}, zero ${x.zero}, missing ${x.missing}`;
+    console.log(`\nright ${summary.right} (+${summary.right_abstain} right abstain), wrong ${summary.wrong}, abstained ${summary.abstained}, not scorable ${summary.not_scorable}`);
+    console.log(`key follows the answer: ${summary.key_follows_answer ? 'YES' : 'NO'}`);
+    console.log(`bridge on right answers: ${t(summary.bridge_on_right)}`);
+    console.log(`bridge on wrong answers: ${t(summary.bridge_on_wrong)}`);
+  }
+  if (!clean) {
+    console.error(`reveal: NOT A CLEAN MEASUREMENT: ${reasons.join('; ')}. Nothing settled.`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!doSettle) return;
+  const tally: Record<string, number> = {};
+  for (const r of rows) {
+    const evidence = knownAnswerEvidence(r);
+    for (const version of ACTIVE_VERSIONS) {
+      const res = await settleExperimental({ agentId: r.subject_agent_id, evidence, version }, { mode: 'shadow' });
+      const key = `${version}:${res.status === 'refused' ? `refused:${res.reason}` : res.status}`;
+      tally[key] = (tally[key] ?? 0) + 1;
+    }
+  }
+  console.log(JSON.stringify({ mode: 'shadow', rows: rows.length, tally }, null, 2));
+  if (Object.keys(tally).some((k) => k.endsWith('store_error'))) process.exitCode = 1;
+}
+
 const cmd = process.argv[2];
-(cmd === 'replay' ? replay() : cmd === 'settle' ? settle() : Promise.reject(new Error('usage: run.ts replay|settle')))
+(cmd === 'replay' ? replay() : cmd === 'settle' ? settle() : cmd === 'reveal' ? reveal() : Promise.reject(new Error('usage: run.ts replay|settle|reveal')))
   .catch((err) => {
     console.error(err instanceof Error ? err.message : err);
     process.exitCode = 1;

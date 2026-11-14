@@ -30,6 +30,7 @@
     "answer-key": "ts-node scripts/answer-key/run.ts",
     "exp-repid:replay": "ts-node scripts/exp-repid/run.ts replay",
     "exp-repid:settle": "ts-node scripts/exp-repid/run.ts settle",
+    "exp-repid:reveal": "ts-node scripts/exp-repid/run.ts reveal",
     "verify:feedback-write": "ts-node scripts/verify-feedback-write.ts",
     "demo:human-backed": "ts-node scripts/demo/human-backed-validation.ts",
     "decay:stop-diff": "ts-node scripts/identity/decay-stop-diff.ts",

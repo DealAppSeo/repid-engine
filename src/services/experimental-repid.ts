@@ -22,6 +22,16 @@
  * from partyIndependence (#1484/#1489) can produce 'independent_counterparty'. A known answer has no
  * counterparty, so it is always 'same_controller_measured' (the migration's CHECK says so too).
  *
+ * TWO ANSWER KEYS (2026-11-14). A known answer is graded by one of exactly two oracles:
+ *   KNOWN_ANSWER_ORACLE   hal_test_cases.expected_decision, read from the database (pass | veto).
+ *   COMMIT_REVEAL_ORACLE  a key the conductor committed to BEFORE dispatch, as
+ *                         sha256("<expected>|<nonce>") stored in the task's own metadata
+ *                         (answer_commitment_sha256), and revealed after the run (pass | veto | abstain).
+ *                         The reveal arrives from outside, so it counts only when it recomputes the
+ *                         commitment that was written at dispatch: a changed answer or nonce does not.
+ *                         Settles in SHADOW ONLY until ratified ('shadow_only_oracle' refuses active).
+ * Any other oracle is refused. The scoring rules are the same functions for both keys.
+ *
  * MODE (EXPERIMENTAL_REPID_MODE): unset/off = nothing read or written; shadow = rows with mode 'shadow';
  * active = rows with mode 'active'; anything else = loud + shadow. Shadow and active run the same
  * evidence through the same pure scoring functions; only active rows may ever feed experimentalTier.
@@ -36,6 +46,12 @@ export const EXPERIMENTAL_DOMAIN = 't12-exp-v1';
 export const EXPERIMENTAL_TABLE = 'repid_experimental_events';
 export const EXPERIMENTAL_SCORES_VIEW = 'repid_experimental_scores';
 export const KNOWN_ANSWER_ORACLE = 'answer_key:hal_test_cases.expected_decision';
+export const COMMIT_REVEAL_ORACLE = 'answer_key:commit_reveal_sha256';
+
+/** The conductor's commitment: sha256 of "<expected>|<nonce>", UTF-8, no newline, lowercase hex. */
+export function answerCommitment(expected: string, nonce: string): string {
+  return createHash('sha256').update(`${expected}|${nonce}`, 'utf8').digest('hex');
+}
 export const KNOWN_ANSWER_SPRINT_TAG = 't12-known-answer-v2';
 export const EXPERIMENTAL_LABEL =
   'EXPERIMENTAL: same-controller measured evidence (domain t12-exp-v1). Not independent-counterparty reputation and not canonical RepID.';
@@ -54,7 +70,11 @@ export function experimentalRepidMode(raw: string | undefined = process.env.EXPE
 
 // ── evidence ────────────────────────────────────────────────────────────────────────────────
 /** What a known-answer evidence row scores, and nothing else. All of it is hashed. */
-export interface KnownAnswerContent { task_id: string; case_id: string; claimed_by: string; result: string; expected: string }
+export interface KnownAnswerContent {
+  task_id: string; case_id: string; claimed_by: string; result: string; expected: string;
+  /** Commit-reveal key only: the commitment written at dispatch, and the revealed nonce. */
+  commitment?: string; nonce?: string;
+}
 
 export interface ExperimentalEvidence {
   domain: string;
@@ -70,13 +90,19 @@ export interface ExperimentalEvidence {
 }
 
 /** A known-answer child task joined to its answer key and its agent's repid_agents.id. */
-export interface KnownAnswerRow { task_id: string; claimed_by: string; case_id: string; result: string; expected: string; subject_agent_id: string }
+export interface KnownAnswerRow {
+  task_id: string; claimed_by: string; case_id: string; result: string; expected: string; subject_agent_id: string;
+  /** Present only for a commit-reveal key (see loadCommitRevealRows); absent = hal_test_cases key. */
+  commitment?: string; nonce?: string;
+}
 
 const evidenceId = (e: ExperimentalEvidence) => `trinity_tasks:${e.content.task_id}`;
 
 function evidenceHash(e: Omit<ExperimentalEvidence, 'hash'>): string {
   const c = e.content;
-  const canonical = [e.domain, e.kind, c.task_id, c.case_id, c.claimed_by, c.result, c.expected, e.subjectAgentId, e.oracleId, e.counterpartyAgentId ?? null];
+  const canonical: unknown[] = [e.domain, e.kind, c.task_id, c.case_id, c.claimed_by, c.result, c.expected, e.subjectAgentId, e.oracleId, e.counterpartyAgentId ?? null];
+  // Appended only when present, so every hal_test_cases-keyed hash already stored is unchanged.
+  if (c.commitment !== undefined || c.nonce !== undefined) canonical.push(c.commitment ?? null, c.nonce ?? null);
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
 
@@ -87,6 +113,19 @@ export function sealEvidence(e: Omit<ExperimentalEvidence, 'hash'> & { hash?: st
 
 export function knownAnswerEvidence(r: KnownAnswerRow): ExperimentalEvidence {
   const task_id = String(r.task_id);
+  if (r.commitment !== undefined || r.nonce !== undefined) {
+    return sealEvidence({
+      domain: EXPERIMENTAL_DOMAIN,
+      kind: 'known_answer',
+      content: {
+        task_id, case_id: String(r.case_id), claimed_by: r.claimed_by, result: r.result, expected: r.expected,
+        commitment: r.commitment ?? '', nonce: r.nonce ?? '',
+      },
+      subjectAgentId: r.subject_agent_id,
+      oracleId: COMMIT_REVEAL_ORACLE,
+      ref: `trinity_tasks/${task_id};answer_commitment_sha256/${r.commitment ?? ''}`,
+    });
+  }
   return sealEvidence({
     domain: EXPERIMENTAL_DOMAIN,
     kind: 'known_answer',
@@ -98,7 +137,7 @@ export function knownAnswerEvidence(r: KnownAnswerRow): ExperimentalEvidence {
 }
 
 // ── versioned scoring (pure) ────────────────────────────────────────────────────────────────
-interface Outcome { decision: 'pass' | 'veto' | 'abstain' | null; expected: 'pass' | 'veto' | null; confidence: number | null }
+interface Outcome { decision: 'pass' | 'veto' | 'abstain' | null; expected: 'pass' | 'veto' | 'abstain' | null; confidence: number | null }
 
 /** Same parse as E:\dev\sprints\2026-11-01\T12_KNOWN_ANSWER_GRADER_V2.sql. */
 export function parseKnownAnswer(c: KnownAnswerContent): Outcome {
@@ -106,7 +145,11 @@ export function parseKnownAnswer(c: KnownAnswerContent): Outcome {
   const d = /"decision"\s*:\s*"(pass|veto|abstain)"/.exec(text)?.[1] as Outcome['decision'] | undefined;
   const conf = /"confidence"\s*:\s*"?([0-9]*\.?[0-9]+)/.exec(text)?.[1];
   const n = conf === undefined ? NaN : Number(conf);
-  const expected = c.expected === 'pass' || c.expected === 'veto' ? c.expected : null;
+  // 'abstain' is a valid KEY only for a commit-reveal key: a task can name "skipped" or "no output" as
+  // grounds to abstain. hal_test_cases holds pass|veto only, and its parse is unchanged. The rules
+  // below are unchanged too: an abstain still scores 0, and answering an abstain item is wrong.
+  const keyAllowsAbstain = c.commitment !== undefined;
+  const expected = c.expected === 'pass' || c.expected === 'veto' || (keyAllowsAbstain && c.expected === 'abstain') ? c.expected : null;
   return { decision: d ?? null, expected, confidence: Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : null };
 }
 
@@ -203,7 +246,11 @@ const KINDS_WITH_COUNTERPARTY = new Set<string>();
 // ── settlement ──────────────────────────────────────────────────────────────────────────────
 export type RefuseReason =
   | 'wrong_domain' | 'unknown_version' | 'hash_mismatch' | 'subject_mismatch' | 'unknown_agent'
-  | 'self_dealing' | 'oracle_not_answer_key' | 'already_consumed' | 'store_error';
+  | 'self_dealing' | 'oracle_not_answer_key' | 'already_consumed' | 'store_error'
+  /** A commit-reveal key whose answer and nonce do not recompute the commitment. */
+  | 'reveal_mismatch'
+  /** A commit-reveal key in active mode: not ratified, so shadow only. */
+  | 'shadow_only_oracle';
 export type SettleResult =
   | { status: 'off' }
   | { status: 'not_scorable' }
@@ -238,7 +285,15 @@ export async function settleExperimental(
   if (!agent) return refuse('unknown_agent');
   if (agent.agent_id !== e.content.claimed_by) return refuse('subject_mismatch');
   if ([agent.id, agent.agent_id, agent.agent_name].includes(e.oracleId)) return refuse('self_dealing');
-  if (e.kind === 'known_answer' && e.oracleId !== KNOWN_ANSWER_ORACLE) return refuse('oracle_not_answer_key');
+  if (e.kind === 'known_answer') {
+    if (e.oracleId === COMMIT_REVEAL_ORACLE) {
+      const c = e.content;
+      if (!c.commitment || !c.nonce || answerCommitment(c.expected, c.nonce) !== c.commitment.toLowerCase()) return refuse('reveal_mismatch');
+      if (mode === 'active') return refuse('shadow_only_oracle');
+    } else if (e.oracleId !== KNOWN_ANSWER_ORACLE) {
+      return refuse('oracle_not_answer_key');
+    }
+  }
 
   const delta = scorer.score(e.content);
   if (delta === null) return { status: 'not_scorable' };
