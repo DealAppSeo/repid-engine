@@ -44,8 +44,8 @@ export class RefundBroadcastUnconfirmed extends Error {
 /**
  * The broadcast call itself failed. Only an explicit rejection by the node means the transaction
  * was not accepted; a timeout or a lost reply may still have put it in the mempool, so that is
- * unconfirmed (handled as sent). NONCE_EXPIRED stays unconfirmed: "nonce too low" can mean our own
- * transaction already landed.
+ * unconfirmed (handled as sent). NONCE_EXPIRED is not decided here: realSender looks up our own
+ * receipt first (nonceExpiredOutcome); reaching this function with it means unconfirmed.
  */
 const NODE_REJECTED = new Set(['INSUFFICIENT_FUNDS', 'REPLACEMENT_UNDERPRICED']);
 export function broadcastFailure(e: unknown, txHash: string): Error {
@@ -53,6 +53,35 @@ export function broadcastFailure(e: unknown, txHash: string): Error {
   const detail = e instanceof Error ? e.message.split('\n')[0] ?? '' : String(e);
   if (typeof code === 'string' && NODE_REJECTED.has(code)) return new Error(`refund ${txHash} rejected by the node before broadcast (${code}): ${detail}`);
   return new RefundBroadcastUnconfirmed(txHash, `broadcast reply not received: ${detail}`);
+}
+
+/**
+ * "nonce too low" on broadcast: that nonce is already used by a MINED transaction. If our own
+ * hash has a receipt, it was ours and its status decides; if it has none, another transaction took
+ * the nonce and ours can never be mined, so nothing was sent. Classifying it as unconfirmed (as a
+ * blanket rule) debited a builder whose refund never went out when two withdrawals raced the one
+ * escrow nonce (Grok r9 on #1550). `undefined` = the lookup itself failed: unconfirmed.
+ */
+export function nonceExpiredOutcome(receipt: { status: number | null } | null | undefined, txHash: string): { txHash: string } | Error {
+  if (receipt === undefined) return new RefundBroadcastUnconfirmed(txHash, 'nonce too low and the receipt lookup failed');
+  if (receipt === null) return new Error(`refund ${txHash} was not sent: its nonce was used by another transaction, so it can never be mined`);
+  if (receipt.status === 1) return { txHash };
+  if (receipt.status === 0) return new Error(`refund ${txHash} reverted on-chain (status 0)`);
+  return new RefundBroadcastUnconfirmed(txHash, `nonce too low; receipt status ${receipt.status}`);
+}
+
+/**
+ * ONE escrow wallet means ONE nonce sequence: refunds for different builders (different
+ * withdrawal locks) raced it and collided (Grok r9 on #1550), so every send runs one at a time.
+ * ponytail: in-process. Correct while this is the only code that signs with the escrow key (it is)
+ * and the engine runs one replica (numReplicas 1, read 2026-10-04); move to a Postgres advisory
+ * lock if either changes.
+ */
+let escrowQueue: Promise<unknown> = Promise.resolve();
+function oneAtATime<T>(fn: () => Promise<T>): Promise<T> {
+  const run = escrowQueue.then(fn, fn);
+  escrowQueue = run.catch(() => undefined);
+  return run;
 }
 
 /** After broadcast, only a receipt proving status 0 means no USDC moved; anything else may have. */
@@ -127,6 +156,19 @@ async function realSender(to: string, amount: bigint): Promise<{ txHash: string 
   try {
     tx = await provider.broadcastTransaction(signed);
   } catch (e: unknown) {
+    if ((e as { code?: unknown } | null)?.code === 'NONCE_EXPIRED') {
+      // Was the mined transaction holding this nonce ours? Re-check briefly: a load-balanced RPC
+      // can answer "nonce too low" from a node that is ahead of the one serving the receipt.
+      let mine: Awaited<ReturnType<typeof provider.getTransactionReceipt>> | undefined;
+      for (let i = 0; i < 4; i++) {
+        mine = await provider.getTransactionReceipt(hash).catch(() => undefined);
+        if (mine !== null) break;
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      const out = nonceExpiredOutcome(mine, hash);
+      if (out instanceof Error) throw out;
+      return out;
+    }
     throw broadcastFailure(e, hash);
   }
   // From here the transfer is on the wire.
@@ -298,7 +340,7 @@ export async function escrowRefund(
   }
   try {
     const send = sender ?? realSender;
-    const { txHash } = await send(to, amount);
+    const { txHash } = await oneAtATime(() => send(to, amount));
     return { initiated: true, stub: false, amount: amount.toString(), to, txHash };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -34,6 +34,7 @@ import {
   RefundBroadcastUnconfirmed,
   refundWaitFailure,
   broadcastFailure,
+  nonceExpiredOutcome,
 } from '../src/services/escrow-refunder';
 
 const BUILDER = 'builder-1';
@@ -115,6 +116,30 @@ describe('escrowRefund — fail-closed escrow -> builder refund', () => {
       expect(out).toBeInstanceOf(RefundBroadcastUnconfirmed);
       expect((out as RefundBroadcastUnconfirmed).txHash).toBe('0x4');
     }
+  });
+
+  it('nonceExpiredOutcome: our own receipt decides; no receipt means another tx took the nonce (not sent)', () => {
+    expect(nonceExpiredOutcome(null, '0x5')).not.toBeInstanceOf(RefundBroadcastUnconfirmed); // never minable: not sent
+    expect(nonceExpiredOutcome(null, '0x5')).toBeInstanceOf(Error);
+    expect(nonceExpiredOutcome({ status: 1 }, '0x5')).toEqual({ txHash: '0x5' }); // ours, and it landed
+    expect(nonceExpiredOutcome({ status: 0 }, '0x5')).not.toBeInstanceOf(RefundBroadcastUnconfirmed); // ours, reverted
+    expect(nonceExpiredOutcome(undefined, '0x5')).toBeInstanceOf(RefundBroadcastUnconfirmed); // lookup failed
+  });
+
+  it('refunds from the one escrow wallet run one at a time, whatever builder they are for', async () => {
+    mockConfig.stakeEscrowSignerKey = 'present';
+    const log: string[] = [];
+    __setEscrowSender(async (to) => {
+      log.push(`start ${to.slice(-1)}`);
+      await new Promise((r) => setTimeout(r, 20));
+      log.push(`end ${to.slice(-1)}`);
+      return { txHash: '0xok' };
+    });
+    await Promise.all([
+      escrowRefund('builder-a', 1n, '0x' + '2'.repeat(39) + 'a'),
+      escrowRefund('builder-b', 1n, '0x' + '2'.repeat(39) + 'b'),
+    ]);
+    expect(log).toEqual(['start a', 'end a', 'start b', 'end b']);
   });
 
   it('configured + send throws (signer != escrow / wrong chain) => REFUSED (fail closed)', async () => {
