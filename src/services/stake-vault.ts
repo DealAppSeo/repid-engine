@@ -209,7 +209,7 @@ export async function depositStake(
       amount: amount.toString(),
       total_active_stake: total.toString(),
       authority_after: auth.authority.toString(),
-      is_simulated: !process.env.X402_REAL_RPC,
+      is_simulated: true, // simulated path: nothing here checked the chain
     },
   });
 
@@ -218,7 +218,7 @@ export async function depositStake(
     builder_id: builder.id,
     total_active_stake: total.toString(),
     authority_after: auth.authority.toString(),
-    is_simulated: !process.env.X402_REAL_RPC,
+    is_simulated: true,
   };
 }
 
@@ -364,7 +364,7 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
     builder_id: builderId,
     amount: (-amount).toString(),
     status: 'withdrawn',
-    is_simulated: !process.env.X402_REAL_RPC,
+    is_simulated: true, // simulated: no refund was sent, so it must not reduce REAL stake (owner_funded_stake counts real negative rows)
     deposit_tx_hash: `simulated:withdraw:${Date.now()}`,
   });
 

@@ -397,9 +397,29 @@ describe('stake-vault — depositStake real-staking routing', () => {
       seedBuilderFound();
       dbState.selectResults['stake_deposits'] = [{ data: [{ amount: '100000000' }], error: null }];
       dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
-      await depositStake(BUILDER_ADDR, 100_000_000n);
+      const r = await depositStake(BUILDER_ADDR, 100_000_000n);
       const dep = dbState.inserts.find((i) => i.table === 'stake_deposits');
       expect(dep?.row.is_simulated).toBe(true);
+      // The row, the audit entry and the response must agree (Strix on #1550: only the row was fixed at first).
+      expect(r.is_simulated).toBe(true);
+      const { emitAuditEvent } = jest.requireMock('../src/services/audit-emit');
+      expect(emitAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ is_simulated: true }) }));
+    } finally {
+      delete process.env.X402_REAL_RPC;
+    }
+  });
+
+  it('flag OFF with X402_REAL_RPC set: a simulated withdrawal is labelled simulated, so it cannot shrink REAL stake', async () => {
+    mockConfig.realStakingEnabled = false;
+    process.env.X402_REAL_RPC = 'https://example.invalid';
+    try {
+      dbState.selectResults['linked_bets'] = [{ data: [], error: null }];
+      dbState.selectResults['stake_deposits'] = [{ data: [{ amount: '100000000' }], error: null }, { data: [{ amount: '50000000' }], error: null }];
+      dbState.selectResults['builders'] = [{ data: { id: 'builder-1', current_repid: 6000, address: BUILDER_ADDR }, error: null }];
+      dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
+      await withdrawStake('builder-1', 50_000_000n);
+      const w = dbState.inserts.find((i) => i.table === 'stake_deposits');
+      expect(w?.row.is_simulated).toBe(true);
     } finally {
       delete process.env.X402_REAL_RPC;
     }
