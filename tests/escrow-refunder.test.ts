@@ -35,6 +35,8 @@ import {
   refundWaitFailure,
   broadcastFailure,
   nonceExpiredOutcome,
+  escrowPayout,
+  configuredEscrowAddress,
 } from '../src/services/escrow-refunder';
 
 const BUILDER = 'builder-1';
@@ -197,6 +199,42 @@ describe('escrowRefund — fail-closed escrow -> builder refund', () => {
     mockConfig.stakeEscrowSignerKey = 'present';
     const r = await escrowRefund(BUILDER, 0n, PAYEE);
     expect(r.initiated).toBe(false);
+  });
+});
+
+describe('escrowPayout — an agent paid from the stake goes through the refund send and its guards', () => {
+  it('sends to the payee, and shares the one-at-a-time queue with refunds (one escrow nonce)', async () => {
+    mockConfig.stakeEscrowSignerKey = 'present';
+    const log: string[] = [];
+    __setEscrowSender(async (to, amount) => {
+      log.push(`start ${to.slice(-1)} ${amount}`);
+      await new Promise((r) => setTimeout(r, 20));
+      log.push(`end ${to.slice(-1)}`);
+      return { txHash: '0xok' };
+    });
+    const [paid] = await Promise.all([
+      escrowPayout('0x' + '2'.repeat(39) + 'a', 7n),
+      escrowRefund('builder-b', 1n, '0x' + '2'.repeat(39) + 'b'),
+    ]);
+    expect(paid).toMatchObject({ initiated: true, stub: false, txHash: '0xok', amount: '7' });
+    expect(log).toEqual(['start a 7', 'end a', 'start b 1', 'end b']);
+  });
+
+  it('keeps the refund outcomes: unconfirmed stays unconfirmed, a failure is not sent, no signer is a stub', async () => {
+    mockConfig.stakeEscrowSignerKey = 'present';
+    __setEscrowSender(async () => { throw new RefundBroadcastUnconfirmed('0xmaybe', 'wait failed'); });
+    expect(await escrowPayout(PAYEE, 5n)).toMatchObject({ initiated: true, unconfirmed: true, txHash: '0xmaybe' });
+    __setEscrowSender(async () => { throw new Error('rejected by the node'); });
+    expect(await escrowPayout(PAYEE, 5n)).toMatchObject({ initiated: false, stub: false });
+    mockConfig.stakeEscrowSignerKey = null;
+    expect(await escrowPayout(PAYEE, 5n)).toMatchObject({ stub: true });
+  });
+
+  it('configuredEscrowAddress: only when the signer AND the address are set', () => {
+    mockConfig.stakeEscrowSignerKey = null;
+    expect(configuredEscrowAddress()).toBeNull();
+    mockConfig.stakeEscrowSignerKey = 'present';
+    expect(configuredEscrowAddress()).toBe('0x1111111111111111111111111111111111111111');
   });
 });
 

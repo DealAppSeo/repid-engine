@@ -122,6 +122,32 @@ describe('off', () => {
   });
 });
 
+describe('agents spend from stake: the ledger is checked whatever OWNER_BUDGET_MODE says', () => {
+  // The escrow pays agents out of the stake, and only the ledger records that. A withdrawal that
+  // skipped it could refund money already paid out, from other owners' stake.
+  afterEach(() => { delete process.env.AGENT_SPEND_SOURCE; });
+
+  it.each(['stake', 'stakes (a typo)'])('AGENT_SPEND_SOURCE=%s with budget mode off: begin_stake_withdrawal decides', async (src) => {
+    mockMode = 'off';
+    process.env.AGENT_SPEND_SOURCE = src.split(' ')[0];
+    const err = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockBudget.beginWithdrawal.mockImplementationOnce(async () => { mockOrder.push('begin'); return { ok: false, debitId: null, funded: 50_000_000n, committed: 40_000_000n } as any; });
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    err.mockRestore();
+    expect(mockBudget.beginWithdrawal).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ ok: false, error: 'stake_backs_agent_spend' });
+    expect(refunds).toBe(0);
+  });
+
+  it('AGENT_SPEND_SOURCE=wallet with budget mode off: unchanged (no ledger call)', async () => {
+    mockMode = 'off';
+    process.env.AGENT_SPEND_SOURCE = 'wallet';
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(r.ok).toBe(true);
+    expect(mockBudget.beginWithdrawal).not.toHaveBeenCalled();
+  });
+});
+
 describe('every spelling of one builder id', () => {
   const id = '11111111-2222-4333-8444-555555555555';
 

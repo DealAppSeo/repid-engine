@@ -220,6 +220,45 @@ export class SpendRevertedError extends Error {
   }
 }
 
+/**
+ * WHERE AN AGENT'S SPEND COMES FROM (AGENT_SPEND_SOURCE; Sean chose option B, 2026-11-15).
+ *
+ *   wallet (default)  everything above: the agent's wallet calls transferFrom(owner, payee) under
+ *                     the owner's approval. With the owner budget on, the same amount ALSO stays
+ *                     locked in escrow for good, so every spend cost the owner twice.
+ *   stake             the ESCROW pays the payee out of the owner's stake (escrow-refunder.ts, the
+ *                     same guarded send a refund uses). The stake is a prepaid balance: no approval,
+ *                     no gas in the agent's wallet, and what is spent is what left the escrow.
+ *                     The owner budget is then the ONLY cap, so the route refuses unless
+ *                     OWNER_BUDGET_MODE=enforce, and a withdrawal always checks the ledger.
+ *
+ * Any other value is 'invalid': the route refuses every spend, and withdrawals treat it as stake
+ * (ledger checked). A typo in a money control fails closed.
+ */
+export type SpendSource = 'wallet' | 'stake' | 'invalid';
+
+export function agentSpendSource(raw: string | undefined = process.env.AGENT_SPEND_SOURCE): SpendSource {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === '' || v === 'wallet') return 'wallet';
+  if (v === 'stake') return 'stake';
+  console.error(`[agent-spend] AGENT_SPEND_SOURCE=${JSON.stringify(raw)} is not wallet or stake: refusing spends (fail closed).`);
+  return 'invalid';
+}
+
+/** Pure. The payee refusals for a spend paid from the stake, before anything is reserved. */
+export function decideStakeSpend(to: string, escrow: string, agentWallet: string | null): SpendDecision {
+  if (!ethers.isAddress(to)) return refuse(400, 'bad_payee', 'to_address is not an address.');
+  const payee = ethers.getAddress(to);
+  if (payee === ethers.ZeroAddress) return refuse(400, 'bad_payee', 'to_address is the zero address.');
+  if (ethers.isAddress(escrow) && payee === ethers.getAddress(escrow)) {
+    return refuse(400, 'pays_escrow', 'the payee is the escrow itself: the money would not leave, and the budget would still be used up.');
+  }
+  if (agentWallet && ethers.isAddress(agentWallet) && payee === ethers.getAddress(agentWallet)) {
+    return refuse(400, 'pays_itself', "the agent cannot pay its own wallet: from there it could spend outside its owner's budget.");
+  }
+  return { ok: true };
+}
+
 export async function executeSpend(chain: SpendChain, checked: Extract<CheckOutcome, { ok: true }>, req: SpendRequest): Promise<SpendResult> {
   const sent = await chain.send(checked.agentKey, req.owner, req.to, req.amount);
   if (sent.status === 0) throw new SpendRevertedError(sent.hash);
