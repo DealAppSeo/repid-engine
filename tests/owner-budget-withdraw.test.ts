@@ -34,6 +34,7 @@ jest.mock('../src/db', () => {
     q.single = q.maybeSingle;
     q.then = (resolve: any) => resolve(rows[table] ?? { data: [], error: null });
     q.insert = async (_row: any) => { mockOrder.push(`insert:${table}`); return { data: null, error: table === 'stake_deposits' ? mockDb.insertError : null }; };
+    q.update = (row: any) => { mockOrder.push(`update:${table}:${row.status}`); const u: any = { eq: () => u, then: (res: any) => res({ data: null, error: null }) }; return u; };
     return q;
   };
   return { db: { from: (t: string) => make(t) } };
@@ -120,11 +121,11 @@ it('two spellings of one builder id share ONE withdrawal lock (no interleaving)'
   expect(log).toEqual(['start', 'end', 'start', 'end']);
 });
 
-it('with the mode off, the old single debit insert is used', async () => {
+it('with the mode off, the debit is written BEFORE the refund and stamped after it', async () => {
   mockMode = 'off';
   await withdrawStake('builder-1', 50_000_000n);
   expect(mockBudget.completeWithdrawal).not.toHaveBeenCalled();
-  expect(mockOrder).toContain('insert:stake_deposits');
+  expect(mockOrder.filter((s) => s !== 'insert:stake_authority_snapshots')).toEqual(['insert:stake_deposits', 'refund', 'update:stake_deposits:withdrawn']);
 });
 
 it('with the mode off, no hold is taken', async () => {

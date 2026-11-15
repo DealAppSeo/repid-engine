@@ -12,6 +12,7 @@
  * (one-way valve: the bet must resolve before the stake can move).
  */
 
+import { randomUUID } from 'crypto';
 import { db } from '../db';
 import { config } from '../config';
 import { emitAuditEvent } from './audit-emit';
@@ -340,15 +341,38 @@ export async function withdrawStake(rawBuilderId: string, amount: bigint): Promi
       .eq('id', builderId)
       .maybeSingle();
 
-    // FAIL-CLOSED: attempt the escrow->builder refund FIRST. The ledger debit
-    // (negative stake_deposits row) is only committed when a REAL, broadcast
-    // refund is confirmed. If the refund is still a stub (not broadcast
-    // on-chain) or otherwise did not actually initiate, we write NOTHING to the
-    // ledger and refuse — otherwise the ledger would show the stake withdrawn
-    // while the USDC was never sent (funds stranded).
+    // RECORD BEFORE THE MONEY MOVES (off / shadow). Without a hold, the debit row is the only
+    // evidence the escrow paid out, and it used to be written only AFTER the refund was broadcast:
+    // a failed insert then left the USDC gone, nothing recorded, and the same stake refundable again
+    // from the escrow other builders funded (Strix on #1550). So a pending debit is written first,
+    // and no refund is attempted unless it landed. It is then stamped `withdrawn` with the refund
+    // hash, or zeroed as `withdraw_failed` (kept for the audit trail) when the refund definitely was
+    // not sent. In enforce mode the hold plus complete_stake_withdrawal plays the same role.
+    let pendingDebit: string | null = null;
+    if (!hold) {
+      pendingDebit = randomUUID();
+      const { error: pErr } = await db.from('stake_deposits').insert({
+        id: pendingDebit,
+        builder_id: builderId,
+        amount: (-amount).toString(),
+        status: 'withdrawing',
+        is_simulated: false,
+        // No token_address: the column does not exist (see the deposit insert above).
+        deposit_tx_hash: `pending-refund:${pendingDebit}`,
+      });
+      if (pErr) {
+        return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: `could not record the withdrawal before the refund, so no refund was sent: ${pErr.message}` };
+      }
+    }
+
+    // FAIL-CLOSED: a refund that is a stub or definitely did not happen leaves nothing debited.
     const refund = await refundInitiator(builderId, amount, builder?.address ?? undefined);
     if (refund.stub || !refund.initiated) {
       await endHold('released', null, 'withdrawal refused: the refund was not sent');
+      if (pendingDebit) {
+        const { error: vErr } = await db.from('stake_deposits').update({ amount: '0', status: 'withdraw_failed' }).eq('id', pendingDebit);
+        if (vErr) console.error(`[stake-vault] pending debit ${pendingDebit} could not be voided after a refund that was not sent; the stake reads LOW until fixed: ${vErr.message}`);
+      }
       return {
         ok: false,
         total_active_stake: total.toString(),
@@ -377,18 +401,11 @@ export async function withdrawStake(rawBuilderId: string, amount: bigint): Promi
         await endHold('unknown', refund.txHash ?? null, `refund sent, debit not recorded: ${msg}`);
         return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: msg };
       }
-    } else {
-      const { error: wErr } = await db.from('stake_deposits').insert({
-        builder_id: builderId,
-        amount: (-amount).toString(),
-        status: 'withdrawn',
-        is_simulated: false,
-        // No token_address: the column does not exist (see the deposit insert above).
-        deposit_tx_hash: debitHash,
-      });
-      if (wErr) {
-        return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: wErr.message };
-      }
+    } else if (pendingDebit) {
+      // The debit already counts; this only stamps it with the refund. If the stamp fails the row
+      // stays a pending debit, which still counts, so nothing is refundable twice.
+      const { error: sErr } = await db.from('stake_deposits').update({ status: 'withdrawn', deposit_tx_hash: debitHash }).eq('id', pendingDebit);
+      if (sErr) console.error(`[stake-vault] withdrawal debit ${pendingDebit} (refund ${debitHash}) could not be stamped; it still counts as withdrawn: ${sErr.message}`);
     }
 
     const newTotal = await getCurrentStake(builderId);

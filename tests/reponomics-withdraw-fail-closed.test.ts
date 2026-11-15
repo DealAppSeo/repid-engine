@@ -49,9 +49,10 @@ interface DbState {
   selectResults: Record<string, Array<{ data: any; error: any }>>;
   inserts: Array<{ table: string; row: any }>;
   insertError: any;
+  updates: Array<{ table: string; row: any }>;
 }
 
-const dbState: DbState = { selectResults: {}, inserts: [], insertError: null };
+const dbState: DbState = { selectResults: {}, inserts: [], insertError: null, updates: [] };
 
 function makeQuery(table: string) {
   const q: any = {};
@@ -69,6 +70,11 @@ function makeQuery(table: string) {
   q.insert = jest.fn(async (row: any) => {
     dbState.inserts.push({ table, row });
     return { data: null, error: dbState.insertError };
+  });
+  q.update = jest.fn((row: any) => {
+    dbState.updates.push({ table, row });
+    const u: any = { eq: () => u, then: (resolve: any) => resolve({ data: null, error: null }) };
+    return u;
   });
   return q;
 }
@@ -104,6 +110,7 @@ beforeEach(() => {
   dbState.selectResults = {};
   dbState.inserts = [];
   dbState.insertError = null;
+  dbState.updates = [];
   mockConfig.realStakingEnabled = false;
   __setRefundInitiator(); // reset to real stub
   jest.clearAllMocks();
@@ -112,7 +119,7 @@ beforeEach(() => {
 afterAll(() => __setRefundInitiator());
 
 describe('stake-vault — withdrawStake FAIL-CLOSED (fund-stranding guard)', () => {
-  it('flag ON + stub refund: returns ok:false and writes NO negative stake_deposits row', async () => {
+  it('flag ON + stub refund: returns ok:false and leaves NO live debit (the pending one is voided)', async () => {
     mockConfig.realStakingEnabled = true;
     seedHappyReads();
     // Default refund initiator is the real stub (stub:true) — no override.
@@ -122,10 +129,26 @@ describe('stake-vault — withdrawStake FAIL-CLOSED (fund-stranding guard)', () 
     // Refuses instead of stranding funds.
     expect(r.ok).toBe(false);
     expect(r.error).toBe('refund_unavailable_stub');
-    // Critically: the ledger must be untouched — no negative debit row written.
-    const debit = dbState.inserts.find((i) => i.table === 'stake_deposits');
-    expect(debit).toBeUndefined();
-    expect(dbState.inserts.length).toBe(0);
+    // The debit is recorded BEFORE the refund (Strix on #1550: a debit written after a broadcast
+    // refund could fail and leave the stake refundable twice), so a refund that was not sent must
+    // VOID it: zeroed, kept for the audit trail.
+    const pending = dbState.inserts.find((i) => i.table === 'stake_deposits');
+    expect(pending?.row).toMatchObject({ amount: '-50000000', status: 'withdrawing', is_simulated: false });
+    expect(dbState.updates).toEqual([{ table: 'stake_deposits', row: { amount: '0', status: 'withdraw_failed' } }]);
+  });
+
+  it('flag ON: if the pending debit cannot be written, NO refund is attempted', async () => {
+    mockConfig.realStakingEnabled = true;
+    seedHappyReads();
+    dbState.insertError = { message: 'db down' };
+    let refunds = 0;
+    __setRefundInitiator(async () => { refunds += 1; return { initiated: true, stub: false, amount: '50000000', to: BUILDER_ADDR, txHash: '0x' + 'e'.repeat(64) }; });
+
+    const r = await withdrawStake('builder-1', 50_000_000n);
+
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/no refund was sent/);
+    expect(refunds).toBe(0);
   });
 
   it('flag ON + REAL (non-stub) refund: debits the ledger and returns ok:true', async () => {
@@ -146,12 +169,13 @@ describe('stake-vault — withdrawStake FAIL-CLOSED (fund-stranding guard)', () 
     expect(r.ok).toBe(true);
     expect(r.refund?.stub).toBe(false);
     expect(r.refund?.initiated).toBe(true);
-    // The negative debit row IS written on a confirmed real refund.
+    // The negative debit row is written BEFORE the refund and stamped `withdrawn` after it.
     const debit = dbState.inserts.find((i) => i.table === 'stake_deposits');
     expect(debit).toBeDefined();
     expect(debit?.row.amount).toBe('-50000000');
     expect(debit?.row.is_simulated).toBe(false);
-    expect(debit?.row.status).toBe('withdrawn');
+    expect(debit?.row.status).toBe('withdrawing');
+    expect(dbState.updates).toEqual([{ table: 'stake_deposits', row: expect.objectContaining({ status: 'withdrawn' }) }]);
   });
 
   it('flag ON + refund not initiated: returns ok:false and writes nothing', async () => {
@@ -169,7 +193,8 @@ describe('stake-vault — withdrawStake FAIL-CLOSED (fund-stranding guard)', () 
 
     expect(r.ok).toBe(false);
     expect(r.error).toBe('refund_unavailable_stub');
-    expect(dbState.inserts.length).toBe(0);
+    // The pending debit was voided: nothing counts against the stake.
+    expect(dbState.updates).toEqual([{ table: 'stake_deposits', row: { amount: '0', status: 'withdraw_failed' } }]);
   });
 
   it('flag OFF: simulated withdrawal path is unchanged (still debits, no refund object)', async () => {

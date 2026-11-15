@@ -56,9 +56,10 @@ interface DbState {
   insertError: any;
   /** every .eq(col, val) filter, so a test can see what a query was scoped to */
   eqs: Array<{ table: string; col: string; val: unknown }>;
+  updates: Array<{ table: string; row: any }>;
 }
 
-const dbState: DbState = { selectResults: {}, inserts: [], insertError: null, eqs: [] };
+const dbState: DbState = { selectResults: {}, inserts: [], insertError: null, eqs: [], updates: [] };
 
 function makeQuery(table: string) {
   const q: any = {};
@@ -81,6 +82,11 @@ function makeQuery(table: string) {
   q.insert = jest.fn(async (row: any) => {
     dbState.inserts.push({ table, row });
     return { data: null, error: dbState.insertError };
+  });
+  q.update = jest.fn((row: any) => {
+    dbState.updates.push({ table, row });
+    const u: any = { eq: () => u, then: (resolve: any) => resolve({ data: null, error: null }) };
+    return u;
   });
   return q;
 }
@@ -168,6 +174,7 @@ beforeEach(() => {
   dbState.inserts = [];
   dbState.insertError = null;
   dbState.eqs = [];
+  dbState.updates = [];
   mockConfig.realStakingEnabled = false;
   __setProviderFactory(() => mockProvider());
   jest.clearAllMocks();
@@ -519,9 +526,11 @@ describe('stake-vault — withdrawStake real-staking routing', () => {
     expect(r.ok).toBe(false);
     expect(r.error).toBe('refund_unavailable_stub');
     expect(r.refund?.stub).toBe(true);
-    // No negative stake_deposits row was written — ledger untouched.
+    // The debit is recorded BEFORE the refund, so a refund that was not sent voids it (zeroed,
+    // kept for the audit trail): nothing counts against the stake.
     const w = dbState.inserts.find((i) => i.table === 'stake_deposits');
-    expect(w).toBeUndefined();
+    expect(w?.row.status).toBe('withdrawing');
+    expect(dbState.updates).toEqual([{ table: 'stake_deposits', row: { amount: '0', status: 'withdraw_failed' } }]);
   });
 
   it('flag ON: rejects withdrawal exceeding real stake', async () => {
