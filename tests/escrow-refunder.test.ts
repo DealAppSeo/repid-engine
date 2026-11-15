@@ -118,6 +118,18 @@ describe('escrowRefund — fail-closed escrow -> builder refund', () => {
     }
   });
 
+  it('refundWaitFailure: a replacement is settled by its proof, not assumed to have landed', () => {
+    // Strix on #1550: a cancelled refund was booked as paid.
+    for (const reason of ['cancelled', 'replaced']) {
+      const out = refundWaitFailure({ code: 'TRANSACTION_REPLACED', cancelled: true, reason, receipt: { status: 1, hash: '0xother' } }, '0x6');
+      expect(out).toBeInstanceOf(Error);
+      expect(out).not.toBeInstanceOf(RefundBroadcastUnconfirmed); // nothing was sent
+    }
+    expect(refundWaitFailure({ code: 'TRANSACTION_REPLACED', cancelled: false, reason: 'repriced', receipt: { status: 1, hash: '0xnew' } }, '0x6')).toEqual({ txHash: '0xnew' });
+    expect(refundWaitFailure({ code: 'TRANSACTION_REPLACED', cancelled: false, reason: 'repriced', receipt: { status: 0, hash: '0xnew' } }, '0x6')).not.toBeInstanceOf(RefundBroadcastUnconfirmed);
+    expect(refundWaitFailure({ code: 'TRANSACTION_REPLACED', cancelled: false, reason: 'repriced' }, '0x6')).toBeInstanceOf(RefundBroadcastUnconfirmed); // no receipt: unclear
+  });
+
   it('nonceExpiredOutcome: our own receipt decides; no receipt means another tx took the nonce (not sent)', () => {
     expect(nonceExpiredOutcome(null, '0x5')).not.toBeInstanceOf(RefundBroadcastUnconfirmed); // never minable: not sent
     expect(nonceExpiredOutcome(null, '0x5')).toBeInstanceOf(Error);

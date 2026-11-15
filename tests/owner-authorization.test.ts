@@ -413,9 +413,33 @@ describe('POST /stake/withdraw', () => {
     expect(res.body.error).toBe('no_wallet_to_sign');
   });
 
-  it('an operator key still works for the harness', async () => {
-    const res = await request(app(v1Router)).post('/api/v1/stake/withdraw').set('x-api-key', 'operator-key').send({ builder_id: 'b1', amount: '100' });
+  // What authMiddleware sets for a REPID_API_KEYS entry: the key and its tier, no agent.
+  function withEnvKeys(router: any) {
+    const a = express();
+    a.use(express.json());
+    a.use((req: any, _res: any, next: any) => {
+      const presented = String(req.headers['x-api-key'] ?? '');
+      const entry = String(process.env.REPID_API_KEYS ?? '').split(',').map((s) => s.trim().split(':')).find(([k]) => k === presented);
+      if (entry) req.apiKey = { key: entry[0], tier: entry[1] };
+      next();
+    });
+    a.use('/api/v1', router);
+    return a;
+  }
+
+  it('an ops-tier operator key still works', async () => {
+    process.env.REPID_API_KEYS = 'operator-key:ops';
+    const res = await request(withEnvKeys(v1Router)).post('/api/v1/stake/withdraw').set('x-api-key', 'operator-key').send({ builder_id: 'b1', amount: '100' });
     expect(res.status).toBe(200);
     expect(mockWithdrawn).toHaveLength(1);
+  });
+
+  it('a shared CLIENT key (any tier but ops) is not an operator: it needs the owner, and withdraws nothing', async () => {
+    // Strix on #1550: any REPID_API_KEYS entry used to count as an operator here.
+    process.env.REPID_API_KEYS = 'client-key:pro';
+    const res = await request(withEnvKeys(v1Router)).post('/api/v1/stake/withdraw').set('x-api-key', 'client-key').send({ builder_id: 'b1', amount: '100' });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('owner_authorization_required');
+    expect(mockWithdrawn).toHaveLength(0);
   });
 });

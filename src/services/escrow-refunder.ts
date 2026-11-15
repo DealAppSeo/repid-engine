@@ -84,9 +84,25 @@ function oneAtATime<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** After broadcast, only a receipt proving status 0 means no USDC moved; anything else may have. */
-export function refundWaitFailure(e: unknown, txHash: string): Error {
+/**
+ * After broadcast, only PROOF settles the outcome; anything else may have moved USDC (unconfirmed).
+ * Proof that nothing was sent: a status-0 receipt, or ethers v6's TRANSACTION_REPLACED with
+ * `cancelled: true` (a different transaction was mined under our nonce, so ours never will be).
+ * Proof that it WAS sent: TRANSACTION_REPLACED 'repriced' (the same transfer re-sent at a higher fee)
+ * with a status-1 receipt, under the replacement's hash. Treating every replacement as "may have
+ * landed" booked a cancelled refund as paid with no USDC sent (Strix on #1550).
+ */
+export function refundWaitFailure(e: unknown, txHash: string): Error | { txHash: string } {
   if (revertedReceipt(e)) return new Error(`refund ${txHash} reverted on-chain (status 0)`);
+  const r = e as { code?: unknown; cancelled?: unknown; reason?: unknown; hash?: unknown; receipt?: { status?: unknown; hash?: unknown } | null } | null;
+  if (r?.code === 'TRANSACTION_REPLACED') {
+    if (r.cancelled === true) return new Error(`refund ${txHash} was ${String(r.reason)} before it was mined: nothing was sent`);
+    if (r.reason === 'repriced' && r.receipt?.status === 0) return new Error(`refund ${txHash} was re-priced and the replacement reverted (status 0)`);
+    if (r.reason === 'repriced' && r.receipt?.status === 1) {
+      const landed = typeof r.receipt.hash === 'string' ? r.receipt.hash : typeof r.hash === 'string' ? r.hash : null;
+      if (landed) return { txHash: landed };
+    }
+  }
   return new RefundBroadcastUnconfirmed(txHash, e instanceof Error ? e.message.split('\n')[0] ?? '' : String(e));
 }
 
@@ -176,7 +192,9 @@ async function realSender(to: string, amount: bigint): Promise<{ txHash: string 
   try {
     receipt = await tx.wait(Math.max(1, config.stakeMinConfirmations));
   } catch (e: unknown) {
-    throw refundWaitFailure(e, tx.hash);
+    const outcome = refundWaitFailure(e, tx.hash);
+    if (outcome instanceof Error) throw outcome;
+    return outcome; // re-priced and landed: the replacement's hash is the refund
   }
   if (receipt?.status === 0) throw new Error(`refund ${tx.hash} reverted on-chain (status 0)`);
   if (!receipt || receipt.status !== 1) throw new RefundBroadcastUnconfirmed(tx.hash, `no confirmed receipt (status ${receipt?.status ?? 'none'})`);

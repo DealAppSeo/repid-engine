@@ -582,9 +582,11 @@ router.post('/stake/withdraw', async (req: Request, res: Response) => {
   const { builder_id, amount } = req.body ?? {};
   if (!builder_id || !amount) return res.status(400).json({ error: 'builder_id and amount required' });
 
-  const presented = String(req.headers['x-api-key'] ?? '').trim() ||
-    String(req.headers['authorization'] ?? '').replace(/^Bearer\s+/i, '').trim();
-  if (!matchEnvOperatorKey(presented)) {
+  // OPERATOR = an ops-tier key bound to no agent (isOperatorKey). It used to be ANY entry in the shared
+  // REPID_API_KEYS list (matchEnvOperatorKey matches every tier), so a paid client key skipped the
+  // owner's signature and could force a real refund of any account's stake (Strix on #1550). No caller
+  // of this route exists in this repo or trustshell [MEASURED 2026-11-14], so nothing relied on it.
+  if (!isOperatorKey(req)) {
     const { data: builder } = await db.from('builders').select('id, address').eq('id', String(builder_id)).maybeSingle();
     if (!builder) return res.status(404).json({ ok: false, error: 'account_not_found' });
     const wallet = (builder as { address?: string | null }).address ?? '';
