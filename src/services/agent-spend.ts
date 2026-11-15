@@ -253,10 +253,14 @@ export function decideStakeSpend(to: string, escrow: string, agentWallet: string
   if (!ethers.isAddress(to)) return refuse(400, 'bad_payee', 'to_address is not an address.');
   const payee = ethers.getAddress(to);
   if (payee === ethers.ZeroAddress) return refuse(400, 'bad_payee', 'to_address is the zero address.');
-  if (ethers.isAddress(escrow) && payee === ethers.getAddress(escrow)) {
+  // Compare the raw 20 bytes, not ethers' checksummed form: a mixed-case value with a bad EIP-55
+  // checksum fails ethers.isAddress, and a guard written that way would silently skip (Grok r1b on #1551).
+  const raw = (a: string | null) => (typeof a === 'string' && /^0x[0-9a-fA-F]{40}$/.test(a) ? a.toLowerCase() : null);
+  const p = payee.toLowerCase();
+  if (raw(escrow) === p) {
     return refuse(400, 'pays_escrow', 'the payee is the escrow itself: the money would not leave, and the budget would still be used up.');
   }
-  if (agentWallet && ethers.isAddress(agentWallet) && payee === ethers.getAddress(agentWallet)) {
+  if (raw(agentWallet) === p) {
     return refuse(400, 'pays_itself', "the agent cannot pay its own wallet: from there it could spend outside its owner's budget.");
   }
   return { ok: true };

@@ -120,6 +120,84 @@ export const supabaseOwnerBudget: OwnerBudgetStore = {
   },
 };
 
+/**
+ * AGENT SPEND LIMITS (AGENT_SPEND_SOURCE=stake; supabase/migrations/20261115120000_agent_spend_limits.sql).
+ * An agent spends from its owner's stake only up to a limit the owner SIGNED (owner-authorization
+ * action `spend.limit`): the binding grants no spending authority, and the agent's API key alone
+ * must not be able to move the stake (Strix on #1551). The latest limit covers the agent's spends
+ * reserved since it was set; no limit means no spending from stake.
+ */
+export type AgentLimitRefusal = 'no_spend_limit' | 'over_agent_limit' | 'over_owner_budget';
+
+export interface AgentLimitReservation extends Reservation {
+  /** Why it was refused, or null when ok. */
+  reason: AgentLimitRefusal | null;
+  /** Micro-USDC; null when the owner has set no limit for this agent. */
+  agentLimit: bigint | null;
+  /** This agent's reserved + settled + unknown since its limit was set; after this one when ok. */
+  agentCommitted: bigint;
+}
+
+export interface AgentLimitStore {
+  /** reserve_agent_stake_spend: the agent's limit, then the owner's budget, under the owner lock. Throws on failure. */
+  reserve(builderId: string, agentId: string, amount: bigint): Promise<AgentLimitReservation>;
+  /** Read-only, for dry runs. Throws on failure. */
+  status(builderId: string, agentId: string): Promise<{ agentLimit: bigint | null; agentCommitted: bigint }>;
+  /** Record a new limit (the caller has already checked the owner's signature, or the limit is 0). Throws on failure. */
+  set(builderId: string, agentId: string, limit: bigint, setBy: string): Promise<void>;
+}
+
+const REFUSALS = new Set<string>(['no_spend_limit', 'over_agent_limit', 'over_owner_budget']);
+
+export const supabaseAgentLimits: AgentLimitStore = {
+  async reserve(builderId, agentId, amount) {
+    const { data, error } = await db.rpc('reserve_agent_stake_spend', { p_builder: builderId, p_agent: agentId, p_amount: amount.toString() });
+    if (error) throw new Error(`reserve_agent_stake_spend failed: ${error.message}`);
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error('reserve_agent_stake_spend returned no row');
+    const ok = row.ok === true;
+    // A refusal must name one of the reasons this code knows, or it is not an answer we can act on.
+    if (!ok && !REFUSALS.has(String(row.reason))) throw new Error(`reserve_agent_stake_spend refused with an unknown reason: ${String(row.reason)}`);
+    return {
+      ok,
+      id: row.reservation_id ?? null,
+      reason: ok ? null : (row.reason as AgentLimitRefusal),
+      budget: big(row.budget),
+      committed: big(row.committed),
+      agentLimit: row.agent_limit === null || row.agent_limit === undefined ? null : big(row.agent_limit),
+      agentCommitted: big(row.agent_committed),
+    };
+  },
+
+  async status(builderId, agentId) {
+    const { data: lim, error: lErr } = await db
+      .from('agent_spend_limits')
+      .select('limit_amount, set_at')
+      .eq('builder_id', builderId)
+      .eq('agent_id', agentId)
+      .order('set_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lErr) throw new Error(`agent_spend_limits read failed: ${lErr.message}`);
+    if (!lim) return { agentLimit: null, agentCommitted: 0n };
+    const { data: rows, error } = await db
+      .from('owner_spend_ledger')
+      .select('amount')
+      .eq('builder_id', builderId)
+      .eq('agent_id', agentId)
+      .neq('state', 'released')
+      .gte('created_at', (lim as any).set_at);
+    if (error) throw new Error(`owner_spend_ledger read failed: ${error.message}`);
+    const agentCommitted = (rows ?? []).reduce((acc: bigint, r: any) => acc + big(r.amount), 0n);
+    return { agentLimit: big((lim as any).limit_amount), agentCommitted };
+  },
+
+  async set(builderId, agentId, limit, setBy) {
+    const { error } = await db.from('agent_spend_limits').insert({ builder_id: builderId, agent_id: agentId, limit_amount: limit.toString(), set_by: setBy });
+    if (error) throw new Error(`agent_spend_limits insert failed: ${error.message}`);
+  },
+};
+
 /** The owner's account (builder) for an agent, or null when the owner is not a builder account. */
 export async function ownerBuilderOfAgent(agentId: string): Promise<string | null> {
   const { ownerOfAgent } = require('./human-agent-binding') as typeof import('./human-agent-binding');

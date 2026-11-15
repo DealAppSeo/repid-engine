@@ -53,10 +53,13 @@ import type { RefundInitiation } from '../services/stake-vault';
 import {
   ownerBudgetMode,
   ownerBuilderOfAgent,
+  supabaseAgentLimits,
   supabaseOwnerBudget,
+  type AgentLimitStore,
   type OwnerBudgetMode,
   type OwnerBudgetStore,
 } from '../services/owner-budget';
+import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
 
 const DEFAULT_RPC_URL = 'https://sepolia.base.org';
 
@@ -90,6 +93,8 @@ export interface AgentSpendDeps {
   payout?: (to: string, amount: bigint) => Promise<RefundInitiation>;
   /** stake: the agent's recorded wallet address (no key is loaded), or null. */
   loadAgentWallet?: (agentId: string) => Promise<string | null>;
+  /** stake: the owner-signed per-agent limits (reserve_agent_stake_spend). */
+  agentLimits?: AgentLimitStore;
 }
 
 // Lazy, like the custody module below: the escrow module reads the signer config at call time.
@@ -129,6 +134,16 @@ export function createAgentSpendRouter(deps: AgentSpendDeps = {}): Router {
   const escrow = deps.escrow ?? defaultEscrow;
   const payout = deps.payout ?? defaultPayout;
   const loadAgentWallet = deps.loadAgentWallet ?? defaultLoadAgentWallet;
+  const agentLimits = deps.agentLimits ?? supabaseAgentLimits;
+
+  const limitOut = (limit: bigint | null, committed: bigint) =>
+    limit === null
+      ? { limit_usdc: null, spent_usdc: formatUsdc(committed), remaining_usdc: '0.0' }
+      : { limit_usdc: formatUsdc(limit), spent_usdc: formatUsdc(committed), remaining_usdc: formatUsdc(limit > committed ? limit - committed : 0n) };
+  const NO_LIMIT =
+    "This agent's owner has not set how much it may spend from their stake. The owner signs a spend limit for it (POST /api/v1/agents/:id/spend-limit; one signature, no gas). Nothing was sent.";
+  const overLimit = (amount: bigint, limit: bigint, committed: bigint) =>
+    `over the limit this agent's owner signed: ${formatUsdc(amount)} USDC asked, ${limitOut(limit, committed).remaining_usdc} USDC left of ${formatUsdc(limit)} USDC. Nothing was sent.`;
 
   /**
    * AGENT_SPEND_SOURCE=stake. Reached after the caller and the bound owner are checked. Nothing
@@ -165,27 +180,34 @@ export function createAgentSpendRouter(deps: AgentSpendDeps = {}): Router {
       return refuse(isDryRun ? 200 : 403, 'no_owner_budget', "This agent's owner has no account whose stake funds a budget, so it cannot spend. Bind it from a wallet account and stake first.");
     }
 
+    // CONSENT [Strix on #1551]: the binding grants no spending authority, so the agent's key alone
+    // may not move the stake. Only a limit the owner SIGNED (POST /:id/spend-limit) lets it spend,
+    // checked with the owner's budget in one reservation under the owner lock.
     if (isDryRun) {
-      let s;
+      let s, a;
       try {
-        s = await budget.status(builderId);
+        [s, a] = await Promise.all([budget.status(builderId), agentLimits.status(builderId, agentId)]);
       } catch (e: unknown) {
         return notChecked(e);
       }
-      if (s.committed + spend.amount > s.budget) {
-        return refuse(200, 'over_owner_budget', overBudget(spend.amount, s), { owner_budget: budgetOut(s.budget, s.committed) });
-      }
-      return res.json({ ok: true, dry_run: true, would_send: true, spend_source: 'stake', from_escrow: escrowAddress, owner_budget: budgetOut(s.budget, s.committed) });
+      const both = { owner_budget: budgetOut(s.budget, s.committed), agent_limit: limitOut(a.agentLimit, a.agentCommitted) };
+      if (a.agentLimit === null) return refuse(200, 'no_spend_limit', NO_LIMIT, both);
+      if (a.agentCommitted + spend.amount > a.agentLimit) return refuse(200, 'over_agent_limit', overLimit(spend.amount, a.agentLimit, a.agentCommitted), both);
+      if (s.committed + spend.amount > s.budget) return refuse(200, 'over_owner_budget', overBudget(spend.amount, s), both);
+      return res.json({ ok: true, dry_run: true, would_send: true, spend_source: 'stake', from_escrow: escrowAddress, ...both });
     }
 
     let r;
     try {
-      r = await budget.reserve(builderId, agentId, spend.amount);
+      r = await agentLimits.reserve(builderId, agentId, spend.amount);
     } catch (e: unknown) {
       return notChecked(e);
     }
     if (!r.ok || !r.id) {
-      return refuse(409, 'over_owner_budget', overBudget(spend.amount, r), { owner_budget: budgetOut(r.budget, r.committed) });
+      const both = { owner_budget: budgetOut(r.budget, r.committed), agent_limit: limitOut(r.agentLimit, r.agentCommitted) };
+      if (r.reason === 'no_spend_limit' || r.agentLimit === null) return refuse(403, 'no_spend_limit', NO_LIMIT, both);
+      if (r.reason === 'over_agent_limit') return refuse(409, 'over_agent_limit', overLimit(spend.amount, r.agentLimit, r.agentCommitted), both);
+      return refuse(409, 'over_owner_budget', overBudget(spend.amount, r), both);
     }
     const reservationId = r.id;
     const finish = (state: 'settled' | 'released' | 'unknown', txHash: string | null, why: string) =>
@@ -221,8 +243,61 @@ export function createAgentSpendRouter(deps: AgentSpendDeps = {}): Router {
       amount_usdc: formatUsdc(spend.amount),
     };
     await logAgentEvent({ agent: agentId, action: 'agent_spend', metadata: { ...result, spend_source: 'stake', owner_budget_reservation: reservationId } });
-    return res.json({ ok: true, spend_source: 'stake', ...result, owner_budget: budgetOut(r.budget, r.committed), owner_budget_reservation: reservationId });
+    return res.json({
+      ok: true, spend_source: 'stake', ...result,
+      owner_budget: budgetOut(r.budget, r.committed), agent_limit: limitOut(r.agentLimit, r.agentCommitted), owner_budget_reservation: reservationId,
+    });
   }
+
+  /**
+   * POST /:id/spend-limit { limit_usdc, owner_authorization } — how much this agent may spend from
+   * its owner's stake, from now on (replaces its earlier limit). Raising it needs the OWNER'S
+   * signature (owner-authorization action `spend.limit` over { agent_id, limit_micro_usdc }), checked
+   * against the wallet bound as the agent's owner, never one named in the request. A limit of 0 stops
+   * the agent and needs no signature: stopping an agent must never be harder than starting it.
+   * Same callers as the spend route: the agent's own key, or an operator key.
+   */
+  router.post('/:id/spend-limit', async (req: Request, res: Response) => {
+    const agentId = String(req.params.id);
+    const callerAgent = (req as any).agent_id as string | undefined;
+    const operator = !callerAgent && (req as any).apiKey?.tier === 'ops';
+    if (!operator && (!callerAgent || callerAgent.toLowerCase() !== agentId.toLowerCase())) {
+      return res.status(403).json({ ok: false, code: 'not_this_agent', error: "Only this agent's own key, or an operator key, may set its spend limit." });
+    }
+    const raw = req.body?.limit_usdc;
+    const limit = raw === '0' || raw === 0 ? 0n : parseUsdc(raw);
+    if (limit === null) return res.status(400).json({ ok: false, code: 'bad_amount', error: 'limit_usdc must be 0, or a positive number with at most 6 decimals, e.g. "2.5".' });
+
+    let ownerWallet: string | null, builderId: string | null;
+    try {
+      [ownerWallet, builderId] = await Promise.all([loadOwnerWallet(agentId), loadOwnerBuilder(agentId)]);
+    } catch (e: unknown) {
+      return res.status(503).json({ ok: false, code: 'owner_not_checked', error: `Could not read who owns this agent, so nothing was changed. ${msgOf(e)}`.trim() });
+    }
+    if (!ownerWallet || !builderId) {
+      return res.status(403).json({ ok: false, code: 'no_owner_budget', error: 'This agent is not bound to a wallet account with a stake, so it has no spend limit to set. Bind it first.' });
+    }
+
+    let setBy = 'stop';
+    if (limit > 0n) {
+      const check = await checkOwnerAuthorization({
+        subject: agentId,
+        action: 'spend.limit',
+        params: { agent_id: agentId, limit_micro_usdc: limit.toString() },
+        auth: readOwnerAuthorization(req.body),
+        expectedSigner: ownerWallet,
+      });
+      if (!check.ok) return res.status(check.code === 'not_checked' ? 503 : 403).json({ ok: false, code: check.code, error: check.message });
+      setBy = check.signer.toLowerCase();
+    }
+    try {
+      await agentLimits.set(builderId, agentId, limit, setBy);
+    } catch (e: unknown) {
+      return res.status(503).json({ ok: false, code: 'limit_not_recorded', error: `The limit could not be recorded, so nothing was changed. ${msgOf(e)}`.trim() });
+    }
+    await logAgentEvent({ agent: agentId, action: 'agent_spend_limit', metadata: { limit_usdc: formatUsdc(limit), set_by: setBy } });
+    return res.status(201).json({ ok: true, agent_id: agentId, limit_usdc: formatUsdc(limit), set_by: setBy === 'stop' ? 'stop (no signature needed)' : 'owner signature' });
+  });
 
   router.post('/:id/spend', async (req: Request, res: Response) => {
     const agentId = String(req.params.id);
