@@ -111,7 +111,7 @@ function seed() {
   s.builders.push({ id: BUILDER, address: PAYEE, current_repid: 6000, auth_method: 'token_only' });
   s.repid_agents.push({ id: 'agent-1', agent_name: 'A', current_repid: 1000, builder_id: BUILDER, wisdom_score: 1000, character_score: 1000, last_active_at: null });
   // One REAL stake row (is_simulated=false) — the escrow custodies this.
-  s.stake_deposits.push({ id: 'dep-1', builder_id: BUILDER, amount: STAKE.toString(), status: 'active', is_simulated: false, deposit_tx_hash: '0xdeposit' });
+  s.stake_deposits.push({ id: 'dep-1', builder_id: BUILDER, amount: STAKE.toString(), status: 'active', is_simulated: false, deposit_tx_hash: '0x' + 'd'.repeat(64) });
 }
 const debitRows = () => store().stake_deposits.filter((r) => BigInt(r.amount) < 0n);
 

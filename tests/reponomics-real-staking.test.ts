@@ -54,9 +54,14 @@ interface DbState {
   selectResults: Record<string, Array<{ data: any; error: any }>>;
   inserts: Array<{ table: string; row: any }>;
   insertError: any;
+  /** every .eq(col, val) filter, so a test can see what a query was scoped to */
+  eqs: Array<{ table: string; col: string; val: unknown }>;
+  updates: Array<{ table: string; row: any }>;
+  /** order of the replay check and the insert across concurrent claims */
+  seq: string[];
 }
 
-const dbState: DbState = { selectResults: {}, inserts: [], insertError: null };
+const dbState: DbState = { selectResults: {}, inserts: [], insertError: null, eqs: [], updates: [], seq: [] };
 
 function makeQuery(table: string) {
   const q: any = {};
@@ -64,6 +69,11 @@ function makeQuery(table: string) {
   for (const m of ['select', 'eq', 'ilike', 'limit', 'order', 'in', 'gte']) {
     q[m] = jest.fn(chain);
   }
+  q.eq = jest.fn((col: string, val: unknown) => {
+    dbState.eqs.push({ table, col, val });
+    if (table === 'stake_deposits' && col === 'deposit_tx_hash') dbState.seq.push('dup-check');
+    return q;
+  });
   const pull = () => {
     const queue = dbState.selectResults[table] ?? [];
     return queue.length ? queue.shift() : { data: null, error: null };
@@ -74,7 +84,13 @@ function makeQuery(table: string) {
   q.then = (resolve: any) => resolve(pull());
   q.insert = jest.fn(async (row: any) => {
     dbState.inserts.push({ table, row });
+    if (table === 'stake_deposits') dbState.seq.push('insert');
     return { data: null, error: dbState.insertError };
+  });
+  q.update = jest.fn((row: any) => {
+    dbState.updates.push({ table, row });
+    const u: any = { eq: () => u, then: (resolve: any) => resolve({ data: null, error: null }) };
+    return u;
   });
   return q;
 }
@@ -101,6 +117,8 @@ const USDC = mockConfig.usdcTokenAddress;
 const OTHER_TOKEN = '0x2222222222222222222222222222222222222222';
 const BUILDER_ADDR = '0x9999999999999999999999999999999999999999';
 const VALID_TX = '0x' + 'a'.repeat(64);
+/** public.stake_deposits columns, read from information_schema on 2026-11-14. */
+const STAKE_DEPOSITS_COLUMNS = ['id', 'builder_id', 'amount', 'asset', 'tx_hash', 'is_simulated', 'created_at', 'status', 'deposit_tx_hash'];
 const iface = new ethers.Interface([
   'event Transfer(address indexed from, address indexed to, uint256 value)',
   'function balanceOf(address owner) view returns (uint256)',
@@ -159,6 +177,9 @@ beforeEach(() => {
   dbState.selectResults = {};
   dbState.inserts = [];
   dbState.insertError = null;
+  dbState.eqs = [];
+  dbState.updates = [];
+  dbState.seq = [];
   mockConfig.realStakingEnabled = false;
   __setProviderFactory(() => mockProvider());
   jest.clearAllMocks();
@@ -176,7 +197,24 @@ describe('deposit-verifier — verifyDeposit', () => {
     escrowAddress: ESCROW,
     tokenAddress: USDC,
     minConfirmations: 1,
+    fromAddress: BUILDER_ADDR,
   };
+
+  it('refuses a claim for LESS than was sent: it would burn the hash and strand the rest', async () => {
+    __setProviderFactory(() => mockProvider());
+    const r = await verifyDeposit({ ...base, claimedAmount: 1_000_000n });
+    expect(r.verified).toBe(false);
+    expect(r.reason).toMatch(/must equal what was sent/);
+  });
+
+  it('refuses a deposit sent by another wallet: the escrow is shared, the sender is who paid', async () => {
+    __setProviderFactory(() =>
+      mockProvider({ receipt: { status: 1, blockNumber: 100, logs: [transferLog(USDC, '0x' + '7'.repeat(40), ESCROW, 100_000_000n)] } }),
+    );
+    const r = await verifyDeposit(base);
+    expect(r.verified).toBe(false);
+    expect(r.reason).toMatch(/not sent by this account's wallet/);
+  });
 
   it('accepts a correct verified deposit', async () => {
     __setProviderFactory(() => mockProvider());
@@ -322,7 +360,115 @@ describe('stake-vault — depositStake real-staking routing', () => {
     const dep = dbState.inserts.find((i) => i.table === 'stake_deposits');
     expect(dep?.row.is_simulated).toBe(false);
     expect(dep?.row.deposit_tx_hash).toBe(VALID_TX);
-    expect(dep?.row.token_address).toBe(USDC);
+    // This line used to assert `token_address` was written. The mocked db accepts any key; the
+    // real table has no such column, so every verified deposit failed at this insert in
+    // production. Pin the insert to the live columns instead [MEASURED 2026-11-14].
+    expect(Object.keys(dep?.row ?? {}).filter((k) => !STAKE_DEPOSITS_COLUMNS.includes(k))).toEqual([]);
+  });
+
+  it('flag ON: the replay guard looks at REAL rows only, so a practice row naming the hash cannot block it', async () => {
+    mockConfig.realStakingEnabled = true;
+    __setProviderFactory(() => mockProvider());
+    seedBuilderFound();
+    dbState.selectResults['stake_deposits'] = [{ data: [], error: null }, { data: [{ amount: '100000000' }], error: null }];
+    dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
+    await depositStake(BUILDER_ADDR, 100_000_000n, VALID_TX);
+    expect(dbState.eqs).toEqual(expect.arrayContaining([
+      { table: 'stake_deposits', col: 'deposit_tx_hash', val: VALID_TX },
+      { table: 'stake_deposits', col: 'is_simulated', val: false },
+    ]));
+  });
+
+  it('flag ON: two claims of ONE transfer at once run one after the other, so the second sees the first (no index needed)', async () => {
+    // Strix on #1550: the read-then-verify-then-insert guard let parallel claims both insert where the
+    // unique index is not applied yet.
+    mockConfig.realStakingEnabled = true;
+    __setProviderFactory(() => mockProvider());
+    dbState.selectResults['builders'] = [
+      { data: { id: 'builder-1', current_repid: 6000, address: BUILDER_ADDR }, error: null },
+      { data: { id: 'builder-1', current_repid: 6000, address: BUILDER_ADDR }, error: null },
+    ];
+    dbState.selectResults['stake_deposits'] = [
+      { data: [], error: null }, // first claim: no earlier row
+      { data: [{ amount: '100000000' }], error: null }, // first claim: getCurrentStake
+      { data: [{ id: 'first' }], error: null }, // second claim: sees the first's row
+    ];
+    dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
+    const [a, b] = await Promise.all([depositStake(BUILDER_ADDR, 100_000_000n, VALID_TX), depositStake(BUILDER_ADDR, 100_000_000n, VALID_TX)]);
+    expect(dbState.seq).toEqual(['dup-check', 'insert', 'dup-check']);
+    expect(a.ok).toBe(true);
+    expect(b).toMatchObject({ ok: false, error: expect.stringMatching(/duplicate/) });
+  });
+
+  it('flag ON: a claim in other letter case is the same transfer: checked and stored lower-case', async () => {
+    // Grok r15b on #1550: the lock key was lower-cased but the replay check and insert used the hash
+    // as given, so a second claim differing only in case saw no earlier row.
+    mockConfig.realStakingEnabled = true;
+    __setProviderFactory(() => mockProvider());
+    seedBuilderFound();
+    dbState.selectResults['stake_deposits'] = [{ data: [], error: null }, { data: [{ amount: '100000000' }], error: null }];
+    dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
+    await depositStake(BUILDER_ADDR, 100_000_000n, '0x' + 'A'.repeat(64));
+    expect(dbState.eqs).toEqual(expect.arrayContaining([{ table: 'stake_deposits', col: 'deposit_tx_hash', val: VALID_TX }]));
+    expect(dbState.inserts.find((i) => i.table === 'stake_deposits')?.row.deposit_tx_hash).toBe(VALID_TX);
+  });
+
+  it('flag ON: a concurrent claim that loses the unique index is refused as a duplicate', async () => {
+    mockConfig.realStakingEnabled = true;
+    __setProviderFactory(() => mockProvider());
+    seedBuilderFound();
+    dbState.selectResults['stake_deposits'] = [{ data: [], error: null }]; // the read-side guard saw nothing (the race)
+    dbState.insertError = { code: '23505', message: 'duplicate key value violates unique constraint "stake_deposits_real_tx_hash_uniq"' };
+    try {
+      const r = await depositStake(BUILDER_ADDR, 100_000_000n, VALID_TX);
+      expect(r.ok).toBe(false);
+      expect(r.error).toMatch(/duplicate tx_hash/);
+    } finally {
+      dbState.insertError = null;
+    }
+  });
+
+  it.each([[0n], [-50_000_000n]])('refuses a deposit of %p: a deposit only ever adds', async (amt) => {
+    seedBuilderFound();
+    const r = await depositStake(BUILDER_ADDR, amt);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/positive/);
+    expect(dbState.inserts).toEqual([]);
+  });
+
+  it('flag OFF with X402_REAL_RPC set: an unverified deposit is still labelled simulated', async () => {
+    mockConfig.realStakingEnabled = false;
+    process.env.X402_REAL_RPC = 'https://example.invalid';
+    try {
+      seedBuilderFound();
+      dbState.selectResults['stake_deposits'] = [{ data: [{ amount: '100000000' }], error: null }];
+      dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
+      const r = await depositStake(BUILDER_ADDR, 100_000_000n);
+      const dep = dbState.inserts.find((i) => i.table === 'stake_deposits');
+      expect(dep?.row.is_simulated).toBe(true);
+      // The row, the audit entry and the response must agree (Strix on #1550: only the row was fixed at first).
+      expect(r.is_simulated).toBe(true);
+      const { emitAuditEvent } = jest.requireMock('../src/services/audit-emit');
+      expect(emitAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ is_simulated: true }) }));
+    } finally {
+      delete process.env.X402_REAL_RPC;
+    }
+  });
+
+  it('flag OFF with X402_REAL_RPC set: a simulated withdrawal is labelled simulated, so it cannot shrink REAL stake', async () => {
+    mockConfig.realStakingEnabled = false;
+    process.env.X402_REAL_RPC = 'https://example.invalid';
+    try {
+      dbState.selectResults['linked_bets'] = [{ data: [], error: null }];
+      dbState.selectResults['stake_deposits'] = [{ data: [{ amount: '100000000' }], error: null }, { data: [{ amount: '50000000' }], error: null }];
+      dbState.selectResults['builders'] = [{ data: { id: 'builder-1', current_repid: 6000, address: BUILDER_ADDR }, error: null }];
+      dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
+      await withdrawStake('builder-1', 50_000_000n);
+      const w = dbState.inserts.find((i) => i.table === 'stake_deposits');
+      expect(w?.row.is_simulated).toBe(true);
+    } finally {
+      delete process.env.X402_REAL_RPC;
+    }
   });
 
   it('flag ON: rejects a simulated tx_hash', async () => {
@@ -410,7 +556,7 @@ describe('stake-vault — withdrawStake real-staking routing', () => {
     // getCurrentStake (total), getRealStake (real)
     dbState.selectResults['stake_deposits'] = [
       { data: [{ amount: '100000000' }], error: null }, // getCurrentStake
-      { data: [{ amount: '100000000' }], error: null }, // getRealStake
+      { data: [{ amount: '100000000', deposit_tx_hash: VALID_TX }], error: null }, // getRealStake (a verified row)
     ];
     dbState.selectResults['builders'] = [{ data: { address: BUILDER_ADDR }, error: null }];
     dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
@@ -419,9 +565,11 @@ describe('stake-vault — withdrawStake real-staking routing', () => {
     expect(r.ok).toBe(false);
     expect(r.error).toBe('refund_unavailable_stub');
     expect(r.refund?.stub).toBe(true);
-    // No negative stake_deposits row was written — ledger untouched.
+    // The debit is recorded BEFORE the refund, so a refund that was not sent voids it (zeroed,
+    // kept for the audit trail): nothing counts against the stake.
     const w = dbState.inserts.find((i) => i.table === 'stake_deposits');
-    expect(w).toBeUndefined();
+    expect(w?.row.status).toBe('withdrawing');
+    expect(dbState.updates).toEqual([{ table: 'stake_deposits', row: { amount: '0', status: 'withdraw_failed' } }]);
   });
 
   it('flag ON: rejects withdrawal exceeding real stake', async () => {
@@ -430,6 +578,30 @@ describe('stake-vault — withdrawStake real-staking routing', () => {
     dbState.selectResults['stake_deposits'] = [
       { data: [{ amount: '100000000' }], error: null }, // getCurrentStake (total incl simulated)
       { data: [{ amount: '10000000' }], error: null },  // getRealStake (only 10 real)
+    ];
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/exceeds real/i);
+  });
+
+  it('flag ON: a row LABELLED real but carrying no real tx hash is not refundable (the production 50 USDC row)', async () => {
+    mockConfig.realStakingEnabled = true;
+    dbState.selectResults['linked_bets'] = [{ data: [], error: null }];
+    dbState.selectResults['stake_deposits'] = [
+      { data: [{ amount: '50000000' }], error: null }, // getCurrentStake
+      { data: [{ amount: '50000000', deposit_tx_hash: 'simulated:deposit:1754626669020' }], error: null }, // getRealStake
+    ];
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/exceeds real/i);
+  });
+
+  it('flag ON: earlier withdrawals always reduce what is refundable, whatever their hash', async () => {
+    mockConfig.realStakingEnabled = true;
+    dbState.selectResults['linked_bets'] = [{ data: [], error: null }];
+    dbState.selectResults['stake_deposits'] = [
+      { data: [{ amount: '100000000' }], error: null }, // getCurrentStake (high, so the REAL bound is what decides)
+      { data: [{ amount: '100000000', deposit_tx_hash: VALID_TX }, { amount: '-60000000', deposit_tx_hash: 'pending-refund:1' }], error: null },
     ];
     const r = await withdrawStake('builder-1', 50_000_000n);
     expect(r.ok).toBe(false);

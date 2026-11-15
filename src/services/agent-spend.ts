@@ -103,6 +103,17 @@ export interface SpendChain {
   send(agentKey: string, owner: string, to: string, amount: bigint): Promise<{ hash: string; blockNumber: number | null; status: number | null }>;
 }
 
+/**
+ * The receipt inside an ethers v6 "transaction execution reverted" error, when it proves status 0.
+ * Anything else (a timeout, a dropped connection, a replaced tx) is NOT a revert: the transfer may
+ * have landed, so the caller must not release budget on it.
+ */
+export function revertedReceipt(e: unknown): { blockNumber: number | null } | null {
+  const err = e as { code?: unknown; receipt?: { status?: unknown; blockNumber?: unknown } } | null;
+  if (err?.code !== 'CALL_EXCEPTION' || err.receipt?.status !== 0) return null;
+  return { blockNumber: typeof err.receipt.blockNumber === 'number' ? err.receipt.blockNumber : null };
+}
+
 export function rpcSpendChain(rpcUrl: string, usdc: string = USDC_BASE_SEPOLIA): SpendChain {
   const provider = new ethers.JsonRpcProvider(rpcUrl);
   const read = new ethers.Contract(usdc, ERC20_SPEND_ABI, provider);
@@ -120,7 +131,17 @@ export function rpcSpendChain(rpcUrl: string, usdc: string = USDC_BASE_SEPOLIA):
     },
     send: async (key, owner, to, amount) => {
       const tx = await as(key).getFunction('transferFrom')(owner, to, amount);
-      const receipt = await tx.wait(1);
+      let receipt;
+      try {
+        receipt = await tx.wait(1);
+      } catch (e) {
+        // ethers v6 THROWS on a status-0 receipt instead of returning it. Without this, a reverted
+        // spend surfaced as a generic error and its owner-budget reservation stayed `unknown`
+        // (still counting) instead of being released (found reviewing #1550).
+        const reverted = revertedReceipt(e);
+        if (reverted) return { hash: tx.hash as string, blockNumber: reverted.blockNumber, status: 0 };
+        throw e;
+      }
       return { hash: tx.hash as string, blockNumber: receipt?.blockNumber ?? null, status: receipt?.status ?? null };
     },
   };
@@ -188,8 +209,20 @@ export async function checkSpend(
   return { ok: true, agentAddress: address, agentKey: key, reads, gasCostWei };
 }
 
+/**
+ * The receipt says status 0: the transfer reverted and no USDC moved. Only this case may release
+ * an owner-budget reservation. Any other failure (a throw, no receipt) may have landed.
+ */
+export class SpendRevertedError extends Error {
+  constructor(readonly txHash: string) {
+    super(`transfer ${txHash} did not succeed on-chain (status 0)`);
+    this.name = 'SpendRevertedError';
+  }
+}
+
 export async function executeSpend(chain: SpendChain, checked: Extract<CheckOutcome, { ok: true }>, req: SpendRequest): Promise<SpendResult> {
   const sent = await chain.send(checked.agentKey, req.owner, req.to, req.amount);
+  if (sent.status === 0) throw new SpendRevertedError(sent.hash);
   if (sent.status !== 1) throw new Error(`transfer ${sent.hash} did not succeed on-chain (status ${sent.status})`);
   let after: bigint | null = null;
   try {

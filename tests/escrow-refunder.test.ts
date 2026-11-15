@@ -31,9 +31,15 @@ import {
   __setEscrowSender,
   escrowHealth,
   __setEscrowChainReader,
+  RefundBroadcastUnconfirmed,
+  refundWaitFailure,
+  broadcastFailure,
+  nonceExpiredOutcome,
 } from '../src/services/escrow-refunder';
 
 const BUILDER = 'builder-1';
+/** The JSON-RPC request ethers names on an error from the send itself. */
+const SEND = { method: 'eth_sendRawTransaction', params: ['0xsigned'], id: 1 };
 const PAYEE = '0x2222222222222222222222222222222222222222';
 
 // A real, deterministic test keypair. The key is CONSTRUCTED (not a literal 64-hex
@@ -81,6 +87,99 @@ describe('escrowRefund — fail-closed escrow -> builder refund', () => {
     expect(r.initiated).toBe(false);
     expect(r.stub).toBe(false);
     expect(sendCalled).toBe(false);
+  });
+
+  it('broadcast, then the receipt wait failed => INITIATED + unconfirmed, never "did not happen"', async () => {
+    // The USDC may already have left the shared escrow; reporting it as not sent let the same stake
+    // be withdrawn again (found reviewing #1550).
+    mockConfig.stakeEscrowSignerKey = 'present';
+    __setEscrowSender(async () => {
+      throw new RefundBroadcastUnconfirmed('0xabc', 'timeout');
+    });
+    const r = await escrowRefund(BUILDER, 5_000_000n, PAYEE);
+    expect(r).toMatchObject({ initiated: true, stub: false, unconfirmed: true, txHash: '0xabc' });
+  });
+
+  it('refundWaitFailure: only a status-0 receipt is a revert; anything else after broadcast is unconfirmed', () => {
+    expect(refundWaitFailure({ code: 'CALL_EXCEPTION', receipt: { status: 0, blockNumber: 1 } }, '0x1')).not.toBeInstanceOf(RefundBroadcastUnconfirmed);
+    for (const e of [{ code: 'TIMEOUT' }, new Error('socket hang up'), { code: 'TRANSACTION_REPLACED' }, null]) {
+      const out = refundWaitFailure(e, '0x2');
+      expect(out).toBeInstanceOf(RefundBroadcastUnconfirmed);
+      expect((out as RefundBroadcastUnconfirmed).txHash).toBe('0x2');
+    }
+  });
+
+  it('broadcastFailure: only an explicit node rejection is "not sent"; a lost reply is unconfirmed, with the hash', () => {
+    for (const code of ['INSUFFICIENT_FUNDS', 'REPLACEMENT_UNDERPRICED']) {
+      expect(broadcastFailure({ code, message: 'rejected', info: { payload: SEND } }, '0x3')).not.toBeInstanceOf(RefundBroadcastUnconfirmed);
+    }
+    for (const e of [{ code: 'TIMEOUT' }, { code: 'NETWORK_ERROR' }, { code: 'SERVER_ERROR' }, { code: 'NONCE_EXPIRED' }, new Error('socket hang up'), null]) {
+      const out = broadcastFailure(e, '0x4');
+      expect(out).toBeInstanceOf(RefundBroadcastUnconfirmed);
+      expect((out as RefundBroadcastUnconfirmed).txHash).toBe('0x4');
+    }
+  });
+
+  it('broadcastFailure: a refusal carrying the node\'s own reply is "not sent"; "already known" and no reply are unconfirmed', () => {
+    // Strix on #1550: ethers reports most refusals as UNKNOWN_ERROR with the node's reply attached.
+    for (const e of [
+      { code: 'UNKNOWN_ERROR', error: { code: -32000, message: 'transaction underpriced' }, payload: SEND },
+      { code: 'UNKNOWN_ERROR', error: { code: -32000, message: 'intrinsic gas too low' }, payload: SEND },
+      { code: 'UNKNOWN_ERROR', info: { error: { code: -32000, message: 'max fee per gas less than block base fee' }, payload: SEND } },
+    ]) {
+      const out = broadcastFailure(e, '0x7');
+      expect(out).toBeInstanceOf(Error);
+      expect(out).not.toBeInstanceOf(RefundBroadcastUnconfirmed);
+    }
+    expect(broadcastFailure({ code: 'UNKNOWN_ERROR', error: { message: 'already known' }, payload: SEND }, '0x7')).toBeInstanceOf(RefundBroadcastUnconfirmed);
+    expect(broadcastFailure({ code: 'TIMEOUT' }, '0x7')).toBeInstanceOf(RefundBroadcastUnconfirmed);
+    expect(broadcastFailure({ code: 'SERVER_ERROR', info: { responseStatus: '502 Bad Gateway' } }, '0x7')).toBeInstanceOf(RefundBroadcastUnconfirmed);
+  });
+
+  it('broadcastFailure: an error on a CO-BATCHED read is not a refusal of the send (it may have been accepted)', () => {
+    // Strix on #1550: ethers resolves eth_blockNumber / eth_chainId together with the send.
+    for (const method of ['eth_blockNumber', 'eth_chainId']) {
+      const out = broadcastFailure({ code: 'UNKNOWN_ERROR', error: { code: -32005, message: 'limit exceeded' }, payload: { method } }, '0x8');
+      expect(out).toBeInstanceOf(RefundBroadcastUnconfirmed);
+    }
+    // ...and a named rejection code with no request named is not trusted either.
+    expect(broadcastFailure({ code: 'INSUFFICIENT_FUNDS' }, '0x8')).toBeInstanceOf(RefundBroadcastUnconfirmed);
+  });
+
+  it('refundWaitFailure: a replacement is settled by its proof, not assumed to have landed', () => {
+    // Strix on #1550: a cancelled refund was booked as paid.
+    for (const reason of ['cancelled', 'replaced']) {
+      const out = refundWaitFailure({ code: 'TRANSACTION_REPLACED', cancelled: true, reason, receipt: { status: 1, hash: '0xother' } }, '0x6');
+      expect(out).toBeInstanceOf(Error);
+      expect(out).not.toBeInstanceOf(RefundBroadcastUnconfirmed); // nothing was sent
+    }
+    expect(refundWaitFailure({ code: 'TRANSACTION_REPLACED', cancelled: false, reason: 'repriced', receipt: { status: 1, hash: '0xnew' } }, '0x6')).toEqual({ txHash: '0xnew' });
+    expect(refundWaitFailure({ code: 'TRANSACTION_REPLACED', cancelled: false, reason: 'repriced', receipt: { status: 0, hash: '0xnew' } }, '0x6')).not.toBeInstanceOf(RefundBroadcastUnconfirmed);
+    expect(refundWaitFailure({ code: 'TRANSACTION_REPLACED', cancelled: false, reason: 'repriced' }, '0x6')).toBeInstanceOf(RefundBroadcastUnconfirmed); // no receipt: unclear
+  });
+
+  it('nonceExpiredOutcome: our own receipt decides; no receipt means another tx took the nonce (not sent)', () => {
+    expect(nonceExpiredOutcome(null, '0x5')).not.toBeInstanceOf(RefundBroadcastUnconfirmed); // never minable: not sent
+    expect(nonceExpiredOutcome(null, '0x5')).toBeInstanceOf(Error);
+    expect(nonceExpiredOutcome({ status: 1 }, '0x5')).toEqual({ txHash: '0x5' }); // ours, and it landed
+    expect(nonceExpiredOutcome({ status: 0 }, '0x5')).not.toBeInstanceOf(RefundBroadcastUnconfirmed); // ours, reverted
+    expect(nonceExpiredOutcome(undefined, '0x5')).toBeInstanceOf(RefundBroadcastUnconfirmed); // lookup failed
+  });
+
+  it('refunds from the one escrow wallet run one at a time, whatever builder they are for', async () => {
+    mockConfig.stakeEscrowSignerKey = 'present';
+    const log: string[] = [];
+    __setEscrowSender(async (to) => {
+      log.push(`start ${to.slice(-1)}`);
+      await new Promise((r) => setTimeout(r, 20));
+      log.push(`end ${to.slice(-1)}`);
+      return { txHash: '0xok' };
+    });
+    await Promise.all([
+      escrowRefund('builder-a', 1n, '0x' + '2'.repeat(39) + 'a'),
+      escrowRefund('builder-b', 1n, '0x' + '2'.repeat(39) + 'b'),
+    ]);
+    expect(log).toEqual(['start a', 'end a', 'start b', 'end b']);
   });
 
   it('configured + send throws (signer != escrow / wrong chain) => REFUSED (fail closed)', async () => {

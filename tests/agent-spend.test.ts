@@ -96,9 +96,44 @@ describe('POST /api/v1/agents/:id/spend', () => {
     const a = express();
     a.use(express.json());
     const boundOwner = opts.boundOwner === undefined ? OWNER : opts.boundOwner;
+    // What authMiddleware sets for an agent-bound key: the agent it is bound to.
+    a.use((req, _res, next) => { (req as any).agent_id = 'agent-1'; next(); });
     a.use('/api/v1/agents', createAgentSpendRouter({ chain, loadAgent: ownAgent, loadOwnerWallet: async () => boundOwner, enabled: () => opts.enabled }));
     return { a, sent };
   }
+
+  describe('who may ask', () => {
+    function caller(agentId: string | undefined, tier = 'free') {
+      const { chain, sent } = fakeChain();
+      const a = express();
+      a.use(express.json());
+      a.use((req, _res, next) => { (req as any).agent_id = agentId; (req as any).apiKey = { tier }; next(); });
+      a.use('/api/v1/agents', createAgentSpendRouter({ chain, loadAgent: ownAgent, loadOwnerWallet: async () => OWNER, enabled: () => true }));
+      return { a, sent };
+    }
+    const body = { owner_address: OWNER, to_address: PAYEE, amount_usdc: '1' };
+
+    it('another agent\'s key is refused, even when the URL id reached the route', async () => {
+      const { a, sent } = caller('agent-2');
+      const res = await request(a).post('/api/v1/agents/agent-1/spend').send(body);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('not_this_agent');
+      expect(sent).toHaveLength(0);
+    });
+
+    it('a shared key bound to no agent is refused unless it is an operator (ops tier) key', async () => {
+      const shared = caller(undefined, 'pro');
+      expect((await request(shared.a).post('/api/v1/agents/agent-1/spend').send(body)).body.code).toBe('not_this_agent');
+      expect(shared.sent).toHaveLength(0);
+      const ops = caller(undefined, 'ops');
+      expect((await request(ops.a).post('/api/v1/agents/agent-1/spend').send(body)).body).toMatchObject({ ok: true });
+    });
+
+    it('a dry run is held to the same rule', async () => {
+      const { a } = caller('agent-2');
+      expect((await request(a).post('/api/v1/agents/agent-1/spend').send({ ...body, dry_run: true })).status).toBe(403);
+    });
+  });
   const body = { owner_address: OWNER, to_address: PAYEE, amount_usdc: '2' };
 
   it('a dry run works while spending is off, and signs nothing', async () => {
@@ -145,6 +180,7 @@ describe('POST /api/v1/agents/:id/spend', () => {
     const { chain, sent } = fakeChain();
     const a = express();
     a.use(express.json());
+    a.use((req, _res, next) => { (req as any).agent_id = 'agent-1'; next(); });
     a.use('/api/v1/agents', createAgentSpendRouter({
       chain, loadAgent: ownAgent, enabled: () => true,
       loadOwnerWallet: async () => { throw new Error('owner lookup failed: db down'); },

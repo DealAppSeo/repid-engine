@@ -501,11 +501,28 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       return next();
     }
 
-    // Check for UUID or name in URL path
-    const pathParts = req.path.split('/');
-    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const pathUuid = pathParts.find(p => uuidRe.test(p));
-    if (pathUuid && pathUuid.toLowerCase() !== dbAgentId.toLowerCase()) {
+    // Check for UUID or name in URL path. DECODED [2026-11-14]: Express hands routes a
+    // percent-decoded req.params, so matching the raw req.path let `/agents/%61aaa…/spend` past
+    // both checks below (no segment looked like a UUID, and `spend` is whitelisted) while the
+    // handler acted on the decoded id, another agent (Strix on #1550). A segment that does not
+    // decode is refused rather than matched raw.
+    let pathParts: string[];
+    try {
+      pathParts = req.path.split('/').map((p) => decodeURIComponent(p));
+    } catch {
+      return res.status(400).json({ error: 'Bad request: malformed percent-encoding in path' });
+    }
+    // EVERY SPELLING POSTGRES ACCEPTS [2026-11-14]: a uuid column also takes the id without
+    // hyphens, in braces, or in mixed case, and resolves it to the same row. This check knew only
+    // the dashed spelling, so `/agents/<id without dashes>/…` was never compared with the key's
+    // agent while the handler's eq('id', …) still found the other agent (Strix on #1550). Any
+    // segment that is 32 hex digits once braces and hyphens are dropped is compared in that form.
+    const uuidKey = (p: string): string | null => {
+      const s = p.replace(/[{}-]/g, '');
+      return /^[0-9a-f]{32}$/i.test(s) ? s.toLowerCase() : null;
+    };
+    const pathUuid = pathParts.map(uuidKey).find((k) => k !== null);
+    if (pathUuid && pathUuid !== dbAgentId.replace(/-/g, '').toLowerCase()) {
       return res.status(403).json({ error: 'Forbidden: agent_id in path mismatch (API key is bound to a different agent identity)' });
     }
 
@@ -520,7 +537,7 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     // fields must match the bound agent).
     const isAgentScopedPath = /^(?:\/api\/v1)?\/agents\//.test(req.path);
     const lastPart = pathParts[pathParts.length - 1];
-    if (isAgentScopedPath && lastPart && lastPart.length > 0 && !uuidRe.test(lastPart)) {
+    if (isAgentScopedPath && lastPart && lastPart.length > 0 && !uuidKey(lastPart)) {
       // If lastPart is not a UUID, check if it matches the bound agent name
       if (boundAgentName && lastPart.toLowerCase() !== boundAgentName.toLowerCase() &&
           // filter out generic route paths
