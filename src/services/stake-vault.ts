@@ -91,11 +91,15 @@ export async function depositStake(
       return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: false, error: 'STAKE_ESCROW_ADDRESS not configured' };
     }
 
-    // Duplicate / replay guard: this tx_hash must not already back a stake.
+    // Duplicate / replay guard: this tx_hash must not already back a REAL stake. Real rows only:
+    // the simulated path stores whatever hash the caller sends, so counting simulated rows let a
+    // practice deposit naming someone's real transfer block that transfer's claim forever
+    // (Strix on #1550). Same scope as stake_deposits_real_tx_hash_uniq.
     const { data: existing } = await db
       .from('stake_deposits')
       .select('id')
       .eq('deposit_tx_hash', txHash!)
+      .eq('is_simulated', false)
       .limit(1);
     if (existing && existing.length > 0) {
       return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: false, error: 'duplicate tx_hash: this deposit was already recorded' };

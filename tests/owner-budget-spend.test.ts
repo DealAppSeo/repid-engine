@@ -317,6 +317,11 @@ describe('reserve_owner_spend: the SQL the guarantee depends on', () => {
     expect(funded).toMatch(/is_simulated = false/);
   });
 
+  it('one real transfer is credited once, and a simulated row cannot take its slot', () => {
+    const idx = sql.slice(sql.indexOf('stake_deposits_real_tx_hash_uniq'));
+    expect(idx).toMatch(/^stake_deposits_real_tx_hash_uniq\s+on public\.stake_deposits \(lower\(deposit_tx_hash\)\)\s+where is_simulated = false\s+and deposit_tx_hash ~/);
+  });
+
   it('nobody but the service role can read the ledger or call the functions', () => {
     expect(sql).toMatch(/enable row level security/);
     expect(sql).toMatch(/revoke all on public\.owner_spend_ledger from anon, authenticated/);

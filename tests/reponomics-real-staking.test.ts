@@ -54,9 +54,11 @@ interface DbState {
   selectResults: Record<string, Array<{ data: any; error: any }>>;
   inserts: Array<{ table: string; row: any }>;
   insertError: any;
+  /** every .eq(col, val) filter, so a test can see what a query was scoped to */
+  eqs: Array<{ table: string; col: string; val: unknown }>;
 }
 
-const dbState: DbState = { selectResults: {}, inserts: [], insertError: null };
+const dbState: DbState = { selectResults: {}, inserts: [], insertError: null, eqs: [] };
 
 function makeQuery(table: string) {
   const q: any = {};
@@ -64,6 +66,10 @@ function makeQuery(table: string) {
   for (const m of ['select', 'eq', 'ilike', 'limit', 'order', 'in', 'gte']) {
     q[m] = jest.fn(chain);
   }
+  q.eq = jest.fn((col: string, val: unknown) => {
+    dbState.eqs.push({ table, col, val });
+    return q;
+  });
   const pull = () => {
     const queue = dbState.selectResults[table] ?? [];
     return queue.length ? queue.shift() : { data: null, error: null };
@@ -161,6 +167,7 @@ beforeEach(() => {
   dbState.selectResults = {};
   dbState.inserts = [];
   dbState.insertError = null;
+  dbState.eqs = [];
   mockConfig.realStakingEnabled = false;
   __setProviderFactory(() => mockProvider());
   jest.clearAllMocks();
@@ -345,6 +352,19 @@ describe('stake-vault — depositStake real-staking routing', () => {
     // real table has no such column, so every verified deposit failed at this insert in
     // production. Pin the insert to the live columns instead [MEASURED 2026-11-14].
     expect(Object.keys(dep?.row ?? {}).filter((k) => !STAKE_DEPOSITS_COLUMNS.includes(k))).toEqual([]);
+  });
+
+  it('flag ON: the replay guard looks at REAL rows only, so a practice row naming the hash cannot block it', async () => {
+    mockConfig.realStakingEnabled = true;
+    __setProviderFactory(() => mockProvider());
+    seedBuilderFound();
+    dbState.selectResults['stake_deposits'] = [{ data: [], error: null }, { data: [{ amount: '100000000' }], error: null }];
+    dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
+    await depositStake(BUILDER_ADDR, 100_000_000n, VALID_TX);
+    expect(dbState.eqs).toEqual(expect.arrayContaining([
+      { table: 'stake_deposits', col: 'deposit_tx_hash', val: VALID_TX },
+      { table: 'stake_deposits', col: 'is_simulated', val: false },
+    ]));
   });
 
   it('flag ON: a concurrent claim that loses the unique index is refused as a duplicate', async () => {
