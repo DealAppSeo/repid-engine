@@ -43,6 +43,7 @@ import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { pgQuery } from '../db/direct-pg';
 import { resolveProviderEndpoint } from './local-llm';
+import { providerFetch } from '../egress/provider-fetch';
 import { isRetiredModel } from './retired-models';
 import { assertPromptEgressAllowed, isLocalHost, onlyAttestationsLeave } from '../selfhost/egress-guard';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
@@ -355,7 +356,7 @@ async function callOpenAICompat(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(endpoint, {
+    const res = await providerFetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -398,7 +399,7 @@ async function callAnthropicNative(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(endpoint, {
+    const res = await providerFetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
