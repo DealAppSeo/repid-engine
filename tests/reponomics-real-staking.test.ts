@@ -510,7 +510,7 @@ describe('stake-vault — withdrawStake real-staking routing', () => {
     // getCurrentStake (total), getRealStake (real)
     dbState.selectResults['stake_deposits'] = [
       { data: [{ amount: '100000000' }], error: null }, // getCurrentStake
-      { data: [{ amount: '100000000' }], error: null }, // getRealStake
+      { data: [{ amount: '100000000', deposit_tx_hash: VALID_TX }], error: null }, // getRealStake (a verified row)
     ];
     dbState.selectResults['builders'] = [{ data: { address: BUILDER_ADDR }, error: null }];
     dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
@@ -530,6 +530,30 @@ describe('stake-vault — withdrawStake real-staking routing', () => {
     dbState.selectResults['stake_deposits'] = [
       { data: [{ amount: '100000000' }], error: null }, // getCurrentStake (total incl simulated)
       { data: [{ amount: '10000000' }], error: null },  // getRealStake (only 10 real)
+    ];
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/exceeds real/i);
+  });
+
+  it('flag ON: a row LABELLED real but carrying no real tx hash is not refundable (the production 50 USDC row)', async () => {
+    mockConfig.realStakingEnabled = true;
+    dbState.selectResults['linked_bets'] = [{ data: [], error: null }];
+    dbState.selectResults['stake_deposits'] = [
+      { data: [{ amount: '50000000' }], error: null }, // getCurrentStake
+      { data: [{ amount: '50000000', deposit_tx_hash: 'simulated:deposit:1754626669020' }], error: null }, // getRealStake
+    ];
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/exceeds real/i);
+  });
+
+  it('flag ON: earlier withdrawals always reduce what is refundable, whatever their hash', async () => {
+    mockConfig.realStakingEnabled = true;
+    dbState.selectResults['linked_bets'] = [{ data: [], error: null }];
+    dbState.selectResults['stake_deposits'] = [
+      { data: [{ amount: '100000000' }], error: null }, // getCurrentStake (high, so the REAL bound is what decides)
+      { data: [{ amount: '100000000', deposit_tx_hash: VALID_TX }, { amount: '-60000000', deposit_tx_hash: 'pending-refund:1' }], error: null },
     ];
     const r = await withdrawStake('builder-1', 50_000_000n);
     expect(r.ok).toBe(false);

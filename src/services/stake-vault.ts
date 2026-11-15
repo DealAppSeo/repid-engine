@@ -433,14 +433,25 @@ export async function withdrawStake(rawBuilderId: string, amount: bigint): Promi
  * Sum of REAL (is_simulated=false) stake rows for a builder — the amount the
  * escrow actually custodies and can refund. Simulated rows are excluded.
  */
+/**
+ * Stake the escrow actually received, the bound on a REAL escrow refund. Same rule as
+ * owner_funded_stake (supabase/migrations/20261114200000_owner_spend_ledger.sql): a positive row
+ * counts only with a real 0x transaction hash; a withdrawal (negative row) always counts. It used
+ * to trust the is_simulated label alone, and production holds a 50 USDC row labelled real that is
+ * a `simulated:deposit:` row, so that account could be refunded real USDC from the escrow other
+ * builders funded (Strix on #1550).
+ */
 export async function getRealStake(builderId: string): Promise<bigint> {
   const { data } = await db
     .from('stake_deposits')
-    .select('amount')
+    .select('amount, deposit_tx_hash')
     .eq('builder_id', builderId)
     .eq('is_simulated', false);
   if (!data) return 0n;
-  return data.reduce((acc, r) => acc + BigInt(r.amount), 0n);
+  return data.reduce((acc: bigint, r: { amount: unknown; deposit_tx_hash?: unknown }) => {
+    const a = BigInt(String(r.amount));
+    return a < 0n || /^0x[0-9a-fA-F]{64}$/.test(String(r.deposit_tx_hash ?? '')) ? acc + a : acc;
+  }, 0n);
 }
 
 /**

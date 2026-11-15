@@ -23,7 +23,7 @@ const mockDb = { insertError: null as any };
 jest.mock('../src/db', () => {
   const rows: Record<string, any> = {
     linked_bets: { data: [], error: null },
-    stake_deposits: { data: [{ amount: '100000000' }], error: null },
+    stake_deposits: { data: [{ amount: '100000000', deposit_tx_hash: '0x' + 'a'.repeat(64) }], error: null },
     builders: { data: { address: '0x' + '9'.repeat(40) }, error: null },
     repid_agents: { data: [], error: null },
   };
