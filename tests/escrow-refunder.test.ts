@@ -118,6 +118,22 @@ describe('escrowRefund — fail-closed escrow -> builder refund', () => {
     }
   });
 
+  it('broadcastFailure: a refusal carrying the node\'s own reply is "not sent"; "already known" and no reply are unconfirmed', () => {
+    // Strix on #1550: ethers reports most refusals as UNKNOWN_ERROR with the node's reply attached.
+    for (const e of [
+      { code: 'UNKNOWN_ERROR', error: { code: -32000, message: 'transaction underpriced' } },
+      { code: 'UNKNOWN_ERROR', error: { code: -32000, message: 'intrinsic gas too low' } },
+      { code: 'UNKNOWN_ERROR', info: { error: { code: -32000, message: 'max fee per gas less than block base fee' } } },
+    ]) {
+      const out = broadcastFailure(e, '0x7');
+      expect(out).toBeInstanceOf(Error);
+      expect(out).not.toBeInstanceOf(RefundBroadcastUnconfirmed);
+    }
+    expect(broadcastFailure({ code: 'UNKNOWN_ERROR', error: { message: 'already known' } }, '0x7')).toBeInstanceOf(RefundBroadcastUnconfirmed);
+    expect(broadcastFailure({ code: 'TIMEOUT' }, '0x7')).toBeInstanceOf(RefundBroadcastUnconfirmed);
+    expect(broadcastFailure({ code: 'SERVER_ERROR', info: { responseStatus: '502 Bad Gateway' } }, '0x7')).toBeInstanceOf(RefundBroadcastUnconfirmed);
+  });
+
   it('refundWaitFailure: a replacement is settled by its proof, not assumed to have landed', () => {
     // Strix on #1550: a cancelled refund was booked as paid.
     for (const reason of ['cancelled', 'replaced']) {

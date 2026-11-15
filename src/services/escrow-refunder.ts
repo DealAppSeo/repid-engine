@@ -48,10 +48,32 @@ export class RefundBroadcastUnconfirmed extends Error {
  * receipt first (nonceExpiredOutcome); reaching this function with it means unconfirmed.
  */
 const NODE_REJECTED = new Set(['INSUFFICIENT_FUNDS', 'REPLACEMENT_UNDERPRICED']);
+/** A node reply that means the transaction IS in the mempool, so it may still land. */
+const NODE_SAYS_IN_MEMPOOL = /already known|known transaction|already imported|already in (the )?(mem|tx)pool/i;
+
+/** The node's own JSON-RPC error reply, if the failure carries one (ethers keeps it on `error` or `info.error`). */
+function nodeReply(e: unknown): string | null {
+  const x = e as { error?: { message?: unknown } | null; info?: { error?: { message?: unknown } | null } | null } | null;
+  const m = x?.error?.message ?? x?.info?.error?.message;
+  return typeof m === 'string' && m.trim() !== '' ? m : null;
+}
+
+/**
+ * The broadcast call failed. A failure that carries the NODE'S OWN reply is the node refusing the
+ * transaction, so nothing was sent; ethers turns most refusals ("transaction underpriced",
+ * "intrinsic gas too low", "max fee per gas less than block base fee", "invalid sender") into
+ * UNKNOWN_ERROR with that reply attached, and counting them as "may have landed" stamped a debit
+ * `withdrawn` while no USDC moved (Strix on #1550). The exception is a reply saying the
+ * transaction is already in the mempool. A failure with NO reply (a timeout, a dropped connection,
+ * an HTTP error) may have reached the node: unconfirmed. NONCE_EXPIRED is decided by realSender
+ * first (nonceExpiredOutcome).
+ */
 export function broadcastFailure(e: unknown, txHash: string): Error {
   const code = (e as { code?: unknown } | null)?.code;
   const detail = e instanceof Error ? e.message.split('\n')[0] ?? '' : String(e);
   if (typeof code === 'string' && NODE_REJECTED.has(code)) return new Error(`refund ${txHash} rejected by the node before broadcast (${code}): ${detail}`);
+  const reply = nodeReply(e);
+  if (reply !== null && !NODE_SAYS_IN_MEMPOOL.test(reply)) return new Error(`refund ${txHash} rejected by the node: ${reply}`);
   return new RefundBroadcastUnconfirmed(txHash, `broadcast reply not received: ${detail}`);
 }
 

@@ -95,10 +95,11 @@ describe('enforce', () => {
     expect(mockDb.updates[0]).toEqual({ row: { amount: '0', status: 'withdraw_failed' }, id: 'debit-1' });
   });
 
-  it('a refund that was broadcast but is unconfirmed keeps the debit (stamped with its hash)', async () => {
+  it('a refund that was broadcast but is unconfirmed keeps the debit counting and is NOT reported as done', async () => {
     refundWith({ ...sent, unconfirmed: true, note: 'timeout' });
     const r = await withdrawStake('builder-1', 50_000_000n);
-    expect(steps()).toEqual(['begin', 'refund', 'update:stake_deposits:withdrawn']);
+    expect(steps()).toEqual(['begin', 'refund', 'update:stake_deposits:withdraw_unconfirmed']);
+    expect(r).toMatchObject({ ok: false, error: 'refund_unconfirmed' });
     expect(r.refund?.unconfirmed).toBe(true);
   });
 });

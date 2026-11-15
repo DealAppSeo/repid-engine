@@ -57,9 +57,11 @@ interface DbState {
   /** every .eq(col, val) filter, so a test can see what a query was scoped to */
   eqs: Array<{ table: string; col: string; val: unknown }>;
   updates: Array<{ table: string; row: any }>;
+  /** order of the replay check and the insert across concurrent claims */
+  seq: string[];
 }
 
-const dbState: DbState = { selectResults: {}, inserts: [], insertError: null, eqs: [], updates: [] };
+const dbState: DbState = { selectResults: {}, inserts: [], insertError: null, eqs: [], updates: [], seq: [] };
 
 function makeQuery(table: string) {
   const q: any = {};
@@ -69,6 +71,7 @@ function makeQuery(table: string) {
   }
   q.eq = jest.fn((col: string, val: unknown) => {
     dbState.eqs.push({ table, col, val });
+    if (table === 'stake_deposits' && col === 'deposit_tx_hash') dbState.seq.push('dup-check');
     return q;
   });
   const pull = () => {
@@ -81,6 +84,7 @@ function makeQuery(table: string) {
   q.then = (resolve: any) => resolve(pull());
   q.insert = jest.fn(async (row: any) => {
     dbState.inserts.push({ table, row });
+    if (table === 'stake_deposits') dbState.seq.push('insert');
     return { data: null, error: dbState.insertError };
   });
   q.update = jest.fn((row: any) => {
@@ -175,6 +179,7 @@ beforeEach(() => {
   dbState.insertError = null;
   dbState.eqs = [];
   dbState.updates = [];
+  dbState.seq = [];
   mockConfig.realStakingEnabled = false;
   __setProviderFactory(() => mockProvider());
   jest.clearAllMocks();
@@ -372,6 +377,27 @@ describe('stake-vault — depositStake real-staking routing', () => {
       { table: 'stake_deposits', col: 'deposit_tx_hash', val: VALID_TX },
       { table: 'stake_deposits', col: 'is_simulated', val: false },
     ]));
+  });
+
+  it('flag ON: two claims of ONE transfer at once run one after the other, so the second sees the first (no index needed)', async () => {
+    // Strix on #1550: the read-then-verify-then-insert guard let parallel claims both insert where the
+    // unique index is not applied yet.
+    mockConfig.realStakingEnabled = true;
+    __setProviderFactory(() => mockProvider());
+    dbState.selectResults['builders'] = [
+      { data: { id: 'builder-1', current_repid: 6000, address: BUILDER_ADDR }, error: null },
+      { data: { id: 'builder-1', current_repid: 6000, address: BUILDER_ADDR }, error: null },
+    ];
+    dbState.selectResults['stake_deposits'] = [
+      { data: [], error: null }, // first claim: no earlier row
+      { data: [{ amount: '100000000' }], error: null }, // first claim: getCurrentStake
+      { data: [{ id: 'first' }], error: null }, // second claim: sees the first's row
+    ];
+    dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
+    const [a, b] = await Promise.all([depositStake(BUILDER_ADDR, 100_000_000n, VALID_TX), depositStake(BUILDER_ADDR, 100_000_000n, VALID_TX)]);
+    expect(dbState.seq).toEqual(['dup-check', 'insert', 'dup-check']);
+    expect(a.ok).toBe(true);
+    expect(b).toMatchObject({ ok: false, error: expect.stringMatching(/duplicate/) });
   });
 
   it('flag ON: a concurrent claim that loses the unique index is refused as a duplicate', async () => {

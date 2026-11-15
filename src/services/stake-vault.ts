@@ -97,7 +97,13 @@ export async function depositStake(
     if (!config.stakeEscrowAddress) {
       return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: true, verified: false, error: 'STAKE_ESCROW_ADDRESS not configured' };
     }
+    const escrowAddress = config.stakeEscrowAddress;
 
+    // ONE CLAIM PER TRANSFER AT A TIME. The guard below is a read, then several chain round trips,
+    // then the insert; two parallel claims of one transfer both passed the read and both inserted,
+    // crediting 2x the stake, wherever the unique index (stake_deposits_real_tx_hash_uniq) is not
+    // applied yet (Strix on #1550). Serialized per hash in-process: the engine runs one replica.
+    return serializeWithdraw(`deposit:${String(txHash).toLowerCase()}`, async (): Promise<DepositResult> => {
     // Duplicate / replay guard: this tx_hash must not already back a REAL stake. Real rows only:
     // the simulated path stores whatever hash the caller sends, so counting simulated rows let a
     // practice deposit naming someone's real transfer block that transfer's claim forever
@@ -115,7 +121,7 @@ export async function depositStake(
     const v = await verifyDeposit({
       txHash: txHash!,
       claimedAmount: amount,
-      escrowAddress: config.stakeEscrowAddress,
+      escrowAddress,
       tokenAddress: config.usdcTokenAddress,
       minConfirmations: config.stakeMinConfirmations,
       fromAddress: lower,
@@ -170,6 +176,7 @@ export async function depositStake(
       verified: true,
       tx_hash: txHash!,
     };
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -355,7 +362,14 @@ export async function withdrawStake(rawBuilderId: string, amount: bigint): Promi
     // FAIL-CLOSED: a refund that is a stub or definitely did not happen voids the debit.
     const refund = await refundInitiator(builderId, amount, builder?.address ?? undefined);
     if (refund.stub || !refund.initiated) {
-      const { error: vErr } = await db.from('stake_deposits').update({ amount: '0', status: 'withdraw_failed' }).eq('id', pendingDebit);
+      // Retried: a void that never lands leaves the builder's stake reading short with no payout
+      // (Grok r12 on #1550). If every attempt fails it is logged with the row id to fix by hand.
+      let vErr: { message: string } | null = null;
+      for (let i = 0; i < 3; i++) {
+        ({ error: vErr } = await db.from('stake_deposits').update({ amount: '0', status: 'withdraw_failed' }).eq('id', pendingDebit));
+        if (!vErr) break;
+        await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+      }
       if (vErr) console.error(`[stake-vault] pending debit ${pendingDebit} could not be voided after a refund that was not sent; the stake reads LOW until fixed: ${vErr.message}`);
       return {
         ok: false,
@@ -370,8 +384,21 @@ export async function withdrawStake(rawBuilderId: string, amount: bigint): Promi
     // real on-chain refund tx (not a sentinel), so the row is auditable. If the stamp fails the row
     // stays a pending debit, which still counts, so nothing is refundable twice.
     const debitHash = refund.txHash ?? `pending-refund:${pendingDebit}`;
-    const { error: sErr } = await db.from('stake_deposits').update({ status: 'withdrawn', deposit_tx_hash: debitHash }).eq('id', pendingDebit);
+    // An UNCONFIRMED refund (broadcast, outcome unknown) keeps its debit counting so the stake cannot
+    // be refunded again, but it is not reported as done: status withdraw_unconfirmed and ok:false,
+    // so it is visible to reconcile against the chain instead of passing as a finished withdrawal.
+    const finalStatus = refund.unconfirmed ? 'withdraw_unconfirmed' : 'withdrawn';
+    const { error: sErr } = await db.from('stake_deposits').update({ status: finalStatus, deposit_tx_hash: debitHash }).eq('id', pendingDebit);
     if (sErr) console.error(`[stake-vault] withdrawal debit ${pendingDebit} (refund ${debitHash}) could not be stamped; it still counts as withdrawn: ${sErr.message}`);
+    if (refund.unconfirmed) {
+      await emitAuditEvent({
+        event_type: 'stake_withdraw',
+        source_table: 'stake_deposits',
+        source_id: `withdraw-${builderId}-${Date.now()}`,
+        payload: { builder_id: builderId, amount: amount.toString(), is_simulated: false, refund_tx_hash: refund.txHash ?? null, refund_unconfirmed: true },
+      });
+      return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'refund_unconfirmed', refund };
+    }
 
     const newTotal = await getCurrentStake(builderId);
     const auth = await snapshotAuthority(builderId, newTotal);
@@ -388,7 +415,7 @@ export async function withdrawStake(rawBuilderId: string, amount: bigint): Promi
         refund_stub: refund.stub,
         refund_to: refund.to,
         refund_tx_hash: refund.txHash ?? null,
-        refund_unconfirmed: refund.unconfirmed === true,
+        refund_unconfirmed: false, // an unconfirmed refund returned above with its own audit entry
       },
     });
     return { ok: true, total_active_stake: newTotal.toString(), authority_after: auth.authority.toString(), refund };
