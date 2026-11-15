@@ -71,8 +71,8 @@ use p3_poseidon2_air::{
 };
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{prove, verify, Proof, StarkConfig, VerificationError};
-use rand::rngs::SmallRng;
-use rand::SeedableRng;
+use rand::rngs::StdRng;
+use crate::hiding_rng;
 
 use crate::poseidon2_hash2::h_p2_field;
 
@@ -140,14 +140,14 @@ type ValHidingMmcs = MerkleTreeHidingMmcs<
     [u64; p3_keccak::VECTOR_LEN],
     FieldHash,
     MyCompress,
-    SmallRng,
+    StdRng,
     4,
     4,
 >;
 type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
 type Dft = Radix2DitParallel<Val>;
 type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
+type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, StdRng>;
 pub type MerkleConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 fn make_config() -> MerkleConfig {
@@ -155,10 +155,11 @@ fn make_config() -> MerkleConfig {
     let u64_hash = U64Hash::new(KeccakF {});
     let field_hash = FieldHash::new(u64_hash);
     let compress = MyCompress::new(u64_hash);
-    // Seed differs from lib.rs (1) and ordering_check.rs (2) to avoid any accidental
-    // cross-circuit proof reuse.
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, SmallRng::seed_from_u64(3));
-    let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
+    // Independent generators for the trace tree and the FRI commit-phase tree. Cloning
+    // `val_mmcs` would copy its RNG state and reuse one salt stream in both trees.
+    let challenge_mmcs =
+        ChallengeHidingMmcs::new(ValHidingMmcs::new(field_hash.clone(), compress.clone(), hiding_rng()));
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, hiding_rng());
     let dft = Dft::default();
     let fri_params = FriParameters {
         log_blowup: 3,
@@ -167,7 +168,7 @@ fn make_config() -> MerkleConfig {
         proof_of_work_bits: 1,
         mmcs: challenge_mmcs,
     };
-    let pcs = HidingFriPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(3));
+    let pcs = HidingFriPcs::new(dft, val_mmcs, fri_params, 4, hiding_rng());
     let challenger = Challenger::from_hasher(vec![], byte_hash);
     MerkleConfig::new(pcs, challenger)
 }
@@ -403,6 +404,18 @@ mod tests {
         let proof = prove_merkle_path(leaf, sib, false, root);
         verify_merkle_path(&proof, leaf, sib, false, root)
             .expect("valid dir=0 path must verify");
+    }
+
+    // HIDING GATE — fresh blinding randomness per proof (see lib.rs
+    // `two_proofs_of_one_witness_differ`; this module used a constant seed 3).
+    #[test]
+    fn two_proofs_of_one_path_differ() {
+        let (leaf, sib) = (leaf_val(), sib_val());
+        let root = merkle_parent(leaf, sib, false);
+        let a = prove_merkle_path(leaf, sib, false, root);
+        let b = prove_merkle_path(leaf, sib, false, root);
+        verify_merkle_path(&b, leaf, sib, false, root).expect("second proof must verify");
+        assert_ne!(proof_to_bytes(&a), proof_to_bytes(&b), "blinding randomness is not fresh");
     }
 
     // GATE 1b — direction=1: sibling is left child, leaf is right.

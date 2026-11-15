@@ -60,7 +60,7 @@ of RepID?* If yes, it is not zkRepID.
 | `src/zkp/erc8004-linkage.ts` | joins a RepID proof to an on-chain ERC-8004 identity | pure |
 | `src/zkp/holder-identity-binding.ts` | binds a RepID proof to the holder who earned it | pure |
 | `src/zkp/nullifier-identity.ts` | per-identity nullifiers, so one RepID cannot be replayed as many | pure |
-| `src/zkrepid/disclosure.ts` | the selective-disclosure seam: prove `repid >= threshold` without publishing the score | pure |
+| `src/zkrepid/disclosure.ts` | the selective-disclosure seam, **not yet a proof**: no circuit exists, so nothing proves `repid >= threshold` without publishing the score today (the live range proofs publish it) | pure |
 | `src/zkp/formula-golden-vector.ts` | pins the scoring formula's observable behaviour per version, so a statement's `formula_version` cannot silently stop describing the formula that produced it | pure |
 | `src/zkp/statement-registry.ts` | the family of RepID statements and what each one binds — the answer to "which statement does this proof prove?", which a proof cannot answer about itself because the verifier ignores any field it does not already know | pure |
 | `src/zkp/repid-delta-bridge.ts` | the wire from the live scoring path into a RepID delta statement | **I/O edge** |

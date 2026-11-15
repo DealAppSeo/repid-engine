@@ -64,8 +64,8 @@ use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{prove, verify, Proof, StarkConfig, VerificationError};
-use rand::rngs::SmallRng;
-use rand::SeedableRng;
+use rand::rngs::StdRng;
+use crate::hiding_rng;
 
 // ---- BabyBear ordering constants ---------------------------------------------
 
@@ -104,14 +104,14 @@ type ValHidingMmcs = MerkleTreeHidingMmcs<
     [u64; p3_keccak::VECTOR_LEN],
     FieldHash,
     MyCompress,
-    SmallRng,
+    StdRng,
     4,
     4,
 >;
 type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
 type Dft = Radix2DitParallel<Val>;
 type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
+type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, StdRng>;
 pub type OrdConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 fn make_config() -> OrdConfig {
@@ -119,8 +119,11 @@ fn make_config() -> OrdConfig {
     let u64_hash = U64Hash::new(KeccakF {});
     let field_hash = FieldHash::new(u64_hash);
     let compress = MyCompress::new(u64_hash);
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, SmallRng::seed_from_u64(2));
-    let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
+    // Independent generators for the trace tree and the FRI commit-phase tree. Cloning
+    // `val_mmcs` would copy its RNG state and reuse one salt stream in both trees.
+    let challenge_mmcs =
+        ChallengeHidingMmcs::new(ValHidingMmcs::new(field_hash.clone(), compress.clone(), hiding_rng()));
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, hiding_rng());
     let dft = Dft::default();
     let fri_params = FriParameters {
         log_blowup: 3,
@@ -129,7 +132,7 @@ fn make_config() -> OrdConfig {
         proof_of_work_bits: 1,
         mmcs: challenge_mmcs,
     };
-    let pcs = HidingFriPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(2));
+    let pcs = HidingFriPcs::new(dft, val_mmcs, fri_params, 4, hiding_rng());
     let challenger = Challenger::from_hasher(vec![], byte_hash);
     OrdConfig::new(pcs, challenger)
 }
@@ -319,6 +322,17 @@ mod tests {
     fn valid_ordering_accepts() {
         let proof = prove_ordering(10, 20, 30);
         verify_ordering(&proof, 10, 20, 30).expect("valid ordering must verify");
+    }
+
+    // HIDING GATE — fresh blinding randomness per proof (see lib.rs
+    // `two_proofs_of_one_witness_differ`; this module used a constant seed 2).
+    #[test]
+    fn two_proofs_of_one_ordering_differ() {
+        let a = bincode::serialize(&prove_ordering(10, 20, 30)).expect("serialize");
+        let b = prove_ordering(10, 20, 30);
+        verify_ordering(&b, 10, 20, 30).expect("second proof must verify");
+        let b = bincode::serialize(&b).expect("serialize");
+        assert_ne!(a, b, "blinding randomness is not fresh");
     }
 
     // GATE 0b — ordering over larger BabyBear-range values (up to HALF_P − 1).

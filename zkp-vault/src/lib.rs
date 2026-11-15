@@ -27,11 +27,12 @@
 //!
 //! ### Nullifier semantics (P1.2)
 //! The nullifier is `H(secret, context)` — one per `(human, context)`:
-//! - **Unlinkable across contexts:** different `context` ⇒ different nullifier;
-//!   the leaf (the human's identity) never enters the public inputs, and the only
-//!   shared public value between two proofs is the group set (common to *all*
-//!   members), so two actions by the same human in different contexts cannot be
-//!   linked.
+//! - **Unlinkable across contexts — DESIGN GOAL, NOT MET TODAY:** different `context` ⇒
+//!   different nullifier, and the leaf never enters the public inputs. But `secret` is
+//!   reduced into ONE BabyBear element (< 2^31), so anyone holding a published nullifier
+//!   and its public context recovers the secret by trying ~2^31 candidates, then links
+//!   every other context. `src/zkp/nullifier-identity.ts` measured and fixed this exact
+//!   defect on the TS side (8-element secret); this circuit still has it (plan step B1).
 //! - **Double-action detectable within a context:** same `(secret, context)` ⇒
 //!   identical nullifier, so a registry can reject a second action in that context.
 //!
@@ -52,15 +53,21 @@
 //! which was flagged in the crate's own scope note as non-production.
 //!
 //! Zero-knowledge comes from the **hiding** FRI PCS (`HidingFriPcs` +
-//! `MerkleTreeHidingMmcs`), reused verbatim from the PR #95 machinery.
+//! `MerkleTreeHidingMmcs`), reused from the PR #95 machinery — and ONLY while their
+//! randomness is fresh and secret. **Until 2026-11-15 it was not:** both were seeded
+//! `SmallRng::seed_from_u64(1)`, a constant in this public repo, so the masks were
+//! replayable and the proofs hid nothing. Now [`hiding_rng`] (OS-seeded ChaCha), pinned by
+//! `two_proofs_of_one_witness_differ`.
 //!
 //! ## Honest scope / next steps (NOT done here — see README)
 //! - Membership uses a vanishing-polynomial product over a small public set
 //!   (degree = group size). Production should use a Merkle tree (log-depth path)
 //!   for large groups.
-//! - The hash is now Poseidon2 with audited constants (4.0-d.3). Remaining: the field
-//!   is still BabyBear (~31 bits) — soundness rests on the FRI/extension parameters,
-//!   not the base field, but a larger field remains the conservative production choice.
+//! - The hash is now Poseidon2 with audited constants (4.0-d.3). Remaining: secret,
+//!   commitment and nullifier are each ONE BabyBear element (~31 bits). This line used to
+//!   call that a conservative-production nicety resting on FRI soundness; it is worse —
+//!   it breaks unlinkability outright (see Nullifier semantics above). Fix: widen the
+//!   secret to a multi-element sponge input, matching `nullifier-identity.ts`.
 //! - FRI uses `create_test_fri_params` (low blowup): correct for the correctness
 //!   gate + benchmark, not production soundness.
 //! - Court-order reveal (D-020): the human↔commitment link is sealed off-circuit
@@ -90,8 +97,19 @@ use p3_poseidon2_air::{
 };
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{prove, verify, Proof, StarkConfig, VerificationError};
-use rand::rngs::SmallRng;
+use rand::rngs::StdRng;
 use rand::SeedableRng;
+
+/// Blinding randomness for every hiding PCS and MMCS in this crate: a ChaCha CSPRNG seeded
+/// from OS entropy, fresh on every call.
+///
+/// Hiding holds only while this randomness is unpredictable to the verifier. Until 2026-11-15
+/// the configs used `SmallRng::seed_from_u64(1|2|3)`: a non-cryptographic generator with a
+/// constant seed published in this repo, so anyone could replay it and strip the masks.
+/// Never seed this from a constant. Pinned by the `two_proofs_of_*_differ` tests.
+pub(crate) fn hiding_rng() -> StdRng {
+    StdRng::from_os_rng()
+}
 
 /// Canonical off-circuit Poseidon2-BabyBear 2-scalar hash `H_p2` (backlog 4.0-d.1).
 /// Since 4.0-d.3 this is also the in-clear witness generator for `OwnershipAir`, so
@@ -209,14 +227,14 @@ type ValHidingMmcs = MerkleTreeHidingMmcs<
     [u64; p3_keccak::VECTOR_LEN],
     FieldHash,
     MyCompress,
-    SmallRng,
+    StdRng,
     4,
     4,
 >;
 type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
 type Dft = Radix2DitParallel<Val>;
 type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
+type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, StdRng>;
 type VaultConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 // ---- H_p2 in the clear (witness generation) ----------------------------------
@@ -353,8 +371,11 @@ fn make_config() -> VaultConfig {
     let u64_hash = U64Hash::new(KeccakF {});
     let field_hash = FieldHash::new(u64_hash);
     let compress = MyCompress::new(u64_hash);
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, SmallRng::seed_from_u64(1));
-    let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
+    // Independent generators for the trace tree and the FRI commit-phase tree. Cloning
+    // `val_mmcs` would copy its RNG state and reuse one salt stream in both trees.
+    let challenge_mmcs =
+        ChallengeHidingMmcs::new(ValHidingMmcs::new(field_hash.clone(), compress.clone(), hiding_rng()));
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, hiding_rng());
     let dft = Dft::default();
     // log_blowup=3 (blowup 8) so the LDE covers the quotient domain. Inherited from
     // the MiMC version, whose x^7 S-box gave degree-7 constraints; the Poseidon2
@@ -369,7 +390,7 @@ fn make_config() -> VaultConfig {
         proof_of_work_bits: 1,
         mmcs: challenge_mmcs,
     };
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, hiding_rng());
     let challenger = Challenger::from_hasher(vec![], byte_hash);
     VaultConfig::new(pcs, challenger)
 }
@@ -457,6 +478,31 @@ mod tests {
             commitment(33, 303),
             commitment(44, 404),
         ]
+    }
+
+    // HIDING GATE — two proofs of one witness must differ.
+    //
+    // A STARK without blinding is deterministic: same witness, same transcript, same bytes.
+    // Hiding comes only from the PCS/MMCS randomness, so that randomness must be fresh and
+    // secret. Until 2026-11-15 it was `SmallRng::seed_from_u64(1)`, a constant in this public
+    // repo: anyone could re-run the prover's RNG and strip the masks, so the "hiding" PCS hid
+    // nothing. Plonky3 #2260 describes the same attack ("with the seed known, replaying ...
+    // reproduces the mask exactly"). This test fails on ANY constant seed.
+    #[test]
+    fn two_proofs_of_one_witness_differ() {
+        let (secret, agent_id, context) = (22, 6712, 777);
+        let g = group_with(secret, agent_id);
+        let a = prove_ownership(secret, agent_id, context, &g);
+        let b = prove_ownership(secret, agent_id, context, &g);
+        let n = nullifier(secret, context);
+        verify_ownership(&a, context, n, &g).expect("first proof must verify");
+        verify_ownership(&b, context, n, &g).expect("second proof must verify");
+        assert_ne!(
+            proof_to_bytes(&a),
+            proof_to_bytes(&b),
+            "two proofs of the same witness are byte-identical: the blinding randomness is \
+             not fresh, so the proof does not hide the witness"
+        );
     }
 
     // GATE 0 (4.0-d.3 make-or-break) — the CIRCUIT and the OFF-CIRCUIT hash must agree.
