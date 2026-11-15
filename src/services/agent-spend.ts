@@ -188,8 +188,20 @@ export async function checkSpend(
   return { ok: true, agentAddress: address, agentKey: key, reads, gasCostWei };
 }
 
+/**
+ * The receipt says status 0: the transfer reverted and no USDC moved. Only this case may release
+ * an owner-budget reservation. Any other failure (a throw, no receipt) may have landed.
+ */
+export class SpendRevertedError extends Error {
+  constructor(readonly txHash: string) {
+    super(`transfer ${txHash} did not succeed on-chain (status 0)`);
+    this.name = 'SpendRevertedError';
+  }
+}
+
 export async function executeSpend(chain: SpendChain, checked: Extract<CheckOutcome, { ok: true }>, req: SpendRequest): Promise<SpendResult> {
   const sent = await chain.send(checked.agentKey, req.owner, req.to, req.amount);
+  if (sent.status === 0) throw new SpendRevertedError(sent.hash);
   if (sent.status !== 1) throw new Error(`transfer ${sent.hash} did not succeed on-chain (status ${sent.status})`);
   let after: bigint | null = null;
   try {

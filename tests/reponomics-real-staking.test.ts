@@ -101,6 +101,8 @@ const USDC = mockConfig.usdcTokenAddress;
 const OTHER_TOKEN = '0x2222222222222222222222222222222222222222';
 const BUILDER_ADDR = '0x9999999999999999999999999999999999999999';
 const VALID_TX = '0x' + 'a'.repeat(64);
+/** public.stake_deposits columns, read from information_schema on 2026-11-14. */
+const STAKE_DEPOSITS_COLUMNS = ['id', 'builder_id', 'amount', 'asset', 'tx_hash', 'is_simulated', 'created_at', 'status', 'deposit_tx_hash'];
 const iface = new ethers.Interface([
   'event Transfer(address indexed from, address indexed to, uint256 value)',
   'function balanceOf(address owner) view returns (uint256)',
@@ -322,7 +324,25 @@ describe('stake-vault — depositStake real-staking routing', () => {
     const dep = dbState.inserts.find((i) => i.table === 'stake_deposits');
     expect(dep?.row.is_simulated).toBe(false);
     expect(dep?.row.deposit_tx_hash).toBe(VALID_TX);
-    expect(dep?.row.token_address).toBe(USDC);
+    // This line used to assert `token_address` was written. The mocked db accepts any key; the
+    // real table has no such column, so every verified deposit failed at this insert in
+    // production. Pin the insert to the live columns instead [MEASURED 2026-11-14].
+    expect(Object.keys(dep?.row ?? {}).filter((k) => !STAKE_DEPOSITS_COLUMNS.includes(k))).toEqual([]);
+  });
+
+  it('flag OFF with X402_REAL_RPC set: an unverified deposit is still labelled simulated', async () => {
+    mockConfig.realStakingEnabled = false;
+    process.env.X402_REAL_RPC = 'https://example.invalid';
+    try {
+      seedBuilderFound();
+      dbState.selectResults['stake_deposits'] = [{ data: [{ amount: '100000000' }], error: null }];
+      dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
+      await depositStake(BUILDER_ADDR, 100_000_000n);
+      const dep = dbState.inserts.find((i) => i.table === 'stake_deposits');
+      expect(dep?.row.is_simulated).toBe(true);
+    } finally {
+      delete process.env.X402_REAL_RPC;
+    }
   });
 
   it('flag ON: rejects a simulated tx_hash', async () => {

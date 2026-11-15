@@ -19,6 +19,7 @@ import { BUILDER_FLOOR, computeAuthority, babylonianSqrt, type FloorCheck } from
 import { recordSponsorship } from './sponsorship'; // R3 exercise + GA handoff
 import { verifyDeposit } from './deposit-verifier';
 import { escrowRefund } from './escrow-refunder';
+import { ownerBudgetMode, supabaseOwnerBudget } from './owner-budget';
 
 export { BUILDER_FLOOR, computeAuthority };
 
@@ -117,7 +118,9 @@ export async function depositStake(
       status: 'active',
       is_simulated: false,
       deposit_tx_hash: txHash!,
-      token_address: config.usdcTokenAddress,
+      // No token_address: stake_deposits has no such column (it has `asset`, default 'USDC'), so
+      // writing it failed EVERY verified deposit at this insert, after the chain check passed
+      // [MEASURED 2026-11-14]. verifyDeposit already pins the token to config.usdcTokenAddress.
     });
     if (realInsErr) {
       return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: true, error: realInsErr.message };
@@ -159,7 +162,11 @@ export async function depositStake(
     builder_id: builder.id,
     amount: amount.toString(),
     status: 'active',
-    is_simulated: !process.env.X402_REAL_RPC,
+    // Always simulated: nothing on this path checks the chain. It used to read
+    // `!process.env.X402_REAL_RPC`, which labelled an UNVERIFIED deposit real whenever that
+    // variable was set; the one is_simulated=false row in production is exactly that, a
+    // `simulated:deposit:` row [MEASURED 2026-11-14]. Only the verified path above writes false.
+    is_simulated: true,
     deposit_tx_hash: txHash ?? `simulated:deposit:${Date.now()}`,
   });
   if (insErr) {
@@ -250,6 +257,30 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
       return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'amount exceeds real (verified) active stake' };
     }
 
+    // OWNER BUDGET: stake that backs agent spending already made or reserved stays put, or the
+    // owner's agents would have spent against collateral that left. Same invariant as
+    // reserve_owner_spend (src/services/owner-budget.ts).
+    // ponytail: not under reserve_owner_spend's advisory lock, so a reservation landing between
+    // this read and the debit could slip past. Harmless while refundInitiator is a stub (every real
+    // withdrawal is refused below); take the same lock in SQL when the refund is wired.
+    const budgetMode = ownerBudgetMode();
+    if (budgetMode !== 'off') {
+      try {
+        const s = await supabaseOwnerBudget.status(builderId);
+        if (s.budget - amount < s.committed) {
+          if (budgetMode === 'enforce') {
+            return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'stake_backs_agent_spend' };
+          }
+          console.warn(`[owner-budget] shadow: WOULD REFUSE withdrawal of ${amount} by builder ${builderId}: committed agent spend ${s.committed} of funded ${s.budget}`);
+        }
+      } catch (e: unknown) {
+        if (budgetMode === 'enforce') {
+          return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'owner_budget_not_checked' };
+        }
+        console.warn(`[owner-budget] shadow: budget read failed for builder ${builderId}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
     // Builder payout address (where the escrow refund is sent).
     const { data: builder } = await db
       .from('builders')
@@ -281,7 +312,7 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
       amount: (-amount).toString(),
       status: 'withdrawn',
       is_simulated: false,
-      token_address: config.usdcTokenAddress,
+      // No token_address: the column does not exist (see the deposit insert above).
       // Tie the ledger debit to the real on-chain refund tx (not a sentinel), so the
       // row is auditable and a later idempotency/dedupe guard has a key to match on.
       deposit_tx_hash: refund.txHash ?? `pending-refund:${Date.now()}`,
