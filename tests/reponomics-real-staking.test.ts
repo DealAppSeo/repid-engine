@@ -181,6 +181,13 @@ describe('deposit-verifier — verifyDeposit', () => {
     fromAddress: BUILDER_ADDR,
   };
 
+  it('refuses a claim for LESS than was sent: it would burn the hash and strand the rest', async () => {
+    __setProviderFactory(() => mockProvider());
+    const r = await verifyDeposit({ ...base, claimedAmount: 1_000_000n });
+    expect(r.verified).toBe(false);
+    expect(r.reason).toMatch(/must equal what was sent/);
+  });
+
   it('refuses a deposit sent by another wallet: the escrow is shared, the sender is who paid', async () => {
     __setProviderFactory(() =>
       mockProvider({ receipt: { status: 1, blockNumber: 100, logs: [transferLog(USDC, '0x' + '7'.repeat(40), ESCROW, 100_000_000n)] } }),

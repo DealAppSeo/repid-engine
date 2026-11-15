@@ -181,14 +181,20 @@ export async function authorizeStakeDeposit(
     if (matchEnvOperatorKey(apiKey)) {
       return { ok: true, tier: 'operator', builderId: builder.id };
     }
-    // A DB-issued key (agent_api_keys) counts too — same fallback order the
-    // global middleware uses. Unreachable DB must not read as "authorized".
-    try {
-      if (await validateAgentApiKey(apiKey)) {
-        return { ok: true, tier: 'operator', builderId: builder.id };
+    // A DB-issued key (agent_api_keys) counts for a SIMULATED claim only. Public registration
+    // hands these out to anyone, so accepting one for a REAL claim let a stranger skip the wallet
+    // signature below and claim somebody else's escrow transfer, e.g. for less than was sent,
+    // burning the hash (Strix on #1550, after this PR made the real insert work). A real claim
+    // needs an env operator key or the wallet's own signature. Unreachable DB must not read as
+    // "authorized".
+    if (!real) {
+      try {
+        if (await validateAgentApiKey(apiKey)) {
+          return { ok: true, tier: 'operator', builderId: builder.id };
+        }
+      } catch {
+        /* fall through to the user-held proofs below */
       }
-    } catch {
-      /* fall through to the user-held proofs below */
     }
   }
 

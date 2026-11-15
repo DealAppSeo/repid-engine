@@ -46,6 +46,11 @@ function makeQuery(table: string) {
 jest.mock('../src/db', () => ({
   db: { from: jest.fn((table: string) => makeQuery(table)) },
 }));
+// A DB-issued agent key: anyone gets one from public registration.
+jest.mock('../src/auth/api-keys', () => ({
+  ...jest.requireActual('../src/auth/api-keys'),
+  validateAgentApiKey: jest.fn(async (key: string) => (key === 'agent-key' ? { agent_id: 'agent-1' } : null)),
+}));
 
 // ---------------------------------------------------------------------------
 // Fixtures. A real key so signatures are genuinely recovered, not stubbed —
@@ -194,6 +199,21 @@ describe('simulated stake — session or operator, never anonymous', () => {
 
 // ===========================================================================
 describe('real stake — a wallet signature, always', () => {
+  it('an agent key still authorizes a SIMULATED claim (the practice path)', async () => {
+    const { authorizeStakeDeposit } = loadModule();
+    seedBuilder();
+    const r = await authorizeStakeDeposit({ builderAddress: OWNER.address, amount: AMOUNT, apiKeyHeader: 'agent-key' });
+    expect(r).toMatchObject({ ok: true, tier: 'operator' });
+  });
+
+  it('an agent key does NOT authorize a REAL claim: the wallet must sign', async () => {
+    const { authorizeStakeDeposit } = loadModule();
+    seedBuilder();
+    const r = await authorizeStakeDeposit({ builderAddress: OWNER.address, amount: AMOUNT, txHash: TX, apiKeyHeader: 'agent-key' });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('signature_required');
+  });
+
   it('refuses a real deposit with no signature EVEN with a valid session', async () => {
     const { authorizeStakeDeposit } = loadModule();
     seedBuilder(BUILDER_ID);

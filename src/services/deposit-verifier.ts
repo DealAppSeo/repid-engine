@@ -225,10 +225,14 @@ export async function verifyDeposit(input: VerifyDepositInput): Promise<VerifyDe
     return { verified: false, reason: 'no USDC transfer to escrow found in tx' };
   }
 
-  if (observed < claimedAmount) {
+  // EXACT, not "at least": a claim for less than was sent would credit the smaller amount and burn
+  // the hash, so the rest of the transfer could never be claimed (Strix on #1550).
+  if (observed !== claimedAmount) {
     return {
       verified: false,
-      reason: `transferred ${observed} < claimed ${claimedAmount}`,
+      reason: observed < claimedAmount
+        ? `transferred ${observed} < claimed ${claimedAmount}`
+        : `transferred ${observed} > claimed ${claimedAmount}: a claim must equal what was sent`,
       observedAmount: observed,
       confirmations,
       blockNumber,
