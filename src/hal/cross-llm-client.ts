@@ -127,7 +127,7 @@ function resolveBoundaryEmbeddingClient(openaiKey: string): EmbeddingClient | nu
     // The endpoint is LOCAL, so the egress assertion passes.
     return new OpenAIEmbeddingClient(
       endpoint,
-      process.env.LOCAL_LLM_API_KEY || 'local',
+      process.env.LOCAL_LLM_API_KEY ?? '', // no published fallback (no-default-secrets); providerFetch presents the key
       process.env.LOCAL_EMBEDDING_MODEL || EMBEDDING_MODEL,
     );
   }
