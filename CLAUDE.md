@@ -624,8 +624,10 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
 - Sprint-3 stubs (EAS, ZKP) — do not remove or "fix" passing stubs
 
 ### Deploy facts
-- Railway project: **`repid-engine`** — its own project. **The SERVICE COUNT IS DISPUTED as of
-  2026-09-09 and you must not act on either number without looking.** This line said "4 services"
+- Railway project: **`repid-engine`** — its own project, **four services** [MEASURED 2026-10-04 and
+  2026-11-14, Railway API `list-services`]. Until 2026-11-14 this paragraph opened with "the SERVICE
+  COUNT IS DISPUTED … do not act on either number", above the line that settled it: a status a
+  reader meets first must not contradict the finding below it. The history: this line said "4 services"
   (`repid-engine` the API at repid-engine-production.up.railway.app, `receipt-indexer`,
   `proof-drain-worker`, `attestation-minter`); the operator, reading the dashboard on 2026-09-09,
   counted **three** and did not see `attestation-minter`.
@@ -636,9 +638,10 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
   A Railway **cron** service renders differently from a web service — no domain, a next-run time —
   so "I don't see it in the list" and "it ran yesterday" are both consistent with it existing.
   The observation that settles it: the names of the services actually on the project canvas.
-  **SETTLED: FOUR [MEASURED 2026-10-04, Railway API `list-services` on project `repid-engine`]:**
+  **SETTLED: FOUR [MEASURED 2026-10-04, Railway API `list-services` on project `repid-engine`; the
+  same four names and one environment again on 2026-11-14]:**
   `repid-engine`, `receipt-indexer`, `proof-drain-worker`, `attestation-minter`, one `production`
-  environment. The API service runs one replica (`numReplicas: 1`). The paragraph below is kept for
+  environment. The API service runs one replica (`numReplicas: 1`, read 2026-10-04, not re-read). The paragraph below is kept for
   the lesson: a dashboard glance missed a cron service the API lists plainly.
   **The reusable part is the shape.** A dashboard glance and a database reading disagreed, and the
   tempting move was to trust the human looking at the screen and past-tense the whole section.
@@ -775,7 +778,8 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
   reading the Variables tab]. That is where it belongs, so this is the expected state and needs no
   action — recorded because "belongs only here" was until now a rule with no reading behind it.
   `attestation-minter`: **half-settled 2026-08-29 — the assumption is dead, the presence question
-  is not, and it is now blocked behind the disputed service count above.** SETTLED: the signing key it actually uses is `BASE_SEPOLIA_PRIVATE_KEY`, read from the
+  is not.** (This sentence also said the question was "blocked behind the disputed service count
+  above"; that count was settled at four on 2026-10-04, so nothing blocks it now.) SETTLED: the signing key it actually uses is `BASE_SEPOLIA_PRIVATE_KEY`, read from the
   script's own source, so "an attestor must need `AGENT_KEY_MASTER`" is refuted — it does not.
   STILL UNVERIFIED: whether `AGENT_KEY_MASTER` is *also* set there. The build log names only
   `BASE_SEPOLIA_PRIVATE_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, and **absence from that list is much
