@@ -98,12 +98,16 @@ export async function depositStake(
       return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: true, verified: false, error: 'STAKE_ESCROW_ADDRESS not configured' };
     }
     const escrowAddress = config.stakeEscrowAddress;
+    // ONE SPELLING PER TRANSFER: a tx hash is hex, and a claim spelled in other letter case is the same
+    // transfer. The lock key below was lower-cased but the replay check and the insert used the hash as
+    // given, so two claims differing only in case each saw no earlier row (Grok r15b on #1550).
+    const hash = String(txHash).toLowerCase();
 
     // ONE CLAIM PER TRANSFER AT A TIME. The guard below is a read, then several chain round trips,
     // then the insert; two parallel claims of one transfer both passed the read and both inserted,
     // crediting 2x the stake, wherever the unique index (stake_deposits_real_tx_hash_uniq) is not
     // applied yet (Strix on #1550). Serialized per hash in-process: the engine runs one replica.
-    return serializeWithdraw(`deposit:${String(txHash).toLowerCase()}`, async (): Promise<DepositResult> => {
+    return serializeWithdraw(`deposit:${hash}`, async (): Promise<DepositResult> => {
     // Duplicate / replay guard: this tx_hash must not already back a REAL stake. Real rows only:
     // the simulated path stores whatever hash the caller sends, so counting simulated rows let a
     // practice deposit naming someone's real transfer block that transfer's claim forever
@@ -111,7 +115,7 @@ export async function depositStake(
     const { data: existing } = await db
       .from('stake_deposits')
       .select('id')
-      .eq('deposit_tx_hash', txHash!)
+      .eq('deposit_tx_hash', hash)
       .eq('is_simulated', false)
       .limit(1);
     if (existing && existing.length > 0) {
@@ -119,7 +123,7 @@ export async function depositStake(
     }
 
     const v = await verifyDeposit({
-      txHash: txHash!,
+      txHash: hash,
       claimedAmount: amount,
       escrowAddress,
       tokenAddress: config.usdcTokenAddress,
@@ -135,7 +139,7 @@ export async function depositStake(
       amount: amount.toString(),
       status: 'active',
       is_simulated: false,
-      deposit_tx_hash: txHash!,
+      deposit_tx_hash: hash,
       // No token_address: stake_deposits has no such column (it has `asset`, default 'USDC'), so
       // writing it failed EVERY verified deposit at this insert, after the chain check passed
       // [MEASURED 2026-11-14]. verifyDeposit already pins the token to config.usdcTokenAddress.
@@ -162,7 +166,7 @@ export async function depositStake(
         authority_after: realAuth.authority.toString(),
         is_simulated: false,
         verified: true,
-        tx_hash: txHash!,
+        tx_hash: hash,
         observed_amount: v.observedAmount?.toString(),
         confirmations: v.confirmations,
       },
@@ -174,7 +178,7 @@ export async function depositStake(
       authority_after: realAuth.authority.toString(),
       is_simulated: false,
       verified: true,
-      tx_hash: txHash!,
+      tx_hash: hash,
     };
     });
   }

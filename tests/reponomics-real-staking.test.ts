@@ -400,6 +400,19 @@ describe('stake-vault — depositStake real-staking routing', () => {
     expect(b).toMatchObject({ ok: false, error: expect.stringMatching(/duplicate/) });
   });
 
+  it('flag ON: a claim in other letter case is the same transfer: checked and stored lower-case', async () => {
+    // Grok r15b on #1550: the lock key was lower-cased but the replay check and insert used the hash
+    // as given, so a second claim differing only in case saw no earlier row.
+    mockConfig.realStakingEnabled = true;
+    __setProviderFactory(() => mockProvider());
+    seedBuilderFound();
+    dbState.selectResults['stake_deposits'] = [{ data: [], error: null }, { data: [{ amount: '100000000' }], error: null }];
+    dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
+    await depositStake(BUILDER_ADDR, 100_000_000n, '0x' + 'A'.repeat(64));
+    expect(dbState.eqs).toEqual(expect.arrayContaining([{ table: 'stake_deposits', col: 'deposit_tx_hash', val: VALID_TX }]));
+    expect(dbState.inserts.find((i) => i.table === 'stake_deposits')?.row.deposit_tx_hash).toBe(VALID_TX);
+  });
+
   it('flag ON: a concurrent claim that loses the unique index is refused as a duplicate', async () => {
     mockConfig.realStakingEnabled = true;
     __setProviderFactory(() => mockProvider());
