@@ -60,7 +60,11 @@ jobs:
   # crate's tracked Cargo.lock, so a PR cannot silently move a p3-* version. It is
   # NOT the CANON P-026 / Invariant-5 Plonky3 pin — that pin is the git rev
   # 27d59f7350 used by the live prover, whereas zkp-vault depends on the crates.io
-  # 0.3.0 family. Same family, different mechanism; don't conflate them.
+  # 0.3.0 release. This line used to say "same family, different mechanism"; that was
+  # wrong: 27d59f7350 resolves to Plonky3 **0.5.1** (hyperdag-core Cargo.lock), so the
+  # vault and the live prover are on DIFFERENT VERSIONS and Invariant 5 is broken until
+  # they are unified. `node scripts/zkp/plonky3-pins.cjs` (run beside sibling checkouts)
+  # lists every prover's Plonky3 source and exits 1 while there is more than one.
   #
   # ACCEPTED RISK: `rust-toolchain@stable` floats, and with `-D warnings` on both
   # steps a future rustc that adds a lint can turn an unrelated PR red. Taken
