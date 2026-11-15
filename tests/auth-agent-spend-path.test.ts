@@ -46,3 +46,17 @@ it('a bound key cannot reach another agent\'s spend route', async () => {
   expect(next).not.toHaveBeenCalled();
   expect(res.statusCode).toBe(403);
 });
+
+it('percent-encoding another agent\'s id does not slip past (Express decodes it for the route)', async () => {
+  const encoded = '%' + OTHER.charCodeAt(0).toString(16) + OTHER.slice(1); // %62bbbbbbb-... decodes to OTHER
+  expect(decodeURIComponent(encoded)).toBe(OTHER);
+  const { next, res } = await run(`/api/v1/agents/${encoded}/spend`);
+  expect(next).not.toHaveBeenCalled();
+  expect(res.statusCode).toBe(403);
+});
+
+it('a path segment that is not valid percent-encoding is refused, not matched raw', async () => {
+  const { next, res } = await run(`/api/v1/agents/%E0%A4%A/spend`);
+  expect(next).not.toHaveBeenCalled();
+  expect(res.statusCode).toBe(400);
+});

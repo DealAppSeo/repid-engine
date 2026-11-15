@@ -178,7 +178,17 @@ describe('deposit-verifier — verifyDeposit', () => {
     escrowAddress: ESCROW,
     tokenAddress: USDC,
     minConfirmations: 1,
+    fromAddress: BUILDER_ADDR,
   };
+
+  it('refuses a deposit sent by another wallet: the escrow is shared, the sender is who paid', async () => {
+    __setProviderFactory(() =>
+      mockProvider({ receipt: { status: 1, blockNumber: 100, logs: [transferLog(USDC, '0x' + '7'.repeat(40), ESCROW, 100_000_000n)] } }),
+    );
+    const r = await verifyDeposit(base);
+    expect(r.verified).toBe(false);
+    expect(r.reason).toMatch(/not sent by this account's wallet/);
+  });
 
   it('accepts a correct verified deposit', async () => {
     __setProviderFactory(() => mockProvider());
@@ -328,6 +338,21 @@ describe('stake-vault — depositStake real-staking routing', () => {
     // real table has no such column, so every verified deposit failed at this insert in
     // production. Pin the insert to the live columns instead [MEASURED 2026-11-14].
     expect(Object.keys(dep?.row ?? {}).filter((k) => !STAKE_DEPOSITS_COLUMNS.includes(k))).toEqual([]);
+  });
+
+  it('flag ON: a concurrent claim that loses the unique index is refused as a duplicate', async () => {
+    mockConfig.realStakingEnabled = true;
+    __setProviderFactory(() => mockProvider());
+    seedBuilderFound();
+    dbState.selectResults['stake_deposits'] = [{ data: [], error: null }]; // the read-side guard saw nothing (the race)
+    dbState.insertError = { code: '23505', message: 'duplicate key value violates unique constraint "stake_deposits_real_tx_hash_uniq"' };
+    try {
+      const r = await depositStake(BUILDER_ADDR, 100_000_000n, VALID_TX);
+      expect(r.ok).toBe(false);
+      expect(r.error).toMatch(/duplicate tx_hash/);
+    } finally {
+      dbState.insertError = null;
+    }
   });
 
   it('flag OFF with X402_REAL_RPC set: an unverified deposit is still labelled simulated', async () => {

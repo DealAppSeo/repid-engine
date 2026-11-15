@@ -44,6 +44,13 @@ export interface VerifyDepositInput {
   escrowAddress: string;
   tokenAddress: string;
   minConfirmations: number;
+  /**
+   * The wallet that must have SENT the transfer: the account being credited. The escrow is shared
+   * by every account, so "USDC arrived at the escrow" says nothing about who paid; without this, the
+   * first caller to present someone else's deposit hash credited it to any account they named
+   * (Strix on #1550). Only USDC Transfers from this wallet to the escrow count.
+   */
+  fromAddress: string;
 }
 
 export interface VerifyDepositResult {
@@ -117,10 +124,13 @@ function eqAddr(a?: string | null, b?: string | null): boolean {
  * a reason for any failing condition; never throws for an expected rejection.
  */
 export async function verifyDeposit(input: VerifyDepositInput): Promise<VerifyDepositResult> {
-  const { txHash, claimedAmount, escrowAddress, tokenAddress, minConfirmations } = input;
+  const { txHash, claimedAmount, escrowAddress, tokenAddress, minConfirmations, fromAddress } = input;
 
   if (!txHash || typeof txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
     return { verified: false, reason: 'invalid or missing tx_hash' };
+  }
+  if (!fromAddress || !ethers.isAddress(fromAddress)) {
+    return { verified: false, reason: 'no sender wallet to check the deposit against' };
   }
   if (!escrowAddress) return { verified: false, reason: 'escrow address not configured' };
   if (!tokenAddress) return { verified: false, reason: 'token address not configured' };
@@ -174,6 +184,7 @@ export async function verifyDeposit(input: VerifyDepositInput): Promise<VerifyDe
   let observed = 0n;
   let sawWrongToken = false;
   let sawTransferToOther = false;
+  let sawOtherSender = false;
   for (const log of receipt.logs ?? []) {
     if (!log.topics || log.topics.length === 0) continue;
     if (log.topics[0] !== TRANSFER_TOPIC) continue;
@@ -185,6 +196,7 @@ export async function verifyDeposit(input: VerifyDepositInput): Promise<VerifyDe
       parsed = null;
     }
     if (!parsed) continue;
+    const from = parsed.args?.from as string;
     const to = parsed.args?.to as string;
     const value = parsed.args?.value as bigint;
     if (!isUsdc) {
@@ -193,13 +205,17 @@ export async function verifyDeposit(input: VerifyDepositInput): Promise<VerifyDe
       continue;
     }
     if (eqAddr(to, escrowAddress)) {
-      observed += value;
+      if (eqAddr(from, fromAddress)) observed += value;
+      else sawOtherSender = true;
     } else {
       sawTransferToOther = true;
     }
   }
 
   if (observed === 0n) {
+    if (sawOtherSender) {
+      return { verified: false, reason: "the USDC transfer to escrow was not sent by this account's wallet" };
+    }
     if (sawWrongToken) {
       return { verified: false, reason: 'transfer to escrow was a different token, not USDC' };
     }

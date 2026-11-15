@@ -107,6 +107,7 @@ export async function depositStake(
       escrowAddress: config.stakeEscrowAddress,
       tokenAddress: config.usdcTokenAddress,
       minConfirmations: config.stakeMinConfirmations,
+      fromAddress: lower,
     });
     if (!v.verified) {
       return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: false, error: `deposit verification failed: ${v.reason ?? 'unknown'}` };
@@ -123,6 +124,11 @@ export async function depositStake(
       // [MEASURED 2026-11-14]. verifyDeposit already pins the token to config.usdcTokenAddress.
     });
     if (realInsErr) {
+      // 23505 = stake_deposits_real_tx_hash_uniq: a concurrent claim of the same transfer got there
+      // first. Same answer as the read-side guard above, which a race can slip past.
+      if ((realInsErr as { code?: string }).code === '23505') {
+        return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: false, error: 'duplicate tx_hash: this deposit was already recorded' };
+      }
       return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: true, error: realInsErr.message };
     }
 

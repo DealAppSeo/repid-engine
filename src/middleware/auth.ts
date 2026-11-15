@@ -501,8 +501,17 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       return next();
     }
 
-    // Check for UUID or name in URL path
-    const pathParts = req.path.split('/');
+    // Check for UUID or name in URL path. DECODED [2026-11-14]: Express hands routes a
+    // percent-decoded req.params, so matching the raw req.path let `/agents/%61aaa…/spend` past
+    // both checks below (no segment looked like a UUID, and `spend` is whitelisted) while the
+    // handler acted on the decoded id, another agent (Strix on #1550). A segment that does not
+    // decode is refused rather than matched raw.
+    let pathParts: string[];
+    try {
+      pathParts = req.path.split('/').map((p) => decodeURIComponent(p));
+    } catch {
+      return res.status(400).json({ error: 'Bad request: malformed percent-encoding in path' });
+    }
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const pathUuid = pathParts.find(p => uuidRe.test(p));
     if (pathUuid && pathUuid.toLowerCase() !== dbAgentId.toLowerCase()) {

@@ -39,6 +39,15 @@ create index if not exists owner_spend_ledger_open_idx
 alter table public.owner_spend_ledger enable row level security;
 revoke all on public.owner_spend_ledger from anon, authenticated;
 
+-- One on-chain transfer is credited at most once. The replay guard in depositStake is a SELECT taken
+-- before several RPC round trips, so two concurrent claims of one hash could both pass it and fund
+-- the budget twice for one transfer (Strix on #1550). Real 0x hashes only: simulated rows carry
+-- `simulated:deposit:<ms>` and never fund anything. Production held 0 real-hash rows and 0
+-- duplicates when this was written [MEASURED 2026-11-14], so it applies without a dedupe.
+create unique index if not exists stake_deposits_real_tx_hash_uniq
+  on public.stake_deposits (lower(deposit_tx_hash))
+  where deposit_tx_hash ~ '^0x[0-9a-fA-F]{64}$';
+
 create or replace function public.owner_funded_stake(p_builder uuid)
 returns bigint
 language sql

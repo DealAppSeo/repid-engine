@@ -105,6 +105,8 @@ function racyBudget(funded: bigint) {
 function app(opts: { chain: SpendChain; store: OwnerBudgetStore; mode: OwnerBudgetMode; builder?: string | null | Error }) {
   const a = express();
   a.use(express.json());
+  // What authMiddleware sets for an agent-bound key: the agent in the path is the caller's own.
+  a.use((req, _res, next) => { (req as any).agent_id = req.path.split('/')[4]; next(); });
   a.use(
     '/api/v1/agents',
     createAgentSpendRouter({

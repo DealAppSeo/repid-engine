@@ -97,6 +97,18 @@ export function createAgentSpendRouter(deps: AgentSpendDeps = {}): Router {
 
   router.post('/:id/spend', async (req: Request, res: Response) => {
     const agentId = String(req.params.id);
+    // WHO MAY ASK [2026-11-14]. Only this agent's own key, or an operator key (ops tier, bound to
+    // no agent). Checked HERE, not left to authMiddleware's path check: that compared the raw URL
+    // while this handler reads the decoded id, and a shared REPID_API_KEYS key bound to no agent
+    // skips it entirely, so either one could make ANOTHER owner's agent sign (Strix on #1550).
+    const callerAgent = (req as any).agent_id as string | undefined;
+    const operator = !callerAgent && (req as any).apiKey?.tier === 'ops';
+    if (!operator && (!callerAgent || callerAgent.toLowerCase() !== agentId.toLowerCase())) {
+      return res.status(403).json({
+        ok: false, would_send: false, code: 'not_this_agent',
+        error: "Only this agent's own key, or an operator key, may spend for it. Nothing was sent.",
+      });
+    }
     const { owner_address, to_address, amount_usdc, dry_run } = req.body ?? {};
     const amount = parseUsdc(amount_usdc);
     if (amount === null) {
