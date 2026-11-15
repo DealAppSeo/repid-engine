@@ -102,7 +102,37 @@ begin
 end
 $$;
 
+-- A real stake withdrawal holds its amount through reserve_owner_spend before the escrow refund is
+-- sent (src/services/stake-vault.ts). After the refund, the debit row and the release of that hold
+-- happen HERE, in one transaction: written as two steps, funded dropped before the hold stopped
+-- counting, so committed briefly exceeded funded, and a failed release left the hold stuck after a
+-- withdrawal that had succeeded (Grok r6 on #1550). Atomic, the invariant holds at every instant.
+create or replace function public.complete_stake_withdrawal(p_hold uuid, p_builder uuid, p_amount bigint, p_tx_hash text)
+returns void
+language plpgsql
+as $$
+begin
+  if p_hold is null or p_builder is null or p_amount is null or p_amount <= 0 or p_tx_hash is null then
+    raise exception 'complete_stake_withdrawal: hold, builder, a positive amount and the refund tx are required';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('owner_spend:' || p_builder::text, 0));
+
+  update public.owner_spend_ledger
+     set state = 'released', tx_hash = p_tx_hash, reason = 'withdrawn: debit row written', updated_at = now()
+   where id = p_hold and builder_id = p_builder and amount = p_amount and state = 'reserved';
+  if not found then
+    raise exception 'complete_stake_withdrawal: % is not a reserved hold of % for builder %', p_hold, p_amount, p_builder;
+  end if;
+
+  insert into public.stake_deposits (builder_id, amount, status, is_simulated, deposit_tx_hash)
+  values (p_builder, -p_amount, 'withdrawn', false, p_tx_hash);
+end
+$$;
+
 revoke all on function public.owner_funded_stake(uuid) from public, anon, authenticated;
 revoke all on function public.reserve_owner_spend(uuid, uuid, bigint) from public, anon, authenticated;
+revoke all on function public.complete_stake_withdrawal(uuid, uuid, bigint, text) from public, anon, authenticated;
 grant execute on function public.owner_funded_stake(uuid) to service_role;
 grant execute on function public.reserve_owner_spend(uuid, uuid, bigint) to service_role;
+grant execute on function public.complete_stake_withdrawal(uuid, uuid, bigint, text) to service_role;

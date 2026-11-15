@@ -54,6 +54,11 @@ export interface OwnerBudgetStore {
   status(builderId: string): Promise<{ budget: bigint; committed: bigint }>;
   /** Shadow mode: a spend that went through without a reservation. */
   recordSettled(builderId: string, agentId: string, amount: bigint, txHash: string): Promise<void>;
+  /**
+   * A withdrawal whose refund was sent: release its hold AND write the debit row in one
+   * transaction (complete_stake_withdrawal), so committed never exceeds funded. Throws on failure.
+   */
+  completeWithdrawal(holdId: string, builderId: string, amount: bigint, refundTxHash: string): Promise<void>;
 }
 
 const big = (v: unknown): bigint => BigInt(String(v ?? 0));
@@ -103,6 +108,16 @@ export const supabaseOwnerBudget: OwnerBudgetStore = {
       reason: 'shadow: settled without a reservation',
     });
     if (error) throw new Error(`owner_spend_ledger insert failed: ${error.message}`);
+  },
+
+  async completeWithdrawal(holdId, builderId, amount, refundTxHash) {
+    const { error } = await db.rpc('complete_stake_withdrawal', {
+      p_hold: holdId,
+      p_builder: builderId,
+      p_amount: amount.toString(),
+      p_tx_hash: refundTxHash,
+    });
+    if (error) throw new Error(`complete_stake_withdrawal failed: ${error.message}`);
   },
 };
 

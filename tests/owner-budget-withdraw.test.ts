@@ -11,6 +11,7 @@ const mockBudget = {
   finish: jest.fn(async (_id: string, state: string) => { mockOrder.push(`finish:${state}`); }),
   status: jest.fn(async () => ({ budget: 100_000_000n, committed: 0n })),
   recordSettled: jest.fn(),
+  completeWithdrawal: jest.fn(async () => { mockOrder.push('complete'); }),
 };
 jest.mock('../src/services/owner-budget', () => ({ ownerBudgetMode: () => mockMode, supabaseOwnerBudget: mockBudget }));
 jest.mock('../src/config', () => ({ config: { realStakingEnabled: true, usdcTokenAddress: '0x' + 'c'.repeat(40),stakeEscrowAddress: '0x' + 'e'.repeat(40), stakeMinConfirmations: 1 } }));
@@ -53,12 +54,14 @@ beforeEach(() => {
   refundWith(sent);
 });
 
-it('holds the amount BEFORE the refund, writes the debit, THEN releases the hold', async () => {
+it('holds the amount BEFORE the refund, then writes the debit and releases the hold in ONE step', async () => {
   const r = await withdrawStake('builder-1', 50_000_000n);
   expect(r.ok).toBe(true);
   expect(mockBudget.reserve).toHaveBeenCalledWith('builder-1', WITHDRAWAL_HOLD_AGENT, 50_000_000n);
-  // The authority snapshot written afterwards is not part of the invariant.
-  expect(mockOrder.filter((s) => s !== 'insert:stake_authority_snapshots')).toEqual(['reserve', 'refund', 'insert:stake_deposits', 'finish:released']);
+  expect(mockBudget.completeWithdrawal).toHaveBeenCalledWith('hold-1', 'builder-1', 50_000_000n, sent.txHash);
+  // No separate debit insert and no separate release: those are the two steps that could
+  // disagree (Grok r6). The authority snapshot written afterwards is not part of the invariant.
+  expect(mockOrder.filter((s) => s !== 'insert:stake_authority_snapshots')).toEqual(['reserve', 'refund', 'complete']);
 });
 
 it('refuses when the stake backs agent spend: no refund is sent', async () => {
@@ -83,11 +86,18 @@ it('a refund that was not sent releases the hold and writes no debit', async () 
   expect(mockOrder).toEqual(['reserve', 'refund', 'finish:released']);
 });
 
-it('a refund that WAS sent but whose debit row failed keeps the hold counting (unknown)', async () => {
-  mockDb.insertError = { message: 'insert failed' };
+it('a refund that WAS sent but could not be recorded keeps the hold counting (unknown)', async () => {
+  mockBudget.completeWithdrawal.mockImplementationOnce(async () => { mockOrder.push('complete'); throw new Error('db down'); });
   const r = await withdrawStake('builder-1', 50_000_000n);
   expect(r.ok).toBe(false);
-  expect(mockOrder).toEqual(['reserve', 'refund', 'insert:stake_deposits', 'finish:unknown']);
+  expect(mockOrder).toEqual(['reserve', 'refund', 'complete', 'finish:unknown']);
+});
+
+it('with the mode off, the old single debit insert is used', async () => {
+  mockMode = 'off';
+  await withdrawStake('builder-1', 50_000_000n);
+  expect(mockBudget.completeWithdrawal).not.toHaveBeenCalled();
+  expect(mockOrder).toContain('insert:stake_deposits');
 });
 
 it('with the mode off, no hold is taken', async () => {

@@ -77,6 +77,7 @@ function memoryBudget(funded: bigint) {
     async recordSettled(_b, agent, amount, tx) {
       rows.push({ id: `s${++n}`, agent, amount, state: 'settled', tx });
     },
+    async completeWithdrawal() {},
   };
   return { store, rows, committed };
 }
@@ -98,6 +99,7 @@ function racyBudget(funded: bigint) {
       return { budget: funded, committed };
     },
     async recordSettled() {},
+    async completeWithdrawal() {},
   };
   return { store };
 }
@@ -335,6 +337,16 @@ describe('reserve_owner_spend: the SQL the guarantee depends on', () => {
   it('one real transfer is credited once, and a simulated row cannot take its slot', () => {
     const idx = sql.slice(sql.indexOf('stake_deposits_real_tx_hash_uniq'));
     expect(idx).toMatch(/^stake_deposits_real_tx_hash_uniq\s+on public\.stake_deposits \(lower\(deposit_tx_hash\)\)\s+where is_simulated = false\s+and deposit_tx_hash ~/);
+  });
+
+  it('completing a withdrawal releases its hold and writes the debit in ONE function, under the lock', () => {
+    const fn = sql.slice(sql.indexOf('function public.complete_stake_withdrawal'), sql.indexOf('revoke all on function public.owner_funded_stake'));
+    const lock = fn.indexOf('pg_advisory_xact_lock');
+    expect(lock).toBeGreaterThan(0);
+    expect(lock).toBeLessThan(fn.indexOf("set state = 'released'"));
+    expect(fn).toMatch(/state = 'reserved';\s+if not found then\s+raise exception/);
+    expect(fn).toMatch(/insert into public\.stake_deposits[\s\S]*-p_amount, 'withdrawn', false, p_tx_hash/);
+    expect(sql).toMatch(/revoke all on function public\.complete_stake_withdrawal\(uuid, uuid, bigint, text\) from public, anon, authenticated/);
   });
 
   it('nobody but the service role can read the ledger or call the functions', () => {

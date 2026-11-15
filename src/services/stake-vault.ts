@@ -280,9 +280,9 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
     // owner's agents would have spent against collateral that left (same invariant as
     // reserve_owner_spend, src/services/owner-budget.ts). In enforce mode the withdrawal HOLDS its
     // amount through that same function, under the same per-owner lock, before the refund is sent,
-    // so a concurrent spend sees it as committed and cannot take it. The hold is released only
-    // after the debit row is written (funded drops first, so the budget is never overstated in
-    // between), or when the refund definitely did not happen. Anything unclear keeps it.
+    // so a concurrent spend sees it as committed and cannot take it. After the refund, the debit
+    // row and the release happen in one transaction (complete_stake_withdrawal). The hold is
+    // released on its own only when the refund definitely did not happen; anything unclear keeps it.
     // This comment used to say every real withdrawal was refused because the refund was a stub.
     // FALSE in production: the escrow signer is set and GET /api/v1/stake/escrow/health reports
     // "a real escrow→builder refund can be broadcast" [MEASURED 2026-11-14].
@@ -342,23 +342,36 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
 
     // Refund is real + broadcast — safe to record the withdrawal as REAL. The
     // negative row keeps getCurrentStake / getRealStake consistent.
-    const { error: wErr } = await db.from('stake_deposits').insert({
-      builder_id: builderId,
-      amount: (-amount).toString(),
-      status: 'withdrawn',
-      is_simulated: false,
-      // No token_address: the column does not exist (see the deposit insert above).
-      // Tie the ledger debit to the real on-chain refund tx (not a sentinel), so the
-      // row is auditable and a later idempotency/dedupe guard has a key to match on.
-      deposit_tx_hash: refund.txHash ?? `pending-refund:${Date.now()}`,
-    });
-    if (wErr) {
-      // The refund WAS sent but the debit row did not land: funded still reads high, so the hold
-      // must keep counting until someone reconciles this against the chain.
-      await endHold('unknown', refund.txHash ?? null, `refund sent, debit row failed: ${wErr.message}`);
-      return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: wErr.message };
+    // Tie the ledger debit to the real on-chain refund tx (not a sentinel), so the
+    // row is auditable and a later idempotency/dedupe guard has a key to match on.
+    const debitHash = refund.txHash ?? `pending-refund:${Date.now()}`;
+    if (hold) {
+      // ENFORCE: release the hold and write the debit row in ONE transaction
+      // (complete_stake_withdrawal). As two steps, funded dropped while the hold still counted, so
+      // committed briefly exceeded funded, and a failed release left the hold stuck after a
+      // withdrawal that had succeeded (Grok r6 on #1550).
+      try {
+        await supabaseOwnerBudget.completeWithdrawal(hold, builderId, amount, debitHash);
+      } catch (e: unknown) {
+        // The refund WAS sent but nothing was recorded: funded still reads high, so the hold must
+        // keep counting until someone reconciles this against the chain.
+        const msg = e instanceof Error ? e.message : String(e);
+        await endHold('unknown', refund.txHash ?? null, `refund sent, debit not recorded: ${msg}`);
+        return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: msg };
+      }
+    } else {
+      const { error: wErr } = await db.from('stake_deposits').insert({
+        builder_id: builderId,
+        amount: (-amount).toString(),
+        status: 'withdrawn',
+        is_simulated: false,
+        // No token_address: the column does not exist (see the deposit insert above).
+        deposit_tx_hash: debitHash,
+      });
+      if (wErr) {
+        return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: wErr.message };
+      }
     }
-    await endHold('released', refund.txHash ?? null, 'withdrawn: debit row written');
 
     const newTotal = await getCurrentStake(builderId);
     const auth = await snapshotAuthority(builderId, newTotal);
