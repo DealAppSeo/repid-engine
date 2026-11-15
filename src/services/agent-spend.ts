@@ -2,6 +2,9 @@
  * AGENT SPEND, CAPPED ON-CHAIN (Sean's GO 2026-10-07, step d: "stake USDC and bind an agent so that
  * the agent can trade up to that amount and then test those transactions").
  *
+ * (This header describes AGENT_SPEND_SOURCE=wallet, the default. With `stake`, the escrow pays out
+ * of the owner's stake instead and the owner budget is the only cap: see agentSpendSource below.)
+ *
  * THE CAP IS THE USDC CONTRACT, NOT THIS FILE. The person approves their agent's own wallet to move
  * up to N USDC from theirs (`USDC.approve(agentWallet, N)`, signed in their own wallet, never by
  * us). The agent then pays with `transferFrom(owner, payee, amount)`. If it asks for more than is
