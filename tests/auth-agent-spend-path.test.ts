@@ -55,6 +55,21 @@ it('percent-encoding another agent\'s id does not slip past (Express decodes it 
   expect(res.statusCode).toBe(403);
 });
 
+it.each([
+  ['without hyphens', OTHER.replace(/-/g, '')],
+  ['in braces', `{${OTHER}}`],
+  ['in upper case', OTHER.toUpperCase()],
+])('another agent\'s id %s (Postgres resolves it to the same row) is refused', async (_n, spelled) => {
+  const { next, res } = await run(`/api/v1/agents/${spelled}/mark-human/`);
+  expect(next).not.toHaveBeenCalled();
+  expect(res.statusCode).toBe(403);
+});
+
+it('the key\'s OWN id without hyphens still reaches its own spend route', async () => {
+  const { next } = await run(`/api/v1/agents/${BOUND.replace(/-/g, '')}/spend`);
+  expect(next).toHaveBeenCalled();
+});
+
 it('a path segment that is not valid percent-encoding is refused, not matched raw', async () => {
   const { next, res } = await run(`/api/v1/agents/%E0%A4%A/spend`);
   expect(next).not.toHaveBeenCalled();

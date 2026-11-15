@@ -382,6 +382,14 @@ describe('stake-vault — depositStake real-staking routing', () => {
     }
   });
 
+  it.each([[0n], [-50_000_000n]])('refuses a deposit of %p: a deposit only ever adds', async (amt) => {
+    seedBuilderFound();
+    const r = await depositStake(BUILDER_ADDR, amt);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/positive/);
+    expect(dbState.inserts).toEqual([]);
+  });
+
   it('flag OFF with X402_REAL_RPC set: an unverified deposit is still labelled simulated', async () => {
     mockConfig.realStakingEnabled = false;
     process.env.X402_REAL_RPC = 'https://example.invalid';

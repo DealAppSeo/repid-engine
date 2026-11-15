@@ -67,6 +67,11 @@ export async function depositStake(
   amount: bigint,
   txHash?: string,
 ): Promise<DepositResult> {
+  // A deposit only ever adds. Withdrawals are negative rows in the same column, so a negative
+  // "deposit" was indistinguishable from a debit of whatever account it named (Strix on #1550).
+  if (amount <= 0n) {
+    return { ok: false, builder_id: '', total_active_stake: '0', authority_after: '0', is_simulated: true, error: 'amount must be a positive number of micro-USDC' };
+  }
   const lower = builderAddress.toLowerCase();
   const { data: builder, error: bErr } = await db
     .from('builders')

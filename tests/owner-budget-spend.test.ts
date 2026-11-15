@@ -14,7 +14,7 @@ import { join } from 'path';
 jest.mock('../src/engine/agent-log', () => ({ logAgentEvent: jest.fn().mockResolvedValue(true) }));
 jest.mock('../src/db', () => ({ db: { from: () => ({}) } }));
 
-import { SPEND_CHAIN_ID, type SpendChain } from '../src/services/agent-spend';
+import { SPEND_CHAIN_ID, revertedReceipt, type SpendChain } from '../src/services/agent-spend';
 import { createAgentSpendRouter } from '../src/routes/agent-spend';
 import { ownerBudgetMode, type OwnerBudgetMode, type OwnerBudgetStore, type FinishState } from '../src/services/owner-budget';
 
@@ -277,6 +277,21 @@ describe('shadow and off', () => {
     const a = app({ chain, store, mode: 'off', builder: new Error('must not be read') });
     expect((await spend(a, AGENTS[0]!, '50')).body).toMatchObject({ ok: true });
     expect(touched).toEqual([]);
+  });
+});
+
+describe('revertedReceipt: only a proven status-0 receipt may release budget', () => {
+  it('reads the receipt ethers v6 attaches to a reverted transaction', () => {
+    expect(revertedReceipt({ code: 'CALL_EXCEPTION', receipt: { status: 0, blockNumber: 7 } })).toEqual({ blockNumber: 7 });
+  });
+  it.each([
+    ['a timeout', { code: 'TIMEOUT' }],
+    ['a call exception with no receipt', { code: 'CALL_EXCEPTION' }],
+    ['a receipt that succeeded', { code: 'CALL_EXCEPTION', receipt: { status: 1 } }],
+    ['a plain error', new Error('socket hang up')],
+    ['nothing', null],
+  ])('%s is not a revert', (_n, e) => {
+    expect(revertedReceipt(e)).toBeNull();
   });
 });
 
