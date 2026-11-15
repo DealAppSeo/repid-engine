@@ -33,6 +33,7 @@ import {
   __setEscrowChainReader,
   RefundBroadcastUnconfirmed,
   refundWaitFailure,
+  broadcastFailure,
 } from '../src/services/escrow-refunder';
 
 const BUILDER = 'builder-1';
@@ -102,6 +103,17 @@ describe('escrowRefund — fail-closed escrow -> builder refund', () => {
       const out = refundWaitFailure(e, '0x2');
       expect(out).toBeInstanceOf(RefundBroadcastUnconfirmed);
       expect((out as RefundBroadcastUnconfirmed).txHash).toBe('0x2');
+    }
+  });
+
+  it('broadcastFailure: only an explicit node rejection is "not sent"; a lost reply is unconfirmed, with the hash', () => {
+    for (const code of ['INSUFFICIENT_FUNDS', 'REPLACEMENT_UNDERPRICED']) {
+      expect(broadcastFailure({ code, message: 'rejected' }, '0x3')).not.toBeInstanceOf(RefundBroadcastUnconfirmed);
+    }
+    for (const e of [{ code: 'TIMEOUT' }, { code: 'NETWORK_ERROR' }, { code: 'SERVER_ERROR' }, { code: 'NONCE_EXPIRED' }, new Error('socket hang up'), null]) {
+      const out = broadcastFailure(e, '0x4');
+      expect(out).toBeInstanceOf(RefundBroadcastUnconfirmed);
+      expect((out as RefundBroadcastUnconfirmed).txHash).toBe('0x4');
     }
   });
 

@@ -41,6 +41,20 @@ export class RefundBroadcastUnconfirmed extends Error {
   }
 }
 
+/**
+ * The broadcast call itself failed. Only an explicit rejection by the node means the transaction
+ * was not accepted; a timeout or a lost reply may still have put it in the mempool, so that is
+ * unconfirmed (handled as sent). NONCE_EXPIRED stays unconfirmed: "nonce too low" can mean our own
+ * transaction already landed.
+ */
+const NODE_REJECTED = new Set(['INSUFFICIENT_FUNDS', 'REPLACEMENT_UNDERPRICED']);
+export function broadcastFailure(e: unknown, txHash: string): Error {
+  const code = (e as { code?: unknown } | null)?.code;
+  const detail = e instanceof Error ? e.message.split('\n')[0] ?? '' : String(e);
+  if (typeof code === 'string' && NODE_REJECTED.has(code)) return new Error(`refund ${txHash} rejected by the node before broadcast (${code}): ${detail}`);
+  return new RefundBroadcastUnconfirmed(txHash, `broadcast reply not received: ${detail}`);
+}
+
 /** After broadcast, only a receipt proving status 0 means no USDC moved; anything else may have. */
 export function refundWaitFailure(e: unknown, txHash: string): Error {
   if (revertedReceipt(e)) return new Error(`refund ${txHash} reverted on-chain (status 0)`);
@@ -99,9 +113,22 @@ async function realSender(to: string, amount: bigint): Promise<{ txHash: string 
     throw new Error('escrow signer address does not match STAKE_ESCROW_ADDRESS');
   }
   const usdc = new ethers.Contract(config.usdcTokenAddress, ERC20_ABI, wallet);
-  // getFunction returns a defined ContractMethod (satisfies noUncheckedIndexedAccess,
-  // which makes `usdc.transfer` typed as possibly-undefined).
-  const tx = await usdc.getFunction('transfer')(to, amount);
+  // SIGN LOCALLY, THEN BROADCAST, so the hash is known before anything goes on the wire. As one
+  // call (`usdc.transfer(...)`), a broadcast whose RPC reply was lost (a timeout after the node had
+  // accepted it) threw with no hash, escrowRefund reported "did not happen", no debit was written,
+  // and the refund could still land (Grok r8 on #1550). Anything that fails BEFORE the broadcast
+  // (building the transaction, a gas estimate that reverts) still means nothing was sent.
+  // getFunction returns a defined ContractMethod (satisfies noUncheckedIndexedAccess).
+  const unsigned = await wallet.populateTransaction(await usdc.getFunction('transfer').populateTransaction(to, amount));
+  const signed = await wallet.signTransaction(unsigned);
+  const hash = ethers.Transaction.from(signed).hash;
+  if (!hash) throw new Error('refusing: could not derive the refund tx hash before broadcast');
+  let tx: ethers.TransactionResponse;
+  try {
+    tx = await provider.broadcastTransaction(signed);
+  } catch (e: unknown) {
+    throw broadcastFailure(e, hash);
+  }
   // From here the transfer is on the wire.
   let receipt;
   try {
