@@ -60,6 +60,7 @@
 import { ethers } from 'ethers';
 import { mkdirSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
+import { OWNER_AUTH_DOMAIN, OWNER_AUTH_TYPES, paramsHash } from '../../src/services/owner-authorization';
 
 const CHAIN_ID = 84532n;
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e'; // src/services/agent-spend.ts:23
@@ -235,6 +236,7 @@ async function run(execute: boolean): Promise<void> {
     `2   POST /api/v1/agents/register x2 (${prefix}-<utc>-1, -2) -> agent id and key`,
     `2b  POST /api/v1/agents/<agent1>/spend, unbound -> must refuse not_bound (proves AGENT_SPEND_ENABLED; nothing can send)`,
     `3   GET /api/v1/human/bind/message + POST /api/v1/human/bind, x2 -> both bound to the owner as builder`,
+    ...(fromStake ? [`3b  POST /api/v1/agents/<id>/spend-limit x2, owner-signed (no gas) -> each agent may spend ${usdc(s)}; limits sum to ${usdc(2n * s)}`] : []),
     ...(fromStake ? [] : [
       `5   USDC.approve(agent wallet, ${usdc(s)}) x2            [2 tx, owner] caps sum to ${usdc(2n * s)}`,
       `6   send up to ${ethers.formatEther(topup)} ETH to each agent wallet [up to 2 tx, owner]`,
@@ -295,6 +297,8 @@ async function run(execute: boolean): Promise<void> {
     escrow_did_not_send: 'the escrow refused to send (see the error); the budget was released.',
     spend_unconfirmed: 'the escrow broadcast but the outcome is unknown; it keeps counting. Check the tx hash on Basescan.',
     spend_source_invalid: 'AGENT_SPEND_SOURCE on the engine is not wallet or stake.',
+    no_spend_limit: 'the owner has not signed a spend limit for this agent (step 3b).',
+    over_agent_limit: 'over the limit the owner signed for this agent.',
   };
   const why = (r: Resp) => `HTTP ${r.status}, code ${r.body?.code ?? r.body?.error ?? 'none'}${HINT[r.body?.code] ? ` - ${HINT[r.body.code]}` : ''}`;
   // Every engine-signed spend is checked on the chain itself, not taken from the engine's word.
@@ -366,6 +370,22 @@ async function run(execute: boolean): Promise<void> {
       stop('3-bind', `bound as ${b.body.binding?.owner_kind} ${b.body.binding?.builder_id ?? b.body.binding?.human_token_id}, not builder ${builderId}. A wallet with a proof-of-human SBT binds as human_sbt and has no builder stake budget: use another wallet.`, b.body);
     }
     log('3-bind', `${a.name} bound to the owner as builder ${builderId}`, b.body);
+  }
+
+  // ── 3b. spend limits ── stake mode: the agent's key alone may not move the owner's stake (Strix on
+  //     #1551). The owner signs a limit for each agent (owner-authorization action spend.limit, EIP-712,
+  //     routes/agent-spend.ts POST /:id/spend-limit). S each, so the limits sum to 2S and only the shared
+  //     budget holds the two agents to S.
+  if (fromStake) {
+    for (const a of agents) {
+      const nonce = ethers.hexlify(ethers.randomBytes(32));
+      const expires_at = Math.floor(Date.now() / 1000) + 300;
+      const value = { subject: a.id, action: 'spend.limit', params: paramsHash({ agent_id: a.id, limit_micro_usdc: s.toString() }), nonce, expiresAt: expires_at };
+      const signature = await owner.signTypedData(OWNER_AUTH_DOMAIN, OWNER_AUTH_TYPES, value);
+      const r = await http('POST', `/api/v1/agents/${a.id}/spend-limit`, { headers: { 'x-api-key': a.key }, body: { limit_usdc: usdc(s), owner_authorization: { signature, nonce, expires_at } } });
+      if (r.status !== 201 || r.body?.ok !== true) stop('3b-limit', `expected 201 ok setting ${a.name}'s limit: ${why(r)}`, r.body);
+      log('3b-limit', `${a.name}: owner signed a spend limit of ${usdc(s)} USDC (a signature, no gas)`, r.body);
+    }
   }
 
   // Steps 5 and 6 are the wallet path only: from stake there is no approval and the escrow pays the gas.
