@@ -90,7 +90,7 @@ export const ZKREPID_MODULES: readonly ZkRepIdModule[] = [
   },
   {
     path: 'zkrepid/disclosure',
-    role: 'the selective-disclosure seam: prove repid >= threshold without publishing the score',
+    role: 'the selective-disclosure seam, not yet a proof: no circuit exists, so nothing proves repid >= threshold without publishing the score today',
     kind: 'pure',
   },
   {

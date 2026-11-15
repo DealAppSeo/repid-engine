@@ -62,7 +62,8 @@ export * as holder from '../zkp/holder-identity-binding';
 export * as nullifier from '../zkp/nullifier-identity';
 
 /**
- * The selective-disclosure seam: prove `repid >= threshold` without publishing the score.
+ * The selective-disclosure seam, meant to prove `repid >= threshold` without publishing the score.
+ * It does not do that today: no circuit exists, and the live range proofs publish the score.
  *
  * SHADOW MODE BY DEFAULT, and it refuses to enforce. Read the module header before wiring it to
  * anything that grants access — `provenWithoutSecret` is structurally false until a circuit exists,
