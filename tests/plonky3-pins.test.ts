@@ -20,7 +20,17 @@ const onA = lock(pkg('p3-field', '0.5.1', GIT_A), pkg('p3-fri', '0.5.1', GIT_A),
 
 describe('plonky3Sources', () => {
   it('collapses every p3 crate from one commit to one source and ignores other crates', () => {
-    expect(plonky3Sources(onA)).toEqual(['git:27d59f7350daf6b02d11b01c3a55af453554b515@0.5.1']);
+    expect(plonky3Sources(onA)).toEqual(['git:27d59f7350daf6b02d11b01c3a55af453554b515']);
+  });
+
+  it('reads an exact rev pin from a Cargo.toml as the same key a lockfile gives', () => {
+    const toml = '[dependencies]\np3-field = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }\nserde = "1"\n';
+    expect(plonky3Sources(toml)).toEqual(plonky3Sources(onA));
+  });
+
+  it('marks a Cargo.toml version range or rev-less git dep as unpinned', () => {
+    const toml = 'p3-air = "0.3.0"\np3-fri = { git = "https://github.com/Plonky3/Plonky3.git" }\n';
+    expect(plonky3Sources(toml)).toEqual(['unpinned:p3-air', 'unpinned:p3-fri']);
   });
 
   it('labels crates.io releases by version', () => {
@@ -40,6 +50,16 @@ describe('plonky3Sources', () => {
 });
 
 describe('check', () => {
+  it('PASS when a lockfile and a rev-pinned manifest name the same commit', () => {
+    const toml = 'p3-uni-stark = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }\n';
+    expect(check([{ file: 'lock', text: onA }, { file: 'toml', text: toml }]).verdict).toBe('PASS');
+  });
+
+  it('NOT_CHECKED, never PASS, when a manifest dep is not pinned to a commit', () => {
+    const r = check([{ file: 'lock', text: onA }, { file: 'toml', text: 'p3-fri = { git = "https://github.com/Plonky3/Plonky3.git" }\n' }]);
+    expect(r.verdict).toBe('NOT_CHECKED');
+  });
+
   it('PASS when every lockfile resolves to the same single source', () => {
     const r = check([{ file: 'a', text: onA }, { file: 'b', text: onA }]);
     expect(r.verdict).toBe('PASS');
