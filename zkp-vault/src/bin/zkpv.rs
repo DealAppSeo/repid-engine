@@ -8,10 +8,11 @@
 //! zkpv verify < {"context","nullifier","group","proof"}  -> {"ok":true|false,"error"?}
 //! ```
 //!
-//! Exit codes: 0 done (or VERIFIED), 1 the proof was rejected, 2 bad input. The verifier learns
-//! only `(context, nullifier, group)`: never the secret, never which member proved, never the
-//! agent id behind the commitment. Soundness is this crate's (README: demo FRI parameters, a
-//! 31-bit field); nothing here strengthens or weakens it.
+//! Exit codes: 0 done (or VERIFIED), 1 the proof was rejected, 2 bad input. The verifier is
+//! SHOWN only `(context, nullifier, group)`. That is not the same as learning only that: the
+//! secret is one 31-bit field element, so it is recoverable from a nullifier by brute force,
+//! which reveals which member proved (lib.rs, "Nullifier semantics"). Soundness and privacy are
+//! this crate's (README: demo FRI parameters, a 31-bit field); nothing here changes either.
 use std::io::Read;
 use std::process::ExitCode;
 

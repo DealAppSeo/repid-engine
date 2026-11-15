@@ -20,9 +20,11 @@ Semaphore-style proof. **No reputation values appear in the circuit.**
 
 ### Nullifier (P1.2)
 `nullifier = H(secret, context)`, one per `(human, context)`:
-- **Unlinkable across contexts** — different context ⇒ different nullifier; the leaf never
-  enters the public inputs, and the only shared public value is the group set (common to
-  all members).
+- **Unlinkable across contexts — design goal, NOT met today.** Different context ⇒ different
+  nullifier, and the leaf never enters the public inputs. But the secret is one 31-bit field
+  element, so it can be brute-forced from any published nullifier and then used to link every
+  other context (Honest scope item 2). The `unlinkable_across_contexts` test below checks only
+  that the two nullifiers differ, which is necessary and nowhere near sufficient.
 - **Double-action detectable within a context** — same `(secret, context)` ⇒ same
   nullifier, so a registry can reject a repeat.
 
@@ -52,7 +54,11 @@ The first line predates the move to Poseidon2 and is kept as history, not as the
   `poseidon2_hash2::h_p2_field` and its KAT are gated against it. This replaced an earlier
   hand-written MiMC (this line said MiMC until 2026-10-06, after the code had moved on).
 - **Zero-knowledge** via the hiding FRI PCS (`HidingFriPcs` + `MerkleTreeHidingMmcs`),
-  reused from PR #95. `log_blowup=3` so the LDE covers the degree-7 quotient domain.
+  reused from PR #95, and only while its randomness is fresh. **Until 2026-11-15 every config
+  in this crate seeded it with a constant** (`SmallRng::seed_from_u64(1|2|3)`), so the masks
+  were replayable and nothing was hidden. It now uses `hiding_rng()` (OS-seeded ChaCha); the
+  `two_proofs_of_*_differ` tests fail on any constant seed. `log_blowup=3` so the LDE covers
+  the degree-7 quotient domain.
 
 ## API
 ```rust

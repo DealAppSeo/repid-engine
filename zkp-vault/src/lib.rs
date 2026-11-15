@@ -27,11 +27,12 @@
 //!
 //! ### Nullifier semantics (P1.2)
 //! The nullifier is `H(secret, context)` — one per `(human, context)`:
-//! - **Unlinkable across contexts:** different `context` ⇒ different nullifier;
-//!   the leaf (the human's identity) never enters the public inputs, and the only
-//!   shared public value between two proofs is the group set (common to *all*
-//!   members), so two actions by the same human in different contexts cannot be
-//!   linked.
+//! - **Unlinkable across contexts — DESIGN GOAL, NOT MET TODAY:** different `context` ⇒
+//!   different nullifier, and the leaf never enters the public inputs. But `secret` is
+//!   reduced into ONE BabyBear element (< 2^31), so anyone holding a published nullifier
+//!   and its public context recovers the secret by trying ~2^31 candidates, then links
+//!   every other context. `src/zkp/nullifier-identity.ts` measured and fixed this exact
+//!   defect on the TS side (8-element secret); this circuit still has it (plan step B1).
 //! - **Double-action detectable within a context:** same `(secret, context)` ⇒
 //!   identical nullifier, so a registry can reject a second action in that context.
 //!
@@ -52,15 +53,21 @@
 //! which was flagged in the crate's own scope note as non-production.
 //!
 //! Zero-knowledge comes from the **hiding** FRI PCS (`HidingFriPcs` +
-//! `MerkleTreeHidingMmcs`), reused verbatim from the PR #95 machinery.
+//! `MerkleTreeHidingMmcs`), reused from the PR #95 machinery — and ONLY while their
+//! randomness is fresh and secret. **Until 2026-11-15 it was not:** both were seeded
+//! `SmallRng::seed_from_u64(1)`, a constant in this public repo, so the masks were
+//! replayable and the proofs hid nothing. Now [`hiding_rng`] (OS-seeded ChaCha), pinned by
+//! `two_proofs_of_one_witness_differ`.
 //!
 //! ## Honest scope / next steps (NOT done here — see README)
 //! - Membership uses a vanishing-polynomial product over a small public set
 //!   (degree = group size). Production should use a Merkle tree (log-depth path)
 //!   for large groups.
-//! - The hash is now Poseidon2 with audited constants (4.0-d.3). Remaining: the field
-//!   is still BabyBear (~31 bits) — soundness rests on the FRI/extension parameters,
-//!   not the base field, but a larger field remains the conservative production choice.
+//! - The hash is now Poseidon2 with audited constants (4.0-d.3). Remaining: secret,
+//!   commitment and nullifier are each ONE BabyBear element (~31 bits). This line used to
+//!   call that a conservative-production nicety resting on FRI soundness; it is worse —
+//!   it breaks unlinkability outright (see Nullifier semantics above). Fix: widen the
+//!   secret to a multi-element sponge input, matching `nullifier-identity.ts`.
 //! - FRI uses `create_test_fri_params` (low blowup): correct for the correctness
 //!   gate + benchmark, not production soundness.
 //! - Court-order reveal (D-020): the human↔commitment link is sealed off-circuit

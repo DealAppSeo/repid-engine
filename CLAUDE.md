@@ -302,6 +302,13 @@ describing it.*
   `zkp-vault/` is a genuine Rust Plonky3 STARK (anonymous ownership, D-019, 7/7 incl. forgery and
   tamper rejection) but its own README says the HTTP wrapper is NOT done, so the bridge cannot
   reach it, and its FRI params are explicitly not production soundness.
+  **"Genuine STARK" is not "anonymous" [MEASURED 2026-11-15].** Until that date its hiding PCS was
+  seeded with a constant (`SmallRng::seed_from_u64(1)`), so the proofs hid nothing; fixed, and
+  pinned by `two_proofs_of_*_differ`. Still open: the secret is ONE BabyBear element (~31 bits),
+  so a nullifier brute-forces back to its secret and links every context. That is the defect
+  `src/zkp/nullifier-identity.ts` already fixed in TS. Do not describe the vault as anonymous or
+  unlinkable until the secret is widened. Its Plonky3 is crates.io **0.3.0**; the live prover's
+  `27d59f73` is **0.5.1**, so Invariant 5 (one pin) does not hold today.
 
 ### Pointing HAL at a local OpenAI-compatible gateway (OmniRoute, Ollama, LM Studio)
 
