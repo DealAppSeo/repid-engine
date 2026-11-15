@@ -336,7 +336,12 @@ false again.
    fact-check; a gateway that degrades takes the whole quorum with it, which is the shape of the
    Groq model-retirement outage recorded under Deploy facts. Set it in a dev environment and
    measure the quorum before setting it anywhere that scores.
-2. **It sends that host your API KEYS, not just your prompts** [MEASURED 2026-09-09]. This
+2. **FIXED 2026-11-15 for the paths that route through `providerFetch`** (`src/egress/provider-fetch.ts`):
+   a request to the redirect host now carries only `LOCAL_LLM_API_KEY`, or no credential. HAL
+   fact-check and cross-llm route through it, and `tests/local-redirect-no-provider-keys.test.ts`
+   drives the real fact-check path. A caller that still calls `fetch` directly is NOT covered, so
+   the paragraph below stays true for it. Until then:
+   **It sent that host your API KEYS, not just your prompts** [MEASURED 2026-09-09]. This
    line used to say a gateway "changes who sees the prompt", which understates it by a category:
    the prompt is the smaller half. `src/hal/fact-check.ts` rewrites `p.endpoint` under the
    redirect and leaves `p.apiKey` **untouched**, and `queryProvider` then sends
