@@ -51,6 +51,7 @@ export const OWNER_ACTIONS = {
   'stake.withdraw': 'Withdraw stake from your account',
   'stake.deposit': 'Place a stake for an agent you answer for (a prediction-market stake: it backs no spending)',
   'stake.sponsor': 'Sponsor another agent, putting up collateral from an agent you answer for',
+  'spend.limit': 'Let an agent you own spend up to this much from your stake, starting now (replaces its earlier limit)',
 } as const;
 export type OwnerAction = keyof typeof OWNER_ACTIONS;
 

@@ -372,6 +372,22 @@ export async function escrowHealth(reader?: EscrowChainReader): Promise<EscrowHe
   };
 }
 
+/** The escrow address when a real escrow send is possible (signer key AND address set), else null. */
+export function configuredEscrowAddress(): string | null {
+  return config.stakeEscrowSignerKey && config.stakeEscrowAddress ? config.stakeEscrowAddress : null;
+}
+
+/**
+ * AGENT_SPEND_SOURCE=stake: the escrow pays an agent's payee out of the owner's stake. It is the
+ * refund send to a different address, under exactly the same guards: Base Sepolia only, signer ==
+ * escrow, signed locally before broadcast, one escrow send at a time (shared with refunds, one
+ * nonce), and an outcome decided only by proof. Its notes say "refund" because they come from that
+ * shared path. initiated:false means proven not sent; `unconfirmed` means it may have landed.
+ */
+export function escrowPayout(to: string, amount: bigint): Promise<RefundInitiation> {
+  return escrowRefund('agent-spend', amount, to);
+}
+
 /**
  * Initiate the escrow -> builder refund. Default-OFF: with no signer key this stubs,
  * and withdrawal fails closed. With the key set, it broadcasts a real Base Sepolia

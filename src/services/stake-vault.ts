@@ -21,6 +21,7 @@ import { recordSponsorship } from './sponsorship'; // R3 exercise + GA handoff
 import { verifyDeposit } from './deposit-verifier';
 import { escrowRefund } from './escrow-refunder';
 import { ownerBudgetMode, supabaseOwnerBudget } from './owner-budget';
+import { agentSpendSource } from './agent-spend';
 
 export { BUILDER_FLOOR, computeAuthority };
 
@@ -317,9 +318,14 @@ export async function withdrawStake(rawBuilderId: string, amount: bigint): Promi
     // withdrawal was refused because the refund was a stub: FALSE in production, where the escrow
     // signer is set and GET /api/v1/stake/escrow/health reports a real refund can be broadcast
     // [MEASURED 2026-11-14].
+    // AGENT_SPEND_SOURCE=stake (or a typo in it): agents are paid OUT of this escrow, so the ledger
+    // is the only record of stake already spent, and the refund bound (getRealStake) does not see
+    // it. A withdrawal that skipped the ledger could refund money the escrow already paid out, from
+    // other owners' stake. So the ledger is checked whenever agents may spend from stake, whatever
+    // OWNER_BUDGET_MODE says. (Rolling back to `wallet` after stake spends? Keep enforce on.)
     const budgetMode = ownerBudgetMode();
     let pendingDebit: string;
-    if (budgetMode === 'enforce') {
+    if (budgetMode === 'enforce' || agentSpendSource() !== 'wallet') {
       let r;
       try {
         r = await supabaseOwnerBudget.beginWithdrawal(builderId, amount);
