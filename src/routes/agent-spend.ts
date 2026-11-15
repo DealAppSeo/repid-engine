@@ -33,6 +33,8 @@
  * send is proven not to have happened; otherwise `unknown`, which keeps counting. Default `wallet`.
  */
 import { Router, type Request, type Response } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../middleware/client-ip';
 import { db } from '../db';
 import { logAgentEvent } from '../engine/agent-log';
 import {
@@ -122,6 +124,15 @@ async function defaultLoadAgent(agentId: string) {
 
 export function createAgentSpendRouter(deps: AgentSpendDeps = {}): Router {
   const router = Router();
+  // Per-IP brake on the two routes that move money or set what may move it. The real gates are the
+  // agent-bound key, the owner's signature and the budget; this only stops someone spraying them.
+  const limiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
   let chain: SpendChain | null = deps.chain ?? null;
   const getChain = () => (chain ??= rpcSpendChain(process.env.BASE_SEPOLIA_RPC_URL || DEFAULT_RPC_URL));
   const loadAgent = deps.loadAgent ?? defaultLoadAgent;
@@ -257,7 +268,7 @@ export function createAgentSpendRouter(deps: AgentSpendDeps = {}): Router {
    * the agent and needs no signature: stopping an agent must never be harder than starting it.
    * Same callers as the spend route: the agent's own key, or an operator key.
    */
-  router.post('/:id/spend-limit', async (req: Request, res: Response) => {
+  router.post('/:id/spend-limit', limiter, async (req: Request, res: Response) => {
     const agentId = String(req.params.id);
     const callerAgent = (req as any).agent_id as string | undefined;
     const operator = !callerAgent && (req as any).apiKey?.tier === 'ops';
@@ -299,7 +310,7 @@ export function createAgentSpendRouter(deps: AgentSpendDeps = {}): Router {
     return res.status(201).json({ ok: true, agent_id: agentId, limit_usdc: formatUsdc(limit), set_by: setBy === 'stop' ? 'stop (no signature needed)' : 'owner signature' });
   });
 
-  router.post('/:id/spend', async (req: Request, res: Response) => {
+  router.post('/:id/spend', limiter, async (req: Request, res: Response) => {
     const agentId = String(req.params.id);
     // WHO MAY ASK [2026-11-14]. Only this agent's own key, or an operator key (ops tier, bound to
     // no agent). Checked HERE, not left to authMiddleware's path check: that compared the raw URL
