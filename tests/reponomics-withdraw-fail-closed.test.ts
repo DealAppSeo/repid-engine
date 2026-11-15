@@ -93,7 +93,7 @@ function seedHappyReads() {
   // getCurrentStake (total), getRealStake (real), then getCurrentStake (post-debit)
   dbState.selectResults['stake_deposits'] = [
     { data: [{ amount: '100000000' }], error: null }, // getCurrentStake
-    { data: [{ amount: '100000000' }], error: null }, // getRealStake
+    { data: [{ amount: '100000000', deposit_tx_hash: '0x' + 'a'.repeat(64) }], error: null }, // getRealStake (a verified deposit)
     { data: [{ amount: '100000000' }, { amount: '-50000000' }], error: null }, // post
   ];
   dbState.selectResults['builders'] = [{ data: { address: BUILDER_ADDR }, error: null }];
