@@ -22,9 +22,6 @@ import { verifyDeposit } from './deposit-verifier';
 import { escrowRefund } from './escrow-refunder';
 import { ownerBudgetMode, supabaseOwnerBudget } from './owner-budget';
 
-/** owner_spend_ledger.agent_id for a stake-withdrawal hold, which belongs to no agent. */
-export const WITHDRAWAL_HOLD_AGENT = '00000000-0000-0000-0000-000000000000';
-
 export { BUILDER_FLOOR, computeAuthority };
 
 // Per-builder withdrawal serialization (in-process). The engine runs a single
@@ -295,61 +292,44 @@ export async function withdrawStake(rawBuilderId: string, amount: bigint): Promi
       return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'amount exceeds real (verified) active stake' };
     }
 
-    // OWNER BUDGET: stake that backs agent spending already made or reserved stays put, or the
-    // owner's agents would have spent against collateral that left (same invariant as
-    // reserve_owner_spend, src/services/owner-budget.ts). In enforce mode the withdrawal HOLDS its
-    // amount through that same function, under the same per-owner lock, before the refund is sent,
-    // so a concurrent spend sees it as committed and cannot take it. After the refund, the debit
-    // row and the release happen in one transaction (complete_stake_withdrawal). The hold is
-    // released on its own only when the refund definitely did not happen; anything unclear keeps it.
-    // This comment used to say every real withdrawal was refused because the refund was a stub.
-    // FALSE in production: the escrow signer is set and GET /api/v1/stake/escrow/health reports
-    // "a real escrow→builder refund can be broadcast" [MEASURED 2026-11-14].
+    // ONE RECORD, WRITTEN BEFORE THE MONEY MOVES. The debit row (status 'withdrawing') is written
+    // before the escrow refund is sent, and no refund is attempted unless it landed. Negative rows
+    // always count, both in the owner's shared budget (owner_funded_stake) and in the refund bound
+    // (getRealStake), so from that moment the stake can be neither spent by agents nor refunded a
+    // second time. After the refund it is stamped 'withdrawn' with the refund hash, or zeroed as
+    // 'withdraw_failed' (kept for the audit trail) when the refund definitely did not happen; if
+    // either write fails, the row keeps counting, which is the safe direction for the shared escrow.
+    // In enforce mode the debit is written by begin_stake_withdrawal, under the per-owner lock, only
+    // if the stake left still covers the owner's committed agent spend. Two earlier designs used a
+    // separate ledger hold and wrote the debit afterwards; each left a window where the two
+    // disagreed (Grok r6; Strix, both on #1550). An earlier comment here also said every real
+    // withdrawal was refused because the refund was a stub: FALSE in production, where the escrow
+    // signer is set and GET /api/v1/stake/escrow/health reports a real refund can be broadcast
+    // [MEASURED 2026-11-14].
     const budgetMode = ownerBudgetMode();
-    let hold: string | null = null;
+    let pendingDebit: string;
     if (budgetMode === 'enforce') {
       let r;
       try {
-        r = await supabaseOwnerBudget.reserve(builderId, WITHDRAWAL_HOLD_AGENT, amount);
+        r = await supabaseOwnerBudget.beginWithdrawal(builderId, amount);
       } catch {
         return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'owner_budget_not_checked' };
       }
-      if (!r.ok || !r.id) {
+      if (!r.ok || !r.debitId) {
         return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'stake_backs_agent_spend' };
       }
-      hold = r.id;
-    } else if (budgetMode === 'shadow') {
-      try {
-        const s = await supabaseOwnerBudget.status(builderId);
-        if (s.budget - amount < s.committed) {
-          console.warn(`[owner-budget] shadow: WOULD REFUSE withdrawal of ${amount} by builder ${builderId}: committed agent spend ${s.committed} of funded ${s.budget}`);
+      pendingDebit = r.debitId;
+    } else {
+      if (budgetMode === 'shadow') {
+        try {
+          const s = await supabaseOwnerBudget.status(builderId);
+          if (s.budget - amount < s.committed) {
+            console.warn(`[owner-budget] shadow: WOULD REFUSE withdrawal of ${amount} by builder ${builderId}: committed agent spend ${s.committed} of funded ${s.budget}`);
+          }
+        } catch (e: unknown) {
+          console.warn(`[owner-budget] shadow: budget read failed for builder ${builderId}: ${e instanceof Error ? e.message : String(e)}`);
         }
-      } catch (e: unknown) {
-        console.warn(`[owner-budget] shadow: budget read failed for builder ${builderId}: ${e instanceof Error ? e.message : String(e)}`);
       }
-    }
-    const endHold = (state: 'released' | 'unknown', txHash: string | null, why: string) =>
-      hold
-        ? supabaseOwnerBudget.finish(hold, state, txHash, why).catch((e: unknown) =>
-            console.error(`[owner-budget] withdrawal hold ${hold} could not be marked ${state}; it stays reserved and keeps counting: ${e instanceof Error ? e.message : String(e)}`))
-        : Promise.resolve();
-
-    // Builder payout address (where the escrow refund is sent).
-    const { data: builder } = await db
-      .from('builders')
-      .select('address')
-      .eq('id', builderId)
-      .maybeSingle();
-
-    // RECORD BEFORE THE MONEY MOVES (off / shadow). Without a hold, the debit row is the only
-    // evidence the escrow paid out, and it used to be written only AFTER the refund was broadcast:
-    // a failed insert then left the USDC gone, nothing recorded, and the same stake refundable again
-    // from the escrow other builders funded (Strix on #1550). So a pending debit is written first,
-    // and no refund is attempted unless it landed. It is then stamped `withdrawn` with the refund
-    // hash, or zeroed as `withdraw_failed` (kept for the audit trail) when the refund definitely was
-    // not sent. In enforce mode the hold plus complete_stake_withdrawal plays the same role.
-    let pendingDebit: string | null = null;
-    if (!hold) {
       pendingDebit = randomUUID();
       const { error: pErr } = await db.from('stake_deposits').insert({
         id: pendingDebit,
@@ -365,14 +345,18 @@ export async function withdrawStake(rawBuilderId: string, amount: bigint): Promi
       }
     }
 
-    // FAIL-CLOSED: a refund that is a stub or definitely did not happen leaves nothing debited.
+    // Builder payout address (where the escrow refund is sent).
+    const { data: builder } = await db
+      .from('builders')
+      .select('address')
+      .eq('id', builderId)
+      .maybeSingle();
+
+    // FAIL-CLOSED: a refund that is a stub or definitely did not happen voids the debit.
     const refund = await refundInitiator(builderId, amount, builder?.address ?? undefined);
     if (refund.stub || !refund.initiated) {
-      await endHold('released', null, 'withdrawal refused: the refund was not sent');
-      if (pendingDebit) {
-        const { error: vErr } = await db.from('stake_deposits').update({ amount: '0', status: 'withdraw_failed' }).eq('id', pendingDebit);
-        if (vErr) console.error(`[stake-vault] pending debit ${pendingDebit} could not be voided after a refund that was not sent; the stake reads LOW until fixed: ${vErr.message}`);
-      }
+      const { error: vErr } = await db.from('stake_deposits').update({ amount: '0', status: 'withdraw_failed' }).eq('id', pendingDebit);
+      if (vErr) console.error(`[stake-vault] pending debit ${pendingDebit} could not be voided after a refund that was not sent; the stake reads LOW until fixed: ${vErr.message}`);
       return {
         ok: false,
         total_active_stake: total.toString(),
@@ -382,31 +366,12 @@ export async function withdrawStake(rawBuilderId: string, amount: bigint): Promi
       };
     }
 
-    // Refund is real + broadcast — safe to record the withdrawal as REAL. The
-    // negative row keeps getCurrentStake / getRealStake consistent.
-    // Tie the ledger debit to the real on-chain refund tx (not a sentinel), so the
-    // row is auditable and a later idempotency/dedupe guard has a key to match on.
-    const debitHash = refund.txHash ?? `pending-refund:${Date.now()}`;
-    if (hold) {
-      // ENFORCE: release the hold and write the debit row in ONE transaction
-      // (complete_stake_withdrawal). As two steps, funded dropped while the hold still counted, so
-      // committed briefly exceeded funded, and a failed release left the hold stuck after a
-      // withdrawal that had succeeded (Grok r6 on #1550).
-      try {
-        await supabaseOwnerBudget.completeWithdrawal(hold, builderId, amount, debitHash);
-      } catch (e: unknown) {
-        // The refund WAS sent but nothing was recorded: funded still reads high, so the hold must
-        // keep counting until someone reconciles this against the chain.
-        const msg = e instanceof Error ? e.message : String(e);
-        await endHold('unknown', refund.txHash ?? null, `refund sent, debit not recorded: ${msg}`);
-        return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: msg };
-      }
-    } else if (pendingDebit) {
-      // The debit already counts; this only stamps it with the refund. If the stamp fails the row
-      // stays a pending debit, which still counts, so nothing is refundable twice.
-      const { error: sErr } = await db.from('stake_deposits').update({ status: 'withdrawn', deposit_tx_hash: debitHash }).eq('id', pendingDebit);
-      if (sErr) console.error(`[stake-vault] withdrawal debit ${pendingDebit} (refund ${debitHash}) could not be stamped; it still counts as withdrawn: ${sErr.message}`);
-    }
+    // The refund was sent (or may have been): stamp the debit with it. Tie the ledger debit to the
+    // real on-chain refund tx (not a sentinel), so the row is auditable. If the stamp fails the row
+    // stays a pending debit, which still counts, so nothing is refundable twice.
+    const debitHash = refund.txHash ?? `pending-refund:${pendingDebit}`;
+    const { error: sErr } = await db.from('stake_deposits').update({ status: 'withdrawn', deposit_tx_hash: debitHash }).eq('id', pendingDebit);
+    if (sErr) console.error(`[stake-vault] withdrawal debit ${pendingDebit} (refund ${debitHash}) could not be stamped; it still counts as withdrawn: ${sErr.message}`);
 
     const newTotal = await getCurrentStake(builderId);
     const auth = await snapshotAuthority(builderId, newTotal);

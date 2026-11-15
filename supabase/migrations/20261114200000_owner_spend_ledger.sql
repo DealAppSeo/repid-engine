@@ -102,37 +102,53 @@ begin
 end
 $$;
 
--- A real stake withdrawal holds its amount through reserve_owner_spend before the escrow refund is
--- sent (src/services/stake-vault.ts). After the refund, the debit row and the release of that hold
--- happen HERE, in one transaction: written as two steps, funded dropped before the hold stopped
--- counting, so committed briefly exceeded funded, and a failed release left the hold stuck after a
--- withdrawal that had succeeded (Grok r6 on #1550). Atomic, the invariant holds at every instant.
-create or replace function public.complete_stake_withdrawal(p_hold uuid, p_builder uuid, p_amount bigint, p_tx_hash text)
-returns void
+-- A real stake withdrawal starts HERE, before the escrow refund is sent (src/services/stake-vault.ts):
+-- under the same per-owner lock it checks that the stake left after the withdrawal still covers the
+-- owner's committed agent spend, and writes the debit row (status 'withdrawing') at once. That one
+-- row is both the budget hold and the refund record: negative rows always count in
+-- owner_funded_stake AND in the app's refund bound, so the stake stops being refundable before any
+-- USDC moves. The app stamps it 'withdrawn' after the refund, or zeroes it as 'withdraw_failed'
+-- when the refund definitely did not happen. Two earlier designs used a separate ledger hold and
+-- wrote the debit later, and each left a window where the two disagreed (Grok r6; Strix, #1550).
+create or replace function public.begin_stake_withdrawal(p_builder uuid, p_amount bigint)
+returns table (ok boolean, debit_id uuid, funded bigint, committed bigint)
 language plpgsql
 as $$
+declare
+  v_funded    bigint;
+  v_committed bigint;
+  v_id        uuid;
 begin
-  if p_hold is null or p_builder is null or p_amount is null or p_amount <= 0 or p_tx_hash is null then
-    raise exception 'complete_stake_withdrawal: hold, builder, a positive amount and the refund tx are required';
+  if p_builder is null or p_amount is null or p_amount <= 0 then
+    raise exception 'begin_stake_withdrawal: builder and a positive amount are required';
   end if;
 
   perform pg_advisory_xact_lock(hashtextextended('owner_spend:' || p_builder::text, 0));
 
-  update public.owner_spend_ledger
-     set state = 'released', tx_hash = p_tx_hash, reason = 'withdrawn: debit row written', updated_at = now()
-   where id = p_hold and builder_id = p_builder and amount = p_amount and state = 'reserved';
-  if not found then
-    raise exception 'complete_stake_withdrawal: % is not a reserved hold of % for builder %', p_hold, p_amount, p_builder;
+  v_funded := public.owner_funded_stake(p_builder);
+
+  select coalesce(sum(amount), 0)::bigint
+    into v_committed
+    from public.owner_spend_ledger
+   where builder_id = p_builder
+     and state <> 'released';
+
+  if v_funded - p_amount < v_committed then
+    return query select false, null::uuid, v_funded, v_committed;
+    return;
   end if;
 
   insert into public.stake_deposits (builder_id, amount, status, is_simulated, deposit_tx_hash)
-  values (p_builder, -p_amount, 'withdrawn', false, p_tx_hash);
+  values (p_builder, -p_amount, 'withdrawing', false, 'pending-refund:' || gen_random_uuid()::text)
+  returning id into v_id;
+
+  return query select true, v_id, v_funded - p_amount, v_committed;
 end
 $$;
 
 revoke all on function public.owner_funded_stake(uuid) from public, anon, authenticated;
 revoke all on function public.reserve_owner_spend(uuid, uuid, bigint) from public, anon, authenticated;
-revoke all on function public.complete_stake_withdrawal(uuid, uuid, bigint, text) from public, anon, authenticated;
+revoke all on function public.begin_stake_withdrawal(uuid, bigint) from public, anon, authenticated;
 grant execute on function public.owner_funded_stake(uuid) to service_role;
 grant execute on function public.reserve_owner_spend(uuid, uuid, bigint) to service_role;
-grant execute on function public.complete_stake_withdrawal(uuid, uuid, bigint, text) to service_role;
+grant execute on function public.begin_stake_withdrawal(uuid, bigint) to service_role;

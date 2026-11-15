@@ -1,25 +1,27 @@
 /**
- * A real stake withdrawal, with OWNER_BUDGET_MODE=enforce, holds its amount in the owner's shared
- * budget (the same reserve_owner_spend, the same per-owner lock) BEFORE the refund is sent, so a
- * concurrent agent spend cannot take it. The hold is released only after the debit row is written,
- * or when the refund definitely did not happen; anything unclear keeps it. Mocked db and refund.
+ * A real stake withdrawal writes ONE record before any USDC moves: the debit row (status
+ * 'withdrawing'). It counts at once in the owner's shared budget and in the refund bound, so the
+ * stake can be neither spent by agents nor refunded twice. In enforce mode it is written by
+ * begin_stake_withdrawal under the per-owner lock, only if the stake left still covers committed
+ * agent spend. After the refund it is stamped 'withdrawn', or zeroed as 'withdraw_failed' when the
+ * refund definitely did not happen. Mocked db and refund.
  */
 const mockOrder: string[] = [];
 let mockMode = 'enforce';
 const mockBudget = {
-  reserve: jest.fn(async () => { mockOrder.push('reserve'); return { ok: true, id: 'hold-1', budget: 100_000_000n, committed: 50_000_000n }; }),
-  finish: jest.fn(async (_id: string, state: string) => { mockOrder.push(`finish:${state}`); }),
+  reserve: jest.fn(),
+  finish: jest.fn(),
   status: jest.fn(async () => ({ budget: 100_000_000n, committed: 0n })),
   recordSettled: jest.fn(),
-  completeWithdrawal: jest.fn(async () => { mockOrder.push('complete'); }),
+  beginWithdrawal: jest.fn(async () => { mockOrder.push('begin'); return { ok: true, debitId: 'debit-1', funded: 50_000_000n, committed: 0n }; }),
 };
 jest.mock('../src/services/owner-budget', () => ({ ownerBudgetMode: () => mockMode, supabaseOwnerBudget: mockBudget }));
-jest.mock('../src/config', () => ({ config: { realStakingEnabled: true, usdcTokenAddress: '0x' + 'c'.repeat(40),stakeEscrowAddress: '0x' + 'e'.repeat(40), stakeMinConfirmations: 1 } }));
+jest.mock('../src/config', () => ({ config: { realStakingEnabled: true, usdcTokenAddress: '0x' + 'c'.repeat(40), stakeEscrowAddress: '0x' + 'e'.repeat(40), stakeMinConfirmations: 1 } }));
 jest.mock('../src/services/audit-emit', () => ({ emitAuditEvent: jest.fn().mockResolvedValue({ ok: true }) }));
 jest.mock('../src/services/sponsorship', () => ({ recordSponsorship: jest.fn() }));
 jest.mock('../src/services/escrow-refunder', () => ({ escrowRefund: jest.fn() }));
 
-const mockDb = { insertError: null as any };
+const mockDb = { insertError: null as any, updates: [] as Array<{ row: any; id: unknown }> };
 jest.mock('../src/db', () => {
   const rows: Record<string, any> = {
     linked_bets: { data: [], error: null },
@@ -34,20 +36,26 @@ jest.mock('../src/db', () => {
     q.single = q.maybeSingle;
     q.then = (resolve: any) => resolve(rows[table] ?? { data: [], error: null });
     q.insert = async (_row: any) => { mockOrder.push(`insert:${table}`); return { data: null, error: table === 'stake_deposits' ? mockDb.insertError : null }; };
-    q.update = (row: any) => { mockOrder.push(`update:${table}:${row.status}`); const u: any = { eq: () => u, then: (res: any) => res({ data: null, error: null }) }; return u; };
+    q.update = (row: any) => {
+      mockOrder.push(`update:${table}:${row.status}`);
+      const u: any = { eq: (_c: string, id: unknown) => { mockDb.updates.push({ row, id }); return u; }, then: (res: any) => res({ data: null, error: null }) };
+      return u;
+    };
     return q;
   };
   return { db: { from: (t: string) => make(t) } };
 });
 
-import { withdrawStake, __setRefundInitiator, WITHDRAWAL_HOLD_AGENT } from '../src/services/stake-vault';
+import { withdrawStake, __setRefundInitiator } from '../src/services/stake-vault';
 
 const sent = { initiated: true, stub: false, amount: '50000000', to: '0x' + '9'.repeat(40), txHash: '0x' + 'f'.repeat(64) };
 let refunds = 0;
 const refundWith = (r: any) => __setRefundInitiator(async () => { refunds += 1; mockOrder.push('refund'); return r; });
+const steps = () => mockOrder.filter((s) => s !== 'insert:stake_authority_snapshots');
 
 beforeEach(() => {
   mockOrder.length = 0;
+  mockDb.updates.length = 0;
   mockMode = 'enforce';
   mockDb.insertError = null;
   refunds = 0;
@@ -55,83 +63,82 @@ beforeEach(() => {
   refundWith(sent);
 });
 
-it('holds the amount BEFORE the refund, then writes the debit and releases the hold in ONE step', async () => {
-  const r = await withdrawStake('builder-1', 50_000_000n);
-  expect(r.ok).toBe(true);
-  expect(mockBudget.reserve).toHaveBeenCalledWith('builder-1', WITHDRAWAL_HOLD_AGENT, 50_000_000n);
-  expect(mockBudget.completeWithdrawal).toHaveBeenCalledWith('hold-1', 'builder-1', 50_000_000n, sent.txHash);
-  // No separate debit insert and no separate release: those are the two steps that could
-  // disagree (Grok r6). The authority snapshot written afterwards is not part of the invariant.
-  expect(mockOrder.filter((s) => s !== 'insert:stake_authority_snapshots')).toEqual(['reserve', 'refund', 'complete']);
-});
-
-it('refuses when the stake backs agent spend: no refund is sent', async () => {
-  mockBudget.reserve.mockImplementationOnce(async () => ({ ok: false, id: null, budget: 100_000_000n, committed: 80_000_000n }) as any);
-  const r = await withdrawStake('builder-1', 50_000_000n);
-  expect(r).toMatchObject({ ok: false, error: 'stake_backs_agent_spend' });
-  expect(refunds).toBe(0);
-  expect(mockOrder.some((s) => s.startsWith('insert'))).toBe(false);
-});
-
-it('fails closed when the budget cannot be read: no refund is sent', async () => {
-  mockBudget.reserve.mockImplementationOnce(async () => { throw new Error('down'); });
-  const r = await withdrawStake('builder-1', 50_000_000n);
-  expect(r).toMatchObject({ ok: false, error: 'owner_budget_not_checked' });
-  expect(refunds).toBe(0);
-});
-
-it('a refund that was not sent releases the hold and writes no debit', async () => {
-  refundWith({ initiated: false, stub: false, amount: '50000000', note: 'rpc refused' });
-  const r = await withdrawStake('builder-1', 50_000_000n);
-  expect(r.ok).toBe(false);
-  expect(mockOrder).toEqual(['reserve', 'refund', 'finish:released']);
-});
-
-it('a refund that WAS sent but could not be recorded keeps the hold counting (unknown)', async () => {
-  mockBudget.completeWithdrawal.mockImplementationOnce(async () => { mockOrder.push('complete'); throw new Error('db down'); });
-  const r = await withdrawStake('builder-1', 50_000_000n);
-  expect(r.ok).toBe(false);
-  expect(mockOrder).toEqual(['reserve', 'refund', 'complete', 'finish:unknown']);
-});
-
-it('a refund that was broadcast but is unconfirmed is recorded as sent: the debit is written', async () => {
-  refundWith({ ...sent, unconfirmed: true, note: 'timeout' });
-  const r = await withdrawStake('builder-1', 50_000_000n);
-  expect(mockBudget.completeWithdrawal).toHaveBeenCalledWith('hold-1', 'builder-1', 50_000_000n, sent.txHash);
-  expect(r.refund?.unconfirmed).toBe(true);
-});
-
-it('every spelling of one builder id is the same account: one canonical id reaches the budget', async () => {
-  const id = '11111111-2222-4333-8444-555555555555';
-  await withdrawStake(`{${id.toUpperCase()}}`, 50_000_000n);
-  await withdrawStake(id.replace(/-/g, ''), 50_000_000n);
-  expect(mockBudget.reserve.mock.calls.map((c: any[]) => c[0])).toEqual([id, id]);
-});
-
-it('two spellings of one builder id share ONE withdrawal lock (no interleaving)', async () => {
-  const id = '11111111-2222-4333-8444-555555555555';
-  const log: string[] = [];
-  __setRefundInitiator(async () => {
-    log.push('start');
-    await new Promise((res) => setTimeout(res, 20));
-    log.push('end');
-    return sent;
+describe('enforce', () => {
+  it('writes the debit under the lock BEFORE the refund, then stamps it with the refund', async () => {
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(r.ok).toBe(true);
+    expect(mockBudget.beginWithdrawal).toHaveBeenCalledWith('builder-1', 50_000_000n);
+    expect(steps()).toEqual(['begin', 'refund', 'update:stake_deposits:withdrawn']);
+    expect(mockDb.updates[0]).toEqual({ row: { status: 'withdrawn', deposit_tx_hash: sent.txHash }, id: 'debit-1' });
+    expect(mockBudget.reserve).not.toHaveBeenCalled(); // no separate ledger hold
   });
-  await Promise.all([withdrawStake(id, 50_000_000n), withdrawStake(id.toUpperCase().replace(/-/g, ''), 50_000_000n)]);
-  expect(log).toEqual(['start', 'end', 'start', 'end']);
+
+  it('refuses when the stake backs agent spend: no debit, no refund', async () => {
+    mockBudget.beginWithdrawal.mockImplementationOnce(async () => ({ ok: false, debitId: null, funded: 100_000_000n, committed: 80_000_000n }) as any);
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(r).toMatchObject({ ok: false, error: 'stake_backs_agent_spend' });
+    expect(refunds).toBe(0);
+  });
+
+  it('fails closed when the budget cannot be read: no refund', async () => {
+    mockBudget.beginWithdrawal.mockImplementationOnce(async () => { throw new Error('down'); });
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(r).toMatchObject({ ok: false, error: 'owner_budget_not_checked' });
+    expect(refunds).toBe(0);
+  });
+
+  it('a refund that was not sent voids the debit', async () => {
+    refundWith({ initiated: false, stub: false, amount: '50000000', note: 'rpc refused' });
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(r.ok).toBe(false);
+    expect(steps()).toEqual(['begin', 'refund', 'update:stake_deposits:withdraw_failed']);
+    expect(mockDb.updates[0]).toEqual({ row: { amount: '0', status: 'withdraw_failed' }, id: 'debit-1' });
+  });
+
+  it('a refund that was broadcast but is unconfirmed keeps the debit (stamped with its hash)', async () => {
+    refundWith({ ...sent, unconfirmed: true, note: 'timeout' });
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(steps()).toEqual(['begin', 'refund', 'update:stake_deposits:withdrawn']);
+    expect(r.refund?.unconfirmed).toBe(true);
+  });
 });
 
-it('with the mode off, the debit is written BEFORE the refund and stamped after it', async () => {
-  mockMode = 'off';
-  await withdrawStake('builder-1', 50_000_000n);
-  expect(mockBudget.completeWithdrawal).not.toHaveBeenCalled();
-  expect(mockOrder.filter((s) => s !== 'insert:stake_authority_snapshots')).toEqual(['insert:stake_deposits', 'refund', 'update:stake_deposits:withdrawn']);
+describe('off', () => {
+  it('writes the pending debit BEFORE the refund and stamps it after', async () => {
+    mockMode = 'off';
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(r.ok).toBe(true);
+    expect(mockBudget.beginWithdrawal).not.toHaveBeenCalled();
+    expect(steps()).toEqual(['insert:stake_deposits', 'refund', 'update:stake_deposits:withdrawn']);
+  });
+
+  it('if the pending debit cannot be written, NO refund is attempted', async () => {
+    mockMode = 'off';
+    mockDb.insertError = { message: 'db down' };
+    const r = await withdrawStake('builder-1', 50_000_000n);
+    expect(r.ok).toBe(false);
+    expect(refunds).toBe(0);
+  });
 });
 
-it('with the mode off, no hold is taken', async () => {
-  mockMode = 'off';
-  const r = await withdrawStake('builder-1', 50_000_000n);
-  expect(r.ok).toBe(true);
-  expect(mockBudget.reserve).not.toHaveBeenCalled();
-  expect(mockBudget.finish).not.toHaveBeenCalled();
+describe('every spelling of one builder id', () => {
+  const id = '11111111-2222-4333-8444-555555555555';
+
+  it('reaches the budget as one canonical id', async () => {
+    await withdrawStake(`{${id.toUpperCase()}}`, 50_000_000n);
+    await withdrawStake(id.replace(/-/g, ''), 50_000_000n);
+    expect(mockBudget.beginWithdrawal.mock.calls.map((c: any[]) => c[0])).toEqual([id, id]);
+  });
+
+  it('shares ONE withdrawal lock (no interleaving)', async () => {
+    const log: string[] = [];
+    __setRefundInitiator(async () => {
+      log.push('start');
+      await new Promise((res) => setTimeout(res, 20));
+      log.push('end');
+      return sent;
+    });
+    await Promise.all([withdrawStake(id, 50_000_000n), withdrawStake(id.toUpperCase().replace(/-/g, ''), 50_000_000n)]);
+    expect(log).toEqual(['start', 'end', 'start', 'end']);
+  });
 });

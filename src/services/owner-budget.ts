@@ -55,10 +55,11 @@ export interface OwnerBudgetStore {
   /** Shadow mode: a spend that went through without a reservation. */
   recordSettled(builderId: string, agentId: string, amount: bigint, txHash: string): Promise<void>;
   /**
-   * A withdrawal whose refund was sent: release its hold AND write the debit row in one
-   * transaction (complete_stake_withdrawal), so committed never exceeds funded. Throws on failure.
+   * Start a real stake withdrawal BEFORE its refund (begin_stake_withdrawal): under the per-owner
+   * lock, refuse unless funded - amount still covers committed agent spend, else write the pending
+   * debit row and return its id. That row is the hold and the refund record at once. Throws on failure.
    */
-  completeWithdrawal(holdId: string, builderId: string, amount: bigint, refundTxHash: string): Promise<void>;
+  beginWithdrawal(builderId: string, amount: bigint): Promise<{ ok: boolean; debitId: string | null; funded: bigint; committed: bigint }>;
 }
 
 const big = (v: unknown): bigint => BigInt(String(v ?? 0));
@@ -110,14 +111,12 @@ export const supabaseOwnerBudget: OwnerBudgetStore = {
     if (error) throw new Error(`owner_spend_ledger insert failed: ${error.message}`);
   },
 
-  async completeWithdrawal(holdId, builderId, amount, refundTxHash) {
-    const { error } = await db.rpc('complete_stake_withdrawal', {
-      p_hold: holdId,
-      p_builder: builderId,
-      p_amount: amount.toString(),
-      p_tx_hash: refundTxHash,
-    });
-    if (error) throw new Error(`complete_stake_withdrawal failed: ${error.message}`);
+  async beginWithdrawal(builderId, amount) {
+    const { data, error } = await db.rpc('begin_stake_withdrawal', { p_builder: builderId, p_amount: amount.toString() });
+    if (error) throw new Error(`begin_stake_withdrawal failed: ${error.message}`);
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error('begin_stake_withdrawal returned no row');
+    return { ok: row.ok === true, debitId: row.debit_id ?? null, funded: big(row.funded), committed: big(row.committed) };
   },
 };
 
