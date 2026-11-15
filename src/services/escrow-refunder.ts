@@ -25,6 +25,27 @@ import { ethers } from 'ethers';
 import { config } from '../config';
 import { BASE_SEPOLIA_CHAIN_ID } from './testnet-only';
 import type { RefundInitiation } from './stake-vault';
+import { revertedReceipt } from './agent-spend';
+
+/**
+ * The refund transaction was BROADCAST and then the wait for its receipt failed (a timeout, a
+ * dropped RPC). It may have moved USDC. escrowRefund reports it as initiated + unconfirmed, never
+ * as "did not happen": before this, a broadcast refund whose wait threw was reported as not sent,
+ * so no debit row was written and the same stake could be withdrawn again from the shared escrow
+ * (found reviewing #1550).
+ */
+export class RefundBroadcastUnconfirmed extends Error {
+  constructor(readonly txHash: string, detail: string) {
+    super(`refund ${txHash} was broadcast but its outcome is unknown: ${detail}`);
+    this.name = 'RefundBroadcastUnconfirmed';
+  }
+}
+
+/** After broadcast, only a receipt proving status 0 means no USDC moved; anything else may have. */
+export function refundWaitFailure(e: unknown, txHash: string): Error {
+  if (revertedReceipt(e)) return new Error(`refund ${txHash} reverted on-chain (status 0)`);
+  return new RefundBroadcastUnconfirmed(txHash, e instanceof Error ? e.message.split('\n')[0] ?? '' : String(e));
+}
 
 const ERC20_ABI = ['function transfer(address to, uint256 value) returns (bool)'];
 const ERC20_BALANCE_ABI = ['function balanceOf(address owner) view returns (uint256)'];
@@ -81,8 +102,15 @@ async function realSender(to: string, amount: bigint): Promise<{ txHash: string 
   // getFunction returns a defined ContractMethod (satisfies noUncheckedIndexedAccess,
   // which makes `usdc.transfer` typed as possibly-undefined).
   const tx = await usdc.getFunction('transfer')(to, amount);
-  const receipt = await tx.wait(Math.max(1, config.stakeMinConfirmations));
-  if (!receipt || receipt.status !== 1) throw new Error('refund tx not confirmed');
+  // From here the transfer is on the wire.
+  let receipt;
+  try {
+    receipt = await tx.wait(Math.max(1, config.stakeMinConfirmations));
+  } catch (e: unknown) {
+    throw refundWaitFailure(e, tx.hash);
+  }
+  if (receipt?.status === 0) throw new Error(`refund ${tx.hash} reverted on-chain (status 0)`);
+  if (!receipt || receipt.status !== 1) throw new RefundBroadcastUnconfirmed(tx.hash, `no confirmed receipt (status ${receipt?.status ?? 'none'})`);
   return { txHash: tx.hash };
 }
 
@@ -247,6 +275,9 @@ export async function escrowRefund(
     return { initiated: true, stub: false, amount: amount.toString(), to, txHash };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (e instanceof RefundBroadcastUnconfirmed) {
+      return { initiated: true, stub: false, unconfirmed: true, amount: amount.toString(), to, txHash: e.txHash, note: msg };
+    }
     return refused(amount, to, `escrow refund failed: ${msg}`);
   }
 }

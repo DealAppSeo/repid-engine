@@ -241,9 +241,27 @@ export interface RefundInitiation {
   to?: string;                 // builder payout address
   note?: string;
   txHash?: string;             // the real escrow->builder refund tx, only on a broadcast send
+  /**
+   * The refund was BROADCAST but its outcome is unknown (the receipt wait failed). It may have
+   * moved USDC, so it is handled as sent: the debit row is written and the stake cannot be
+   * withdrawn a second time from the shared escrow. Reconcile against the chain.
+   */
+  unconfirmed?: boolean;
 }
 
-export async function withdrawStake(builderId: string, amount: bigint): Promise<WithdrawResult> {
+/** Any spelling Postgres accepts for a uuid (no hyphens, braces, upper case) in one canonical form. */
+export function canonicalUuid(id: string): string | null {
+  const s = String(id).replace(/[{}-]/g, '').toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(s)) return null;
+  return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`;
+}
+
+export async function withdrawStake(rawBuilderId: string, amount: bigint): Promise<WithdrawResult> {
+  // One spelling per account, before the per-builder lock or any query: Postgres resolves an id
+  // without hyphens, in braces or in upper case to the same builder, and the in-process withdrawal
+  // lock compares strings, so two spellings took two locks and both refunded one stake from the
+  // shared escrow (Strix on #1550). A non-uuid id is left as it is; no builder row matches it.
+  const builderId = canonicalUuid(rawBuilderId) ?? rawBuilderId;
   // Block if any agent under this builder has open bets.
   // (One-way valve: bets must resolve before stake can move — applies in BOTH
   // simulated and real modes.)
@@ -388,6 +406,7 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
         refund_stub: refund.stub,
         refund_to: refund.to,
         refund_tx_hash: refund.txHash ?? null,
+        refund_unconfirmed: refund.unconfirmed === true,
       },
     });
     return { ok: true, total_active_stake: newTotal.toString(), authority_after: auth.authority.toString(), refund };

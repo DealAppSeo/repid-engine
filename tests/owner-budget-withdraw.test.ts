@@ -93,6 +93,33 @@ it('a refund that WAS sent but could not be recorded keeps the hold counting (un
   expect(mockOrder).toEqual(['reserve', 'refund', 'complete', 'finish:unknown']);
 });
 
+it('a refund that was broadcast but is unconfirmed is recorded as sent: the debit is written', async () => {
+  refundWith({ ...sent, unconfirmed: true, note: 'timeout' });
+  const r = await withdrawStake('builder-1', 50_000_000n);
+  expect(mockBudget.completeWithdrawal).toHaveBeenCalledWith('hold-1', 'builder-1', 50_000_000n, sent.txHash);
+  expect(r.refund?.unconfirmed).toBe(true);
+});
+
+it('every spelling of one builder id is the same account: one canonical id reaches the budget', async () => {
+  const id = '11111111-2222-4333-8444-555555555555';
+  await withdrawStake(`{${id.toUpperCase()}}`, 50_000_000n);
+  await withdrawStake(id.replace(/-/g, ''), 50_000_000n);
+  expect(mockBudget.reserve.mock.calls.map((c: any[]) => c[0])).toEqual([id, id]);
+});
+
+it('two spellings of one builder id share ONE withdrawal lock (no interleaving)', async () => {
+  const id = '11111111-2222-4333-8444-555555555555';
+  const log: string[] = [];
+  __setRefundInitiator(async () => {
+    log.push('start');
+    await new Promise((res) => setTimeout(res, 20));
+    log.push('end');
+    return sent;
+  });
+  await Promise.all([withdrawStake(id, 50_000_000n), withdrawStake(id.toUpperCase().replace(/-/g, ''), 50_000_000n)]);
+  expect(log).toEqual(['start', 'end', 'start', 'end']);
+});
+
 it('with the mode off, the old single debit insert is used', async () => {
   mockMode = 'off';
   await withdrawStake('builder-1', 50_000_000n);

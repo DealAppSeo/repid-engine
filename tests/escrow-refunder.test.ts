@@ -31,6 +31,8 @@ import {
   __setEscrowSender,
   escrowHealth,
   __setEscrowChainReader,
+  RefundBroadcastUnconfirmed,
+  refundWaitFailure,
 } from '../src/services/escrow-refunder';
 
 const BUILDER = 'builder-1';
@@ -81,6 +83,26 @@ describe('escrowRefund — fail-closed escrow -> builder refund', () => {
     expect(r.initiated).toBe(false);
     expect(r.stub).toBe(false);
     expect(sendCalled).toBe(false);
+  });
+
+  it('broadcast, then the receipt wait failed => INITIATED + unconfirmed, never "did not happen"', async () => {
+    // The USDC may already have left the shared escrow; reporting it as not sent let the same stake
+    // be withdrawn again (found reviewing #1550).
+    mockConfig.stakeEscrowSignerKey = 'present';
+    __setEscrowSender(async () => {
+      throw new RefundBroadcastUnconfirmed('0xabc', 'timeout');
+    });
+    const r = await escrowRefund(BUILDER, 5_000_000n, PAYEE);
+    expect(r).toMatchObject({ initiated: true, stub: false, unconfirmed: true, txHash: '0xabc' });
+  });
+
+  it('refundWaitFailure: only a status-0 receipt is a revert; anything else after broadcast is unconfirmed', () => {
+    expect(refundWaitFailure({ code: 'CALL_EXCEPTION', receipt: { status: 0, blockNumber: 1 } }, '0x1')).not.toBeInstanceOf(RefundBroadcastUnconfirmed);
+    for (const e of [{ code: 'TIMEOUT' }, new Error('socket hang up'), { code: 'TRANSACTION_REPLACED' }, null]) {
+      const out = refundWaitFailure(e, '0x2');
+      expect(out).toBeInstanceOf(RefundBroadcastUnconfirmed);
+      expect((out as RefundBroadcastUnconfirmed).txHash).toBe('0x2');
+    }
   });
 
   it('configured + send throws (signer != escrow / wrong chain) => REFUSED (fail closed)', async () => {
