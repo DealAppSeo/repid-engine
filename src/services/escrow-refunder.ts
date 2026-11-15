@@ -59,6 +59,18 @@ function nodeReply(e: unknown): string | null {
 }
 
 /**
+ * Which JSON-RPC request the failure belongs to. ethers v6 `broadcastTransaction` resolves
+ * eth_blockNumber and eth_chainId TOGETHER with eth_sendRawTransaction, so an error reply on one of
+ * the reads can sink the call while the send itself was accepted (Strix on #1550). Only a reply to
+ * the send proves the refund was refused.
+ */
+function failedMethod(e: unknown): string | null {
+  const x = e as { payload?: { method?: unknown } | null; info?: { payload?: { method?: unknown } | null } | null } | null;
+  const m = x?.payload?.method ?? x?.info?.payload?.method;
+  return typeof m === 'string' ? m : null;
+}
+
+/**
  * The broadcast call failed. A failure that carries the NODE'S OWN reply is the node refusing the
  * transaction, so nothing was sent; ethers turns most refusals ("transaction underpriced",
  * "intrinsic gas too low", "max fee per gas less than block base fee", "invalid sender") into
@@ -71,6 +83,10 @@ function nodeReply(e: unknown): string | null {
 export function broadcastFailure(e: unknown, txHash: string): Error {
   const code = (e as { code?: unknown } | null)?.code;
   const detail = e instanceof Error ? e.message.split('\n')[0] ?? '' : String(e);
+  // A reply proves a refusal only when it answers the SEND; a failed co-batched read proves nothing.
+  if (failedMethod(e) !== 'eth_sendRawTransaction') {
+    return new RefundBroadcastUnconfirmed(txHash, `broadcast outcome unknown (${failedMethod(e) ?? 'no request named'}): ${detail}`);
+  }
   if (typeof code === 'string' && NODE_REJECTED.has(code)) return new Error(`refund ${txHash} rejected by the node before broadcast (${code}): ${detail}`);
   const reply = nodeReply(e);
   if (reply !== null && !NODE_SAYS_IN_MEMPOOL.test(reply)) return new Error(`refund ${txHash} rejected by the node: ${reply}`);

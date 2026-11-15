@@ -38,6 +38,8 @@ import {
 } from '../src/services/escrow-refunder';
 
 const BUILDER = 'builder-1';
+/** The JSON-RPC request ethers names on an error from the send itself. */
+const SEND = { method: 'eth_sendRawTransaction', params: ['0xsigned'], id: 1 };
 const PAYEE = '0x2222222222222222222222222222222222222222';
 
 // A real, deterministic test keypair. The key is CONSTRUCTED (not a literal 64-hex
@@ -109,7 +111,7 @@ describe('escrowRefund — fail-closed escrow -> builder refund', () => {
 
   it('broadcastFailure: only an explicit node rejection is "not sent"; a lost reply is unconfirmed, with the hash', () => {
     for (const code of ['INSUFFICIENT_FUNDS', 'REPLACEMENT_UNDERPRICED']) {
-      expect(broadcastFailure({ code, message: 'rejected' }, '0x3')).not.toBeInstanceOf(RefundBroadcastUnconfirmed);
+      expect(broadcastFailure({ code, message: 'rejected', info: { payload: SEND } }, '0x3')).not.toBeInstanceOf(RefundBroadcastUnconfirmed);
     }
     for (const e of [{ code: 'TIMEOUT' }, { code: 'NETWORK_ERROR' }, { code: 'SERVER_ERROR' }, { code: 'NONCE_EXPIRED' }, new Error('socket hang up'), null]) {
       const out = broadcastFailure(e, '0x4');
@@ -121,17 +123,27 @@ describe('escrowRefund — fail-closed escrow -> builder refund', () => {
   it('broadcastFailure: a refusal carrying the node\'s own reply is "not sent"; "already known" and no reply are unconfirmed', () => {
     // Strix on #1550: ethers reports most refusals as UNKNOWN_ERROR with the node's reply attached.
     for (const e of [
-      { code: 'UNKNOWN_ERROR', error: { code: -32000, message: 'transaction underpriced' } },
-      { code: 'UNKNOWN_ERROR', error: { code: -32000, message: 'intrinsic gas too low' } },
-      { code: 'UNKNOWN_ERROR', info: { error: { code: -32000, message: 'max fee per gas less than block base fee' } } },
+      { code: 'UNKNOWN_ERROR', error: { code: -32000, message: 'transaction underpriced' }, payload: SEND },
+      { code: 'UNKNOWN_ERROR', error: { code: -32000, message: 'intrinsic gas too low' }, payload: SEND },
+      { code: 'UNKNOWN_ERROR', info: { error: { code: -32000, message: 'max fee per gas less than block base fee' }, payload: SEND } },
     ]) {
       const out = broadcastFailure(e, '0x7');
       expect(out).toBeInstanceOf(Error);
       expect(out).not.toBeInstanceOf(RefundBroadcastUnconfirmed);
     }
-    expect(broadcastFailure({ code: 'UNKNOWN_ERROR', error: { message: 'already known' } }, '0x7')).toBeInstanceOf(RefundBroadcastUnconfirmed);
+    expect(broadcastFailure({ code: 'UNKNOWN_ERROR', error: { message: 'already known' }, payload: SEND }, '0x7')).toBeInstanceOf(RefundBroadcastUnconfirmed);
     expect(broadcastFailure({ code: 'TIMEOUT' }, '0x7')).toBeInstanceOf(RefundBroadcastUnconfirmed);
     expect(broadcastFailure({ code: 'SERVER_ERROR', info: { responseStatus: '502 Bad Gateway' } }, '0x7')).toBeInstanceOf(RefundBroadcastUnconfirmed);
+  });
+
+  it('broadcastFailure: an error on a CO-BATCHED read is not a refusal of the send (it may have been accepted)', () => {
+    // Strix on #1550: ethers resolves eth_blockNumber / eth_chainId together with the send.
+    for (const method of ['eth_blockNumber', 'eth_chainId']) {
+      const out = broadcastFailure({ code: 'UNKNOWN_ERROR', error: { code: -32005, message: 'limit exceeded' }, payload: { method } }, '0x8');
+      expect(out).toBeInstanceOf(RefundBroadcastUnconfirmed);
+    }
+    // ...and a named rejection code with no request named is not trusted either.
+    expect(broadcastFailure({ code: 'INSUFFICIENT_FUNDS' }, '0x8')).toBeInstanceOf(RefundBroadcastUnconfirmed);
   });
 
   it('refundWaitFailure: a replacement is settled by its proof, not assumed to have landed', () => {
