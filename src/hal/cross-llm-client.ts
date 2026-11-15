@@ -122,11 +122,12 @@ function resolveBoundaryEmbeddingClient(openaiKey: string): EmbeddingClient | nu
   const base = localLlmBaseUrl();
   if (base && isLocalHost(base)) {
     const endpoint = toEmbeddingsEndpoint(base);
-    // openaiKey may be empty for a keyless local server; OpenAIEmbeddingClient sends it
-    // as a Bearer either way. The endpoint is LOCAL, so the egress assertion passes.
+    // The local host gets LOCAL_LLM_API_KEY, never the operator's OpenAI key (Strix on #1553: this
+    // line used to pass `openaiKey`). providerFetch strips any provider key to this origin as well.
+    // The endpoint is LOCAL, so the egress assertion passes.
     return new OpenAIEmbeddingClient(
       endpoint,
-      openaiKey || 'local',
+      process.env.LOCAL_LLM_API_KEY || 'local',
       process.env.LOCAL_EMBEDDING_MODEL || EMBEDDING_MODEL,
     );
   }

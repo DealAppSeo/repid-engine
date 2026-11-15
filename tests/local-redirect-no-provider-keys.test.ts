@@ -5,6 +5,7 @@
  */
 import { providerFetch } from '../src/egress/provider-fetch';
 import { buildFactCheckProviders, factCheck } from '../src/hal/fact-check';
+import { OpenAIEmbeddingClient } from '../src/hal/lib/cross-llm/embedding-client';
 
 const BASE = 'http://localhost:11434/v1';
 const FAKE = { GROQ_API_KEY: 'FAKE-groq-key-0001', DEEPSEEK_API_KEY: 'FAKE-deepseek-key-0002' };
@@ -52,6 +53,15 @@ describe('providerFetch credential presentation', () => {
     process.env.LOCAL_LLM_BASE_URL = BASE;
     await providerFetch('https://api.groq.com/openai/v1/chat/completions', { headers: { Authorization: 'Bearer FAKE-real-key' } });
     expect(sent[0]!.headers.get('authorization')).toBe('Bearer FAKE-real-key');
+  });
+});
+
+describe('embeddings under LOCAL_LLM_BASE_URL', () => {
+  it('sends the embedding client\'s key nowhere near the redirect host', async () => {
+    process.env.LOCAL_LLM_BASE_URL = BASE;
+    await new OpenAIEmbeddingClient(`${BASE}/embeddings`, 'FAKE-openai-key-0003').embedMany(['a']).catch(() => undefined);
+    expect(sent.filter((s) => s.url.startsWith(BASE)).length).toBe(1); // the instrument saw the request
+    expect(allHeaderText(sent[0]!)).not.toContain('FAKE-openai-key-0003');
   });
 });
 
