@@ -43,6 +43,7 @@ import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { pgQuery } from '../db/direct-pg';
 import { resolveProviderEndpoint } from './local-llm';
+import { providerFetch } from '../egress/provider-fetch';
 import { isRetiredModel } from './retired-models';
 import { assertPromptEgressAllowed, isLocalHost, onlyAttestationsLeave } from '../selfhost/egress-guard';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
@@ -121,11 +122,12 @@ function resolveBoundaryEmbeddingClient(openaiKey: string): EmbeddingClient | nu
   const base = localLlmBaseUrl();
   if (base && isLocalHost(base)) {
     const endpoint = toEmbeddingsEndpoint(base);
-    // openaiKey may be empty for a keyless local server; OpenAIEmbeddingClient sends it
-    // as a Bearer either way. The endpoint is LOCAL, so the egress assertion passes.
+    // The local host gets LOCAL_LLM_API_KEY, never the operator's OpenAI key (Strix on #1553: this
+    // line used to pass `openaiKey`). providerFetch strips any provider key to this origin as well.
+    // The endpoint is LOCAL, so the egress assertion passes.
     return new OpenAIEmbeddingClient(
       endpoint,
-      openaiKey || 'local',
+      process.env.LOCAL_LLM_API_KEY ?? '', // no published fallback (no-default-secrets); providerFetch presents the key
       process.env.LOCAL_EMBEDDING_MODEL || EMBEDDING_MODEL,
     );
   }
@@ -355,7 +357,7 @@ async function callOpenAICompat(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(endpoint, {
+    const res = await providerFetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -398,7 +400,7 @@ async function callAnthropicNative(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(endpoint, {
+    const res = await providerFetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

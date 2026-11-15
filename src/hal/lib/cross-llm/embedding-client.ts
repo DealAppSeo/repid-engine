@@ -5,6 +5,7 @@
 // the #380 "embedding leak" TODO: the assertion below throws before any cloud
 // embedding fetch, just like the prompt path in cross-llm-client.queryProvider.
 import { assertPromptEgressAllowed } from '../../../selfhost/egress-guard';
+import { providerFetch } from '../../../egress/provider-fetch';
 
 export interface EmbeddingClient {
     embed(text: string): Promise<number[]>;
@@ -68,7 +69,7 @@ export class OpenAIEmbeddingClient implements EmbeddingClient {
         // A missing timeout is how a single unresponsive provider hangs the whole
         // semantic-similarity layer. On timeout, fetch rejects and the caller
         // (FallbackEmbeddingClient) degrades to the local model — never an infinite wait.
-        const res = await fetch(this.endpoint, {
+        const res = await providerFetch(this.endpoint, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -102,7 +103,7 @@ export class VoyageEmbeddingClient implements EmbeddingClient {
     async embedMany(texts: string[]): Promise<number[][]> {
         // DATA-LOCALITY: Voyage is always a cloud host — refuse under the boundary.
         assertPromptEgressAllowed('https://api.voyageai.com/v1/embeddings', 'embedding');
-        const res = await fetch('https://api.voyageai.com/v1/embeddings', {
+        const res = await providerFetch('https://api.voyageai.com/v1/embeddings', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

@@ -27,6 +27,7 @@ import crypto from 'crypto';
 // to a local server; ONLY_ATTESTATIONS_LEAVE refuses any remaining cloud prompt egress. Both are
 // default-OFF: unset → hosted behavior byte-identical.
 import { resolveProviderEndpoint } from './local-llm';
+import { providerFetch } from '../egress/provider-fetch';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
 import { gateOpenRouterModel, gateZaiModel, gateGeminiUnderHold, halAllowPaid } from './hal-free-gate';
 import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
@@ -695,12 +696,12 @@ export function parseProviderResponse(cfg: FactCheckProviderCfg, data: any): { c
  */
 async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal: AbortSignal): Promise<Response> {
   const headers = providerHeaders(cfg);
-  let res = await fetch(cfg.endpoint, { method: 'POST', headers, body, signal });
+  let res = await providerFetch(cfg.endpoint, { method: 'POST', headers, body, signal });
   if (res.status === 429) {
     const ra = Number(res.headers?.get?.('retry-after'));
     const waitMs = Math.min(3000, (Number.isFinite(ra) && ra > 0 ? ra * 1000 : 800) + Math.floor(Math.random() * 400));
     await new Promise((r) => setTimeout(r, waitMs));
-    res = await fetch(cfg.endpoint, { method: 'POST', headers, body, signal });
+    res = await providerFetch(cfg.endpoint, { method: 'POST', headers, body, signal });
   }
   return res;
 }
