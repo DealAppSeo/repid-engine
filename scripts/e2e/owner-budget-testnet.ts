@@ -6,6 +6,13 @@
  *   agent2 spends 0.6S                          -> 409 over_owner_budget, nothing signed
  *   agent1 and agent2 each ask 0.3S AT ONCE      -> exactly 1 sent, 1 refused (only 0.4S was left)
  *   dry run                                      -> 0.1S remaining
+ * Stake mode (the default) then proves the refusals a money path must have, each on the real route:
+ *   the owner's signed spend limit, sent again    -> refused `replayed` (3c)
+ *   the same stake deposit, claimed again         -> refused as a duplicate; still exactly S left (4b)
+ *   agent1's limit set to 0, then a real spend    -> 409 over_agent_limit, nothing sent (9a)
+ *   agent2 unbound by the owner, then a real spend -> 403 not_bound, nothing sent (9b)
+ *   the owner withdraws the 0.1S left             -> refund escrow -> owner, checked on the chain (10a)
+ *   the owner withdraws 0.1S again                -> refused stake_backs_agent_spend, no refund (10b)
  *
  * SPEND_SOURCE (this script's env, default stake) is what the ENGINE's AGENT_SPEND_SOURCE must be;
  * the run stops before any USDC moves if the engine says otherwise.
@@ -27,6 +34,8 @@
  *   optional: STAKE_MIN_CONFIRMATIONS (default 1), BASE_SEPOLIA_RPC_URL
  * DATABASE: supabase/migrations/20261114200000_owner_spend_ledger.sql must be applied (owner_spend_ledger,
  * owner_funded_stake, reserve_owner_spend). Without it every budget read answers 503 owner_budget_not_checked.
+ * Stake mode also needs supabase/migrations/20261115120000_agent_spend_limits.sql (agent_spend_limits,
+ * reserve_agent_stake_spend); without it step 3b stops with limit_not_recorded, before any USDC moves.
  *
  * ORDER. Approvals and gas (steps 5, 6) run BEFORE the stake (step 4). The only engine read of the
  * shared budget is a spend dry run, and it answers only once an agent has a cap and gas
@@ -83,7 +92,7 @@ const HELP = `owner-budget-testnet: drive the shared owner budget end to end on 
   npx ts-node scripts/e2e/owner-budget-testnet.ts [--plan | --execute] --out <file.json>
 
   --plan      (default) read-only checks and the steps it would take. Sends nothing.
-  --execute   run it: stake mode 1 owner tx + 2 escrow-paid spends; wallet mode 5 owner txs + 2 agent spends, at most.
+  --execute   run it: stake mode 1 owner tx + 2 escrow-paid spends + 1 refund; wallet mode 5 owner txs + 2 agent spends, at most.
   --out       required. Where the JSON record goes.
 
 Env: OWNER_PRIVATE_KEY, STAKE_ESCROW_ADDRESS, PAYEE_ADDRESS (required);
@@ -134,7 +143,7 @@ const ENGINE = env('ENGINE_URL', 'https://repid-engine-production.up.railway.app
 const RPC = env('RPC_URL', 'https://sepolia.base.org');
 
 interface Resp { status: number; body: any }
-async function http(method: 'GET' | 'POST', path: string, opts: { body?: unknown; headers?: Record<string, string> } = {}): Promise<Resp> {
+async function http(method: 'GET' | 'POST' | 'DELETE', path: string, opts: { body?: unknown; headers?: Record<string, string> } = {}): Promise<Resp> {
   const res = await fetch(ENGINE + path, {
     method,
     headers: { ...(opts.body === undefined ? {} : { 'content-type': 'application/json' }), ...(opts.headers ?? {}) },
@@ -236,23 +245,35 @@ async function run(execute: boolean): Promise<void> {
     `2   POST /api/v1/agents/register x2 (${prefix}-<utc>-1, -2) -> agent id and key`,
     `2b  POST /api/v1/agents/<agent1>/spend, unbound -> must refuse not_bound (proves AGENT_SPEND_ENABLED; nothing can send)`,
     `3   GET /api/v1/human/bind/message + POST /api/v1/human/bind, x2 -> both bound to the owner as builder`,
-    ...(fromStake ? [`3b  POST /api/v1/agents/<id>/spend-limit x2, owner-signed (no gas) -> each agent may spend ${usdc(s)}; limits sum to ${usdc(2n * s)}`] : []),
+    ...(fromStake ? [
+      `3b  POST /api/v1/agents/<id>/spend-limit x2, owner-signed (no gas) -> each agent may spend ${usdc(s)}; limits sum to ${usdc(2n * s)}`,
+      `3c  agent1's signed limit from 3b sent again -> must refuse replayed`,
+    ] : []),
     ...(fromStake ? [] : [
       `5   USDC.approve(agent wallet, ${usdc(s)}) x2            [2 tx, owner] caps sum to ${usdc(2n * s)}`,
       `6   send up to ${ethers.formatEther(topup)} ETH to each agent wallet [up to 2 tx, owner]`,
     ]),
     `R   dry run agent1 ${usdc(a1)} -> engine spends from ${source}; shared budget left must be 0 (stake next) or ${usdc(s)} (reuse)`,
     `4   USDC.transfer(escrow, ${usdc(s)}) + POST /api/v1/stake/deposit [1 tx, owner]`,
+    `4b  the same deposit claimed again -> must refuse as a duplicate; still exactly ${usdc(s)} left`,
     `7a  agent1 spends ${usdc(a1)} -> ok + tx                [1 tx, ${payer}]`,
     `7b  agent2 spends ${usdc(a1)} -> 409 over_owner_budget, no tx (dry run first)`,
     `7c  agent1 and agent2 ask ${usdc(slice)} each AT ONCE, ${usdc(s - a1)} left -> 1 ok + 1 x 409 [1 tx, ${payer}]`,
     `7d  dry run ${usdc(left)} -> remaining ${usdc(left)}`,
-    ...(fromStake ? [`8   the owner's wallet USDC is unchanged by both spends (a spend costs the owner once)`] : []),
+    `    the payee received exactly ${usdc(a1 + slice)} across 7a and 7c`,
+    ...(fromStake ? [
+      `8   the owner's wallet USDC is unchanged by both spends (a spend costs the owner once)`,
+      `9a  agent1's limit set to 0 (no signature), then a real spend of ${usdc(left)} -> 409 over_agent_limit, no tx`,
+      `9b  owner unbinds agent2 (DELETE /api/v1/human/bind/<id>), then a real spend of ${usdc(left)} -> 403 not_bound, no tx`,
+      `10a owner-signed POST /api/v1/stake/withdraw ${usdc(left)} -> refund tx escrow -> owner [1 tx, the escrow], checked on chain`,
+      `10b the same withdrawal again, freshly signed -> must refuse stake_backs_agent_spend, no refund`,
+    ] : []),
   ];
   const ownerTxs = fromStake ? 1 : 5;
+  const engineTxs = fromStake ? 3 : 2;
   record.planned_steps = steps;
-  record.onchain_tx_max = { owner_signed: ownerTxs, engine_signed: 2, total: ownerTxs + 2 };
-  console.log(`\nSteps:\n  ${steps.join('\n  ')}\nOn-chain transactions: at most ${ownerTxs + 2} (${ownerTxs} signed by the owner, 2 by ${fromStake ? 'the escrow' : 'agent wallets'} through the engine).\n`);
+  record.onchain_tx_max = { owner_signed: ownerTxs, engine_signed: engineTxs, total: ownerTxs + engineTxs };
+  console.log(`\nSteps:\n  ${steps.join('\n  ')}\nOn-chain transactions: at most ${ownerTxs + engineTxs} (${ownerTxs} signed by the owner, ${engineTxs} by ${fromStake ? 'the escrow' : 'agent wallets'} through the engine).\n`);
   if (problems.length) stop('preflight', problems.join(' | '));
   if (!execute) { log('plan', 'all read-only checks passed. Nothing was sent. Re-run with --execute.'); return; }
 
@@ -303,20 +324,22 @@ async function run(execute: boolean): Promise<void> {
   const why = (r: Resp) => `HTTP ${r.status}, code ${r.body?.code ?? r.body?.error ?? 'none'}${HINT[r.body?.code] ? ` - ${HINT[r.body.code]}` : ''}`;
   // Every engine-signed spend is checked on the chain itself, not taken from the engine's word.
   // wallet: the agent's wallet sends transferFrom(owner -> payee). stake: the escrow sends transfer(escrow -> payee).
-  const verifySpendTx = async (label: string, hash: string, sender: string, amount: bigint) => {
-    const from = fromStake ? escrow : W;
+  const verifyTransfer = async (label: string, hash: string, sender: string, from: string, to: string, amount: bigint, what: string) => {
     const rc = await provider.waitForTransaction(hash, 1, 180_000);
     if (!rc || rc.status !== 1) stop(label, `on-chain receipt for ${hash} is not status 1`, { status: rc?.status ?? null });
-    if (ethers.getAddress(rc.from) !== sender) stop(label, `${hash} was sent by ${rc.from}, not ${fromStake ? 'the escrow' : 'the agent wallet'} ${sender}`);
+    if (ethers.getAddress(rc.from) !== sender) stop(label, `${hash} was sent by ${rc.from}, not ${sender}`);
     const moved = rc.logs.some((l) => {
       if (ethers.getAddress(l.address) !== ethers.getAddress(USDC)) return false;
       let p: ethers.LogDescription | null;
       try { p = erc20.parseLog({ topics: [...l.topics], data: l.data }); } catch { return false; }
-      return p?.name === 'Transfer' && ethers.getAddress(p.args[0]) === from && ethers.getAddress(p.args[1]) === payee && p.args[2] === amount;
+      return p?.name === 'Transfer' && ethers.getAddress(p.args[0]) === from && ethers.getAddress(p.args[1]) === to && p.args[2] === amount;
     });
-    if (!moved) stop(label, `${hash} has no USDC Transfer of ${usdc(amount)} from the ${fromStake ? 'escrow' : 'owner'} to the payee`);
-    log(label, `on-chain: status 1, ${usdc(amount)} USDC ${fromStake ? 'escrow' : 'owner'} -> payee, sent by ${fromStake ? 'the escrow' : 'agent wallet'}`);
+    if (!moved) stop(label, `${hash} has no USDC Transfer of ${usdc(amount)} ${what}`);
+    log(label, `on-chain: status 1, ${usdc(amount)} USDC ${what}, sent by ${sender}`);
   };
+  const verifySpendTx = (label: string, hash: string, sender: string, amount: bigint) =>
+    verifyTransfer(label, hash, sender, fromStake ? escrow : W, payee, amount, `${fromStake ? 'escrow' : 'owner'} -> payee`);
+  const balanceOf = (a: string) => usdcR.getFunction('balanceOf')(a) as Promise<bigint>;
 
   // ── 1. account ── byok.ts:188-215: 503 {error:'disabled'} when the flag is off; 200 {created:false, account}
   //    or 201 {created:true, account:{id,address,created_at}}. Limiter 5/h/IP (index.ts:246-252, 523).
@@ -377,15 +400,24 @@ async function run(execute: boolean): Promise<void> {
   //     routes/agent-spend.ts POST /:id/spend-limit). S each, so the limits sum to 2S and only the shared
   //     budget holds the two agents to S.
   if (fromStake) {
+    let replayBody: unknown;
     for (const a of agents) {
       const nonce = ethers.hexlify(ethers.randomBytes(32));
       const expires_at = Math.floor(Date.now() / 1000) + 300;
       const value = { subject: a.id, action: 'spend.limit', params: paramsHash({ agent_id: a.id, limit_micro_usdc: s.toString() }), nonce, expiresAt: expires_at };
       const signature = await owner.signTypedData(OWNER_AUTH_DOMAIN, OWNER_AUTH_TYPES, value);
-      const r = await http('POST', `/api/v1/agents/${a.id}/spend-limit`, { headers: { 'x-api-key': a.key }, body: { limit_usdc: usdc(s), owner_authorization: { signature, nonce, expires_at } } });
+      const body = { limit_usdc: usdc(s), owner_authorization: { signature, nonce, expires_at } };
+      const r = await http('POST', `/api/v1/agents/${a.id}/spend-limit`, { headers: { 'x-api-key': a.key }, body });
       if (r.status !== 201 || r.body?.ok !== true) stop('3b-limit', `expected 201 ok setting ${a.name}'s limit: ${why(r)}`, r.body);
       log('3b-limit', `${a.name}: owner signed a spend limit of ${usdc(s)} USDC (a signature, no gas)`, r.body);
+      if (a === A1) replayBody = body;
     }
+    // ── 3c. replay ── agent1's approval from 3b, byte for byte, seconds later. owner-authorization.ts
+    //     checks expiry BEFORE the nonce, so this must run while the approval is still fresh, or the
+    //     answer would be `expired` and say nothing about replay.
+    const rp = await http('POST', `/api/v1/agents/${A1.id}/spend-limit`, { headers: { 'x-api-key': A1.key }, body: replayBody });
+    if (rp.status !== 403 || rp.body?.code !== 'replayed') stop('3c-replay', `expected 403 replayed for an owner approval used twice: ${why(rp)}`, rp.body);
+    refusal('3c the owner approval from 3b, sent again', rp.body.code);
   }
 
   // Steps 5 and 6 are the wallet path only: from stake there is no approval and the escrow pays the gas.
@@ -444,6 +476,13 @@ async function run(execute: boolean): Promise<void> {
       stop('4-stake', `expected a verified, non-simulated credit to builder ${builderId}, got ${d.status} ${d.body?.error ?? d.body?.message ?? ''}. The USDC is in escrow at ${hash}.`, d.body);
     }
     log('4-stake', `credited: ${usdc(s)} USDC, verified on-chain, authorized_by ${d.body.authorized_by}`, d.body);
+    // ── 4b. replay ── the same claim again: stake-vault.ts refuses a tx_hash that already backs a real
+    //     stake. The dry run after this branch must still read exactly S left, so a second credit shows.
+    const again = await http('POST', '/api/v1/stake/deposit', { body });
+    if (again.body?.ok !== false || !/duplicate tx_hash/.test(String(again.body?.error ?? ''))) {
+      stop('4b-replay', `expected the second claim of ${hash} to be refused as a duplicate, got ${again.status} ${again.body?.error ?? ''}`, again.body);
+    }
+    refusal('4b the same stake deposit, claimed again', again.body.error);
   } else if (r0 === s) {
     log('4-stake', `SKIPPED: ${usdc(s)} USDC of stake from an earlier run is already credited and unspent. No new stake tx.`);
   } else {
@@ -452,6 +491,7 @@ async function run(execute: boolean): Promise<void> {
 
   // stake mode: from here on, no spend may touch the owner's wallet (step 8 compares).
   const ownerUsdcBeforeSpends = (await usdcR.getFunction('balanceOf')(W)) as bigint;
+  const payeeBefore = await balanceOf(payee);
   const post = await spend(A1, a1, true);
   if (post.body?.ok !== true || post.body?.would_send !== true || remainingOf(post) !== s) stop('R-budget', `after the stake expected would_send with ${usdc(s)} left: ${why(post)}`, post.body);
   log('R-budget', `shared budget: ${usdc(s)} USDC left across both agents; their caps sum to ${usdc(2n * s)}`, post.body.owner_budget);
@@ -491,6 +531,10 @@ async function run(execute: boolean): Promise<void> {
   }
   for (const r of sent) await verifySpendTx('7c', r.tx_hash, fromStake ? escrow : order[rows.indexOf(r)]!.wallet, slice);
   log('7c', `race: 1 sent, 1 refused over_owner_budget`, rows);
+  const payeeAfter = await balanceOf(payee);
+  record.payee_usdc = { before_spends: usdc(payeeBefore), after_spends: usdc(payeeAfter) };
+  if (payeeAfter - payeeBefore !== a1 + slice) stop('7c', `the payee received ${usdc(payeeAfter - payeeBefore)} USDC, not ${usdc(a1 + slice)} (or another transfer to it ran at the same time; rerun to tell).`);
+  log('7c', `payee received exactly ${usdc(a1 + slice)} USDC across both spends`);
 
   // ── 7d. what is left ──
   const fin = await spend(A2, left, true);
@@ -504,6 +548,59 @@ async function run(execute: boolean): Promise<void> {
     record.owner_usdc = { before_spends: usdc(ownerUsdcBeforeSpends), after_spends: usdc(ownerUsdcAfter) };
     if (ownerUsdcAfter !== ownerUsdcBeforeSpends) stop('8-owner', `the owner's wallet moved from ${usdc(ownerUsdcBeforeSpends)} to ${usdc(ownerUsdcAfter)} USDC during the spends: a spend from stake must not touch it (or another transfer ran at the same time; rerun to tell).`);
     log('8-owner', `owner wallet unchanged at ${usdc(ownerUsdcAfter)} USDC across both spends: the escrow paid, so each spend cost the owner once`);
+
+    // ── 9a. revoke by limit ── agent1 could still spend what is left (control), then its limit is set to
+    //     0, which needs no signature (stopping an agent must not be harder than starting it). The real
+    //     request must refuse over_agent_limit and send nothing. Dry run first, as in 7b.
+    const ctl = await spend(A1, left, true);
+    if (ctl.body?.would_send !== true) stop('9a-revoke', `control: before the revoke agent1 should be able to spend ${usdc(left)}: ${why(ctl)}`, ctl.body);
+    const z = await http('POST', `/api/v1/agents/${A1.id}/spend-limit`, { headers: { 'x-api-key': A1.key }, body: { limit_usdc: '0' } });
+    if (z.status !== 201 || z.body?.ok !== true) stop('9a-revoke', `setting agent1's limit to 0: ${why(z)}`, z.body);
+    const dry9 = await spend(A1, left, true);
+    if (dry9.body?.code !== 'over_agent_limit') stop('9a-revoke', `after the revoke the dry run should refuse over_agent_limit: ${why(dry9)}`, dry9.body);
+    const r9a = await spend(A1, left, false);
+    if (r9a.status !== 409 || r9a.body?.code !== 'over_agent_limit' || r9a.body?.tx_hash) stop('9a-revoke', `after the revoke expected 409 over_agent_limit and no tx: ${why(r9a)}`, r9a.body);
+    refusal(`9a agent1 spends ${usdc(left)} after its limit was set to 0`, r9a.body.code);
+
+    // ── 9b. revoke by unbind ── 7d is the control (agent2 would send). The owner removes the binding
+    //     (byok.ts DELETE /human/bind/:agentId, wallet-signed); agent-spend.ts reads the binding on every
+    //     spend, so the real request must refuse not_bound and send nothing.
+    const unbindPath = `/api/v1/human/bind/${A2.id}`;
+    const ub = await http('DELETE', unbindPath, { headers: await walletHeaders('DELETE', unbindPath) });
+    if (ub.status !== 200 || ub.body?.ok !== true) stop('9b-revoke', `owner unbinding agent2: HTTP ${ub.status} ${ub.body?.error ?? ub.body?.detail ?? ''}`, ub.body);
+    const r9b = await spend(A2, left, false);
+    if (r9b.status !== 403 || r9b.body?.code !== 'not_bound' || r9b.body?.tx_hash) stop('9b-revoke', `after the unbind expected 403 not_bound and no tx: ${why(r9b)}`, r9b.body);
+    refusal(`9b agent2 spends ${usdc(left)} after the owner unbound it`, r9b.body.code);
+
+    // ── 10. withdraw ── POST /stake/withdraw is API-key gated (auth.ts); an agent key passes that gate but
+    //     not the route, which needs the owner's signature (action stake.withdraw over { builder_id, amount }).
+    const withdraw = async (amount: bigint) => {
+      const params = { builder_id: builderId, amount: amount.toString() };
+      const nonce = ethers.hexlify(ethers.randomBytes(32));
+      const expires_at = Math.floor(Date.now() / 1000) + 300;
+      const signature = await owner.signTypedData(OWNER_AUTH_DOMAIN, OWNER_AUTH_TYPES, { subject: builderId, action: 'stake.withdraw', params: paramsHash(params), nonce, expiresAt: expires_at });
+      return http('POST', '/api/v1/stake/withdraw', { headers: { 'x-api-key': A1.key }, body: { ...params, owner_authorization: { signature, nonce, expires_at } } });
+    };
+    // 10a: the 0.1S nobody spent comes back to the owner, checked on the chain and in the wallet.
+    const ownerBeforeW = await balanceOf(W);
+    const w1 = await withdraw(left);
+    const refundHash = w1.body?.refund?.txHash;
+    if (w1.status !== 200 || w1.body?.ok !== true || !ethers.isHexString(refundHash, 32)) stop('10a-withdraw', `expected ok with a refund tx: HTTP ${w1.status} ${w1.body?.error ?? ''} ${w1.body?.message ?? ''}`, w1.body);
+    txLink(`10a refund ${usdc(left)} USDC escrow -> owner`, refundHash);
+    await verifyTransfer('10a-withdraw', refundHash, escrow, escrow, W, left, 'escrow -> owner');
+    const ownerAfterW = await balanceOf(W);
+    if (ownerAfterW - ownerBeforeW !== left) stop('10a-withdraw', `the owner's wallet moved by ${usdc(ownerAfterW - ownerBeforeW)} USDC, not ${usdc(left)}`);
+    // 10b: the rest of the stake already paid the payee, so a second withdrawal must refund nothing.
+    //      Freshly signed, so the refusal is the ledger's (begin_stake_withdrawal), not the nonce's.
+    const w2 = await withdraw(left);
+    if (w2.body?.ok !== false || w2.body?.error !== 'stake_backs_agent_spend' || w2.body?.refund?.txHash) {
+      stop('10b-withdraw', `a second withdrawal of ${usdc(left)} should refuse stake_backs_agent_spend with no refund: HTTP ${w2.status} ${w2.body?.error ?? ''}`, w2.body);
+    }
+    refusal(`10b withdraw ${usdc(left)} again (the rest of the stake paid the payee)`, w2.body.error);
+    const ownerEnd = await balanceOf(W);
+    if (ownerEnd !== ownerAfterW) stop('10b-withdraw', `the owner's wallet moved after the refused withdrawal (${usdc(ownerAfterW)} -> ${usdc(ownerEnd)})`);
+    record.owner_usdc.after_withdraw = usdc(ownerEnd);
+    log('10', `owner got back ${usdc(left)} once; owner paid ${usdc(s - left)} net for ${usdc(s - left)} of agent spend`);
   }
 }
 
