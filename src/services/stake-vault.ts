@@ -21,6 +21,9 @@ import { verifyDeposit } from './deposit-verifier';
 import { escrowRefund } from './escrow-refunder';
 import { ownerBudgetMode, supabaseOwnerBudget } from './owner-budget';
 
+/** owner_spend_ledger.agent_id for a stake-withdrawal hold, which belongs to no agent. */
+export const WITHDRAWAL_HOLD_AGENT = '00000000-0000-0000-0000-000000000000';
+
 export { BUILDER_FLOOR, computeAuthority };
 
 // Per-builder withdrawal serialization (in-process). The engine runs a single
@@ -86,14 +89,15 @@ export async function depositStake(
   // REAL STAKING PATH (flag ON) — verified-deposit escrow model.
   // Requires a real on-chain tx_hash, verified on Base Sepolia, before we
   // record a REAL (is_simulated=false) stake. Rejects simulated/unverified/
-  // duplicate(replayed) tx_hashes.
+  // duplicate(replayed) tx_hashes. Every refusal says is_simulated: true: nothing on it was
+  // verified as real stake, and only the one success below may say false (Grok r5 on #1550).
   // -------------------------------------------------------------------------
   if (config.realStakingEnabled) {
     if (isSimulatedTxHash(txHash)) {
-      return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: false, error: 'real staking enabled: a real on-chain tx_hash is required' };
+      return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: true, verified: false, error: 'real staking enabled: a real on-chain tx_hash is required' };
     }
     if (!config.stakeEscrowAddress) {
-      return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: false, error: 'STAKE_ESCROW_ADDRESS not configured' };
+      return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: true, verified: false, error: 'STAKE_ESCROW_ADDRESS not configured' };
     }
 
     // Duplicate / replay guard: this tx_hash must not already back a REAL stake. Real rows only:
@@ -107,7 +111,7 @@ export async function depositStake(
       .eq('is_simulated', false)
       .limit(1);
     if (existing && existing.length > 0) {
-      return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: false, error: 'duplicate tx_hash: this deposit was already recorded' };
+      return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: true, verified: false, error: 'duplicate tx_hash: this deposit was already recorded' };
     }
 
     const v = await verifyDeposit({
@@ -119,7 +123,7 @@ export async function depositStake(
       fromAddress: lower,
     });
     if (!v.verified) {
-      return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: false, error: `deposit verification failed: ${v.reason ?? 'unknown'}` };
+      return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: true, verified: false, error: `deposit verification failed: ${v.reason ?? 'unknown'}` };
     }
 
     const { error: realInsErr } = await db.from('stake_deposits').insert({
@@ -136,9 +140,9 @@ export async function depositStake(
       // 23505 = stake_deposits_real_tx_hash_uniq: a concurrent claim of the same transfer got there
       // first. Same answer as the read-side guard above, which a race can slip past.
       if ((realInsErr as { code?: string }).code === '23505') {
-        return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: false, error: 'duplicate tx_hash: this deposit was already recorded' };
+        return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: true, verified: false, error: 'duplicate tx_hash: this deposit was already recorded' };
       }
-      return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: false, verified: true, error: realInsErr.message };
+      return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: true, verified: true, error: realInsErr.message };
     }
 
     const realTotal = await getCurrentStake(builder.id);
@@ -273,28 +277,43 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
     }
 
     // OWNER BUDGET: stake that backs agent spending already made or reserved stays put, or the
-    // owner's agents would have spent against collateral that left. Same invariant as
-    // reserve_owner_spend (src/services/owner-budget.ts).
-    // ponytail: not under reserve_owner_spend's advisory lock, so a reservation landing between
-    // this read and the debit could slip past. Harmless while refundInitiator is a stub (every real
-    // withdrawal is refused below); take the same lock in SQL when the refund is wired.
+    // owner's agents would have spent against collateral that left (same invariant as
+    // reserve_owner_spend, src/services/owner-budget.ts). In enforce mode the withdrawal HOLDS its
+    // amount through that same function, under the same per-owner lock, before the refund is sent,
+    // so a concurrent spend sees it as committed and cannot take it. The hold is released only
+    // after the debit row is written (funded drops first, so the budget is never overstated in
+    // between), or when the refund definitely did not happen. Anything unclear keeps it.
+    // This comment used to say every real withdrawal was refused because the refund was a stub.
+    // FALSE in production: the escrow signer is set and GET /api/v1/stake/escrow/health reports
+    // "a real escrow→builder refund can be broadcast" [MEASURED 2026-11-14].
     const budgetMode = ownerBudgetMode();
-    if (budgetMode !== 'off') {
+    let hold: string | null = null;
+    if (budgetMode === 'enforce') {
+      let r;
+      try {
+        r = await supabaseOwnerBudget.reserve(builderId, WITHDRAWAL_HOLD_AGENT, amount);
+      } catch {
+        return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'owner_budget_not_checked' };
+      }
+      if (!r.ok || !r.id) {
+        return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'stake_backs_agent_spend' };
+      }
+      hold = r.id;
+    } else if (budgetMode === 'shadow') {
       try {
         const s = await supabaseOwnerBudget.status(builderId);
         if (s.budget - amount < s.committed) {
-          if (budgetMode === 'enforce') {
-            return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'stake_backs_agent_spend' };
-          }
           console.warn(`[owner-budget] shadow: WOULD REFUSE withdrawal of ${amount} by builder ${builderId}: committed agent spend ${s.committed} of funded ${s.budget}`);
         }
       } catch (e: unknown) {
-        if (budgetMode === 'enforce') {
-          return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'owner_budget_not_checked' };
-        }
         console.warn(`[owner-budget] shadow: budget read failed for builder ${builderId}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
+    const endHold = (state: 'released' | 'unknown', txHash: string | null, why: string) =>
+      hold
+        ? supabaseOwnerBudget.finish(hold, state, txHash, why).catch((e: unknown) =>
+            console.error(`[owner-budget] withdrawal hold ${hold} could not be marked ${state}; it stays reserved and keeps counting: ${e instanceof Error ? e.message : String(e)}`))
+        : Promise.resolve();
 
     // Builder payout address (where the escrow refund is sent).
     const { data: builder } = await db
@@ -311,6 +330,7 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
     // while the USDC was never sent (funds stranded).
     const refund = await refundInitiator(builderId, amount, builder?.address ?? undefined);
     if (refund.stub || !refund.initiated) {
+      await endHold('released', null, 'withdrawal refused: the refund was not sent');
       return {
         ok: false,
         total_active_stake: total.toString(),
@@ -333,8 +353,12 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
       deposit_tx_hash: refund.txHash ?? `pending-refund:${Date.now()}`,
     });
     if (wErr) {
+      // The refund WAS sent but the debit row did not land: funded still reads high, so the hold
+      // must keep counting until someone reconciles this against the chain.
+      await endHold('unknown', refund.txHash ?? null, `refund sent, debit row failed: ${wErr.message}`);
       return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: wErr.message };
     }
+    await endHold('released', refund.txHash ?? null, 'withdrawn: debit row written');
 
     const newTotal = await getCurrentStake(builderId);
     const auth = await snapshotAuthority(builderId, newTotal);
