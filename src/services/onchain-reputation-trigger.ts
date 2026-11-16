@@ -25,7 +25,8 @@
 //       later — the async path is the built-in fallback queue.
 //   (c) IDEMPOTENT — skips if an erc8004_reputation_writes row already exists
 //       for this (agent, contract) pair, so a retried fulfillment never
-//       double-writes on-chain.
+//       double-writes on-chain; and a successful write closes its repid_events
+//       outbox row so FeedbackLoopWorker does not write the same event again.
 //
 // It does NOT hardcode a key. getReputationWriter() resolves the key from env
 // (ERC8004_REPUTATION_WRITER_KEY / ERC8004_MINTER_PRIVATE_KEY /
@@ -138,23 +139,20 @@ export async function maybeWriteOnChainReputation(
       return { attempted: false, reason: 'below_floor' };
     }
 
-    // (c) IDEMPOTENT — if we already wrote for this (agent, contract), stop.
-    // erc8004_reputation_writes has no contract_id column, so we thread the
-    // contract id through repid_event_id linkage when available, and also
-    // guard on the exact repid_event_id if one was passed.
-    if (input.repidEventId != null) {
-      const { data: prior } = await db
-        .from('erc8004_reputation_writes')
-        .select('id, tx_hash')
-        .eq('agent_id', agent.id)
-        .eq('repid_event_id', input.repidEventId)
-        .limit(1);
-      if (prior && prior.length > 0) {
-        console.log(
-          `[onchain-reputation-trigger] on-chain write already recorded for agent ${agent.agent_name} event ${input.repidEventId} (tx ${prior[0]!.tx_hash}); idempotent skip.`,
-        );
-        return { attempted: false, reason: 'already_written' };
-      }
+    // (c) IDEMPOTENT — if we already wrote for this (agent, contract), stop. contract_id has been a
+    // real column since 2026-08-01; until 2026-11-16 this comment said it did not exist and the check
+    // ran only when an event id was passed, so a write with no event id was never deduplicated.
+    const { data: prior } = await db
+      .from('erc8004_reputation_writes')
+      .select('id, tx_hash')
+      .eq('agent_id', agent.id)
+      .eq('contract_id', input.contractId)
+      .limit(1);
+    if (prior && prior.length > 0) {
+      console.log(
+        `[onchain-reputation-trigger] on-chain write already recorded for agent ${agent.agent_name} contract ${input.contractId} (tx ${prior[0]!.tx_hash}); idempotent skip.`,
+      );
+      return { attempted: false, reason: 'already_written' };
     }
 
     // (d) PAID FIRST. This runs at FULFIL time; the payment is broadcast later, at /satisfy. Until
@@ -211,8 +209,26 @@ export async function maybeWriteOnChainReputation(
       gas_used: Number.isFinite(gasUsedNum) ? gasUsedNum : (null as unknown as number),
       chain_id: writer.chainId,
       contract_address: writer.getContractAddress(),
+      // Without contract_id no receipt can prove which exchange caused this write (trust-receipt.ts
+      // joins on it). Row 57 on 2026-07-08 is the one write this path ever made, and it has none.
+      contract_id: input.contractId,
       ...(input.repidEventId != null ? { repid_event_id: input.repidEventId } : {}),
     } as any);
+
+    // Close the outbox row this write answered. Left open, FeedbackLoopWorker writes the same event
+    // a second time: MEASURED 2026-07-08, repid_events 1564 got two on-chain writes 4 s apart.
+    if (input.repidEventId != null) {
+      const { error: closeErr } = await db
+        .from('repid_events')
+        .update({ processed_at: new Date().toISOString() })
+        .eq('id', input.repidEventId);
+      if (closeErr) {
+        console.error(
+          `[onchain-reputation-trigger] wrote on chain but could not close outbox row ${input.repidEventId}; FeedbackLoopWorker may write it again:`,
+          closeErr.message ?? closeErr,
+        );
+      }
+    }
 
     // Fast-lookup denorm on the agent (mirrors FeedbackLoopWorker step 4).
     await db
