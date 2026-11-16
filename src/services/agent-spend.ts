@@ -288,3 +288,86 @@ export async function executeSpend(chain: SpendChain, checked: Extract<CheckOutc
     cap_after_usdc: after === null ? null : formatUsdc(after),
   };
 }
+
+/**
+ * WHAT AN UNBIND LEAVES ON CHAIN (R4, 2026-11-16).
+ *
+ * Unbinding writes `revoked_at` on the binding and nothing else. In AGENT_SPEND_SOURCE=wallet the
+ * owner gave the agent's wallet a USDC approval, and an ERC-20 approval changes only when the
+ * OWNER's wallet calls approve (or the spender uses it up). So the approval outlives the unbind.
+ * This server refuses every spend by an unbound agent (routes/agent-spend.ts, not_bound), but the
+ * agent wallet's key is still custodied here, so "nothing can spend it" would be a claim about this
+ * code, not about the chain. The unbind answer therefore states the live allowance, read from the
+ * chain, and how to end it. Stake mode has no approval, so it reads 0.
+ *
+ * A failed read is NOT_CHECKED, never "0". [V 2026-11-16, block 59404267: every owner -> agent
+ * wallet pair on record, the one revoked binding included, reads 0; the E2E runs used stake mode.]
+ */
+export type UnbindApproval =
+  | { checked: true; live: false; allowance_usdc: string; note?: string }
+  | { checked: true; live: true; allowance_usdc: string; agent_wallet: string; statement: string; how_to_end: string }
+  | { checked: false; reason: string };
+
+const UNBIND_READ_TIMEOUT_MS = 10_000;
+
+export async function approvalAfterUnbind(
+  read: Pick<SpendChain, 'chainId' | 'allowance'>,
+  owner: string | null | undefined,
+  agentWallet: string | null | undefined,
+): Promise<UnbindApproval> {
+  if (!agentWallet) return { checked: true, live: false, allowance_usdc: '0.0', note: 'This agent has no wallet, so no approval to it can exist.' };
+  if (!owner || !ethers.isAddress(owner) || !ethers.isAddress(agentWallet)) {
+    return { checked: false, reason: 'The owner or agent wallet on record is not an address, so the on-chain approval was not read.' };
+  }
+  let allowance: bigint;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`no answer in ${UNBIND_READ_TIMEOUT_MS} ms`)), UNBIND_READ_TIMEOUT_MS);
+    });
+    const [chainId, a] = await Promise.race([Promise.all([read.chainId(), read.allowance(owner, agentWallet)]), timeout]);
+    if (chainId !== SPEND_CHAIN_ID) return { checked: false, reason: `The RPC answered for chain ${chainId}, not Base Sepolia, so the approval was not read.` };
+    allowance = a;
+  } catch (e: unknown) {
+    // Never echo the RPC error (Strix on #1559): ethers puts the request URL in its message, and a
+    // provider URL can carry an API key (https://<provider>/v2/<key>). The text goes to the server log.
+    const msg = (e as Error)?.message ?? String(e);
+    console.error('[agent-spend] unbind approval read failed:', msg);
+    const why = /no answer in \d+ ms/.test(msg) ? 'the RPC did not answer in time' : 'the RPC read failed';
+    return { checked: false, reason: `Could not read the approval from the chain: ${why}. It may still be live.` };
+  } finally {
+    clearTimeout(timer);
+  }
+  if (allowance === 0n) return { checked: true, live: false, allowance_usdc: '0.0' };
+  const wallet = ethers.getAddress(agentWallet);
+  return {
+    checked: true,
+    live: true,
+    allowance_usdc: formatUsdc(allowance),
+    agent_wallet: wallet,
+    statement:
+      `Unbinding does not change your on-chain USDC approval. Your wallet still allows this agent's wallet (${wallet}) ` +
+      `to move up to ${formatUsdc(allowance)} USDC. This server refuses every spend by an unbound agent, but the approval ` +
+      `itself stays live on Base Sepolia until your wallet sets it to 0.`,
+    how_to_end: `From your wallet, call USDC.approve(${wallet}, 0) on Base Sepolia (USDC ${USDC_BASE_SEPOLIA}).`,
+  };
+}
+
+/**
+ * The unbind answer for the agent row as the route read it. Only a row READ with no wallet means no
+ * approval can exist. A read error, or NO row at all, is NOT_CHECKED (Grok r2 on #1559: a missing row
+ * used to reach approvalAfterUnbind as a null wallet and answer "no wallet, 0" without reading
+ * anything). The binding's FK cascades from repid_agents, so a missing row means the agent was deleted
+ * between the owner read and this one; its wallet's approval may still be live.
+ */
+export async function approvalForAgentRow(
+  read: Pick<SpendChain, 'chainId' | 'allowance'>,
+  owner: string | null | undefined,
+  row: { wallet_address?: string | null } | null | undefined,
+  readFailed: boolean,
+): Promise<UnbindApproval> {
+  if (readFailed || !row) {
+    return { checked: false, reason: "Could not read this agent's wallet, so the on-chain approval was not read. It may still be live." };
+  }
+  return approvalAfterUnbind(read, owner, row.wallet_address ?? null);
+}
