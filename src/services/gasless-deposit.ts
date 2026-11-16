@@ -60,12 +60,17 @@ export const MIN_GASLESS_DEPOSIT = 1_000_000n;
  * drains and push every withdrawal and payout behind them (Strix on #1558). Process-wide on purpose:
  * a per-address budget is bypassed by rotating addresses. A refused deposit is retried by the client.
  */
-export function createGaslessAdmission(maxPerMinute = 4): (nowMs: number) => boolean {
-  const recent: number[] = [];
-  return (nowMs) => {
-    while (recent.length > 0 && nowMs - recent[0]! >= 60_000) recent.shift();
+export function createGaslessAdmission(maxPerMinute = 4, maxPerPayer = 1): (nowMs: number, payer: string) => boolean {
+  const recent: Array<{ at: number; payer: string }> = [];
+  return (nowMs, payer) => {
+    while (recent.length > 0 && nowMs - recent[0]!.at >= 60_000) recent.shift();
     if (recent.length >= maxPerMinute) return false;
-    recent.push(nowMs);
+    // A per-payer bound ON TOP of the global one (Strix on #1558): one wallet can no longer spend the
+    // whole minute's budget on concurrent deposits the escrow then refuses. Rotating wallets still
+    // meets the global cap, and each wallet needs an account here and the USDC it signs for.
+    const key = payer.toLowerCase();
+    if (recent.filter((r) => r.payer === key).length >= maxPerPayer) return false;
+    recent.push({ at: nowMs, payer: key });
     return true;
   };
 }
@@ -87,7 +92,7 @@ export interface GaslessDeps {
   credit(wallet: string, amount: bigint, txHash: string): Promise<DepositResult>;
   now(): number;
   /** Admission to the escrow's send queue; see createGaslessAdmission. */
-  admit(nowMs: number): boolean;
+  admit(nowMs: number, payer: string): boolean;
 }
 
 export interface GaslessAnswer {
@@ -206,7 +211,7 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
     }
     // Admission AFTER every refusal, the in-lock re-check included, so a refused deposit never takes a
     // slot (Grok r3 on #1558). The escrow's send queue is shared with refunds and payouts.
-    if (!deps.admit(now * 1000)) {
+    if (!deps.admit(now * 1000, a.from)) {
       return refuse(429, 'escrow_busy', 'Too many gasless deposits are being submitted right now, so this one was not queued. Nothing was sent; retry in a minute.');
     }
     let txHash: string;

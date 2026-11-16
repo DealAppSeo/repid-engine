@@ -285,6 +285,14 @@ describe('gasless deposit (EIP-3009)', () => {
     }
   });
 
+  test('QUEUE, wired: a second deposit from the same wallet within the minute is 429 and is not sent', async () => {
+    const h = harness({ admit: createGaslessAdmission(4, 1) });
+    expect((await gaslessDeposit(await signed(), h.deps)).status).toBe(201);
+    const second = await gaslessDeposit(await signed(), h.deps);
+    expect(second).toMatchObject({ status: 429, body: { code: 'escrow_busy', sent: false } });
+    expect(h.relayed).toHaveLength(1);
+  });
+
   test('malformed input is refused', async () => {
     const h = harness();
     for (const body of [null, {}, { authorization: {}, signature: '0x' }, { ...(await signed()), signature: 'nope' }]) {
@@ -298,9 +306,18 @@ describe('createGaslessAdmission', () => {
   test('admits 4 a minute, process-wide; a minute later it admits again', () => {
     const admit = createGaslessAdmission(4);
     const t0 = 1_000_000;
-    expect([0, 1, 2, 3, 4].map((i) => admit(t0 + i * 1000))).toEqual([true, true, true, true, false]);
-    expect(admit(t0 + 59_999)).toBe(false);
-    expect(admit(t0 + 60_000)).toBe(true);
+    expect([0, 1, 2, 3, 4].map((i) => admit(t0 + i * 1000, `0xpayer${i}`))).toEqual([true, true, true, true, false]);
+    expect(admit(t0 + 59_999, '0xpayer9')).toBe(false);
+    expect(admit(t0 + 60_000, '0xpayer9')).toBe(true);
+  });
+
+  test('one payer gets one slot a minute, so one wallet cannot spend the whole budget (Strix on #1558)', () => {
+    const admit = createGaslessAdmission(4, 1);
+    const t0 = 2_000_000;
+    expect(admit(t0, '0xAbC')).toBe(true);
+    expect(admit(t0 + 1, '0xabc')).toBe(false); // same wallet, any letter case
+    expect(admit(t0 + 2, '0xdef')).toBe(true); // another payer still gets in
+    expect(admit(t0 + 60_000, '0xabc')).toBe(true);
   });
 });
 
