@@ -1,15 +1,59 @@
 import { Router, Request, Response } from 'express';
-import { x402Facilitator, X402_VERSION } from '../services/x402-facilitator';
+import {
+  x402Facilitator,
+  PaymentRequirements,
+  SettlementResponseV2,
+  paymentRequiredResponse,
+  normalizePaymentHeader,
+  acceptedMatches,
+  encodeX402Header,
+  PAYMENT_REQUIRED_HEADER,
+  PAYMENT_SIGNATURE_HEADER,
+  PAYMENT_RESPONSE_HEADER,
+} from '../services/x402-facilitator';
 import { repIdAttestationService } from '../services/repid-attestation';
 import { isPayableAddress } from '../services/payee-guard';
 import { db } from '../db';
 
 const router = Router();
 
+/**
+ * Every 402 that advertises `accepts` carries the x402 v2 challenge twice: base64 in the
+ * `PAYMENT-REQUIRED` header (the canonical v2 location, and what the official `@x402/*` client
+ * reads) and as the JSON body (v2 top level, v1 fields kept on each entry for current clients).
+ * Before 2026-11-16 there was no header, so a v2 client could not read the challenge at all.
+ */
+function sendPaymentRequired(
+  res: Response,
+  requirements: PaymentRequirements[],
+  error: string,
+  extraBody: Record<string, unknown> = {},
+) {
+  const challenge = paymentRequiredResponse(requirements, error, extraBody);
+  res.setHeader(PAYMENT_REQUIRED_HEADER, challenge.header);
+  return res.status(402).json(challenge.body);
+}
+
+/** v2 `PAYMENT-RESPONSE` (base64 SettlementResponse). The v1 `X-PAYMENT-RESPONSE` is set beside it, unchanged. */
+function setPaymentResponse(res: Response, settlement: SettlementResponseV2) {
+  res.setHeader(PAYMENT_RESPONSE_HEADER, encodeX402Header(settlement));
+}
+
 // SOPHIA trade analysis demo
 router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
   const { uuid } = req.params;
-  const xPaymentHeader = req.header('X-PAYMENT');
+  // x402 v2 clients send PAYMENT-SIGNATURE; v1 clients and everything we ship send X-PAYMENT.
+  // Two headers that disagree are refused (400, spec "Invalid Payment") rather than guessed between:
+  // settling one while the client believes it sent the other is the failure to avoid.
+  const paymentSignatureHeader = req.header(PAYMENT_SIGNATURE_HEADER);
+  const legacyPaymentHeader = req.header('X-PAYMENT');
+  if (paymentSignatureHeader && legacyPaymentHeader && paymentSignatureHeader !== legacyPaymentHeader) {
+    return res.status(400).json({
+      error: 'conflicting_payment_headers',
+      message: 'PAYMENT-SIGNATURE and X-PAYMENT are both present and differ; send one.',
+    });
+  }
+  const xPaymentHeader = paymentSignatureHeader || legacyPaymentHeader;
 
   // 1. Fetch agent (e.g. SOPHIA) to get wallet address
   // Use maybeSingle() to handle non-UUID strings gracefully (though auth-bypass check might already filter)
@@ -47,21 +91,25 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
 
   // 2. Check for payment header
   if (!xPaymentHeader) {
-    return res.status(402).json({
-      x402Version: X402_VERSION,
-      accepts: requirements,
-      error: 'Payment required'
-    });
+    return sendPaymentRequired(res, requirements, 'Payment required');
   }
 
+  // 2b. An official x402 PaymentPayload nests the signature and authorization under `payload`;
+  //     the facilitator reads the flat shape our own clients send. Normalizing moves no value:
+  //     amount, payee, asset and network in the facilitator request come from `requirements`.
+  const payment = normalizePaymentHeader(xPaymentHeader);
+  if (payment.shape === 'v2' && !acceptedMatches(payment.accepted, requirements)) {
+    return sendPaymentRequired(res, requirements, 'Payment verification failed', {
+      reason: 'accepted_requirements_mismatch: the payload accepted terms this server did not advertise',
+    });
+  }
+  const paymentHeaderForFacilitator = payment.header;
+
   // 3. Verify payment via facilitator
-  const verifyResult = await x402Facilitator.verifyPayment(xPaymentHeader, requirements);
+  const verifyResult = await x402Facilitator.verifyPayment(paymentHeaderForFacilitator, requirements);
   if (!verifyResult.valid) {
-    return res.status(402).json({
-      x402Version: X402_VERSION,
-      accepts: requirements,
-      error: 'Payment verification failed',
-      reason: verifyResult.reason
+    return sendPaymentRequired(res, requirements, 'Payment verification failed', {
+      reason: verifyResult.reason,
     });
   }
 
@@ -70,14 +118,13 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
   if (callerAttestation) {
     const attestationResult = await repIdAttestationService.verifyAttestation(callerAttestation);
     if (!attestationResult.valid) {
-      return res.status(402).json({
-        x402Version: X402_VERSION,
-        accepts: requirements,
-        error: 'invalid_attestation',
-        reason: attestationResult.reason
+      return sendPaymentRequired(res, requirements, 'invalid_attestation', {
+        reason: attestationResult.reason,
       });
     }
   }
+
+  const settledNetwork = requirements[0]?.network ?? '';
 
   // 5. Settle payment FIRST — a resource server must not deliver the service
   //    (nor claim it settled) unless the on-chain settlement actually
@@ -85,37 +132,45 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
   //    completed), NOT 200 "settled" with an empty txHash.
   let txHash = '';
   try {
-    const settleResult = await x402Facilitator.settlePayment(xPaymentHeader, requirements);
+    const settleResult = await x402Facilitator.settlePayment(paymentHeaderForFacilitator, requirements);
     txHash = settleResult.txHash;
   } catch (e: any) {
     console.error('[x402-inbound] Settlement failed:', e.message);
     // Queue for out-of-band recovery, then tell the caller the truth: the
     // payment was NOT settled. Do not fall through to a 200 "settled".
+    // The recovery worker re-settles from payment_payload_b64 through the same
+    // facilitator decode, so it gets the normalized (flat) header.
     await x402Facilitator.queueFailure({
       direction: 'inbound',
       agent_id: agent.id,
-      payment_payload_b64: xPaymentHeader,
+      payment_payload_b64: paymentHeaderForFacilitator,
       payment_requirements: requirements,
       facilitator_response: { error: e.message }
     });
     res.setHeader('X-PAYMENT-RESPONSE', JSON.stringify({ status: 'settlement_failed', txHash: '' }));
-    return res.status(402).json({
-      x402Version: X402_VERSION,
-      accepts: requirements,
-      error: 'settlement_failed',
-      reason: e.message
+    setPaymentResponse(res, {
+      success: false,
+      errorReason: 'settlement_failed',
+      transaction: '',
+      network: settledNetwork,
+      payer: verifyResult.payer,
     });
+    return sendPaymentRequired(res, requirements, 'settlement_failed', { reason: e.message });
   }
 
   // Defensive: a facilitator that returns success but no tx hash is not a
   // real settlement — never emit "settled" with an empty txHash.
   if (!txHash) {
     res.setHeader('X-PAYMENT-RESPONSE', JSON.stringify({ status: 'settlement_failed', txHash: '' }));
-    return res.status(402).json({
-      x402Version: X402_VERSION,
-      accepts: requirements,
-      error: 'settlement_failed',
-      reason: 'facilitator returned no transaction hash'
+    setPaymentResponse(res, {
+      success: false,
+      errorReason: 'settlement_failed',
+      transaction: '',
+      network: settledNetwork,
+      payer: verifyResult.payer,
+    });
+    return sendPaymentRequired(res, requirements, 'settlement_failed', {
+      reason: 'facilitator returned no transaction hash',
     });
   }
 
@@ -171,6 +226,7 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
   const myAttestationB64 = Buffer.from(JSON.stringify(myAttestation)).toString('base64');
 
   res.setHeader('X-PAYMENT-RESPONSE', JSON.stringify({ status: 'settled', txHash }));
+  setPaymentResponse(res, { success: true, transaction: txHash, network: settledNetwork, payer: verifyResult.payer });
   res.setHeader('X-HYPERDAG-REPID-ATTESTATION', myAttestationB64);
 
   return res.status(200).json(analysis);
