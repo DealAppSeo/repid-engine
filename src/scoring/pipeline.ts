@@ -200,158 +200,6 @@ export function deriveHalDecision(hal_score: number, vetoed: boolean, comma_seve
   return 'clean';
 }
 
-/**
- * The HAL delta a QUORUM verdict would earn under this pipeline's gates, before decay and the clamp.
- * HAL_SCORE_GATE_MODE=shadow records it beside the live delta; nothing applies it.
- *
- * It copies the live chain in runScoreEvent, in order: decision-requires-quorum and the no-provider
- * reward floor (neutralize to 'flagged'), computeDelta, S-DRAIN (a penalty needs a quorum veto),
- * then the purpose weight. NOT copied: grounding abstain (it acts only on a proof-carrying answer
- * under HAL_GROUNDING_MODE=enforce). If you change that chain, change this, or the shadow table's
- * live-vs-quorum deltas stop agreeing on events where the live path already was the quorum.
- */
-export function quorumWouldBeDelta(
-  q: { hal_score: number; vetoed: boolean; mode: string | null; signals: Record<string, unknown>; rewardSuppressed: boolean },
-  gates: { decisionRequiresQuorum: boolean; penaltyRequiresQuorum: boolean; purposeWeight: number },
-  agent: { current_repid: number; tier: string; vesting_cliff_active: boolean },
-): { raw_decision: HALDecision; scoring_decision: HALDecision; quorum_met: boolean; hal_delta: number } {
-  const raw = deriveHalDecision(q.hal_score, q.vetoed, q.signals.comma_severity as string | null);
-  const providersUsed = Number(q.signals.providers_used ?? 0);
-  const count = process.env.HAL_QUORUM_FAMILY_AWARE !== 'false' ? Number(q.signals.families_used ?? providersUsed) : providersUsed;
-  const quorumMet = q.mode === 'fact-check' && count >= 2;
-  const rewardUnearned = q.rewardSuppressed && raw === 'clean';
-  const neutralized = (gates.decisionRequiresQuorum && !quorumMet && raw !== 'flagged') || rewardUnearned;
-  const scoring: HALDecision = neutralized ? 'flagged' : raw;
-  let d = computeDelta({
-    hal_score: q.hal_score,
-    hal_decision: scoring,
-    current_repid: agent.current_repid,
-    agent_tier: agent.tier,
-    vesting_cliff_active: agent.vesting_cliff_active,
-  }).delta_applied;
-  const caught = raw === 'vetoed' && (gates.penaltyRequiresQuorum ? quorumMet : true);
-  if (process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION !== 'false' && d < 0 && !caught) d = 0;
-  if (d !== 0 && gates.purposeWeight !== 1) d = d * gates.purposeWeight;
-  return { raw_decision: raw, scoring_decision: scoring, quorum_met: quorumMet, hal_delta: Math.round(d) };
-}
-
-/** HAL_SCORE_GATE_MODE=shadow. One hal_score_gate_shadow row per score event. Never touches the live row. */
-async function recordScoreGateShadow(a: {
-  scoreEventId: number;
-  input: ScoreEventInput;
-  agent: { current_repid: number; tier: string; vesting_cliff_active: boolean };
-  live: {
-    strictness: 1 | 2;
-    halMode: string | null;
-    decision: HALDecision;
-    scoringDecision: HALDecision;
-    hal_score: number;
-    halDelta: number;
-    signals: Record<string, unknown>;
-    rewardSuppressed: boolean;
-    error: string | null;
-  };
-  gates: { decisionRequiresQuorum: boolean; penaltyRequiresQuorum: boolean; purposeWeight: number };
-  providersFn: () => FactCheckProviderCfg[];
-}): Promise<void> {
-  const text = a.input.answer;
-  const domain = a.input.task_domain ?? 'finance';
-  const certainty = typeof a.input.certainty === 'number' ? a.input.certainty : 0.85;
-  const liveVerdict: HalVerdictLike = {
-    decision: a.live.scoringDecision,
-    hal_score: a.live.hal_score,
-    mode: a.live.halMode,
-    strictness: a.live.strictness,
-    signals: a.live.signals,
-  };
-  const liveReceipt = halVerdictReceiptId(text, liveVerdict);
-
-  let source: HalScoreGateShadowRow['quorum_source'];
-  let q: (HalVerdictLike & { vetoed: boolean; rewardSuppressed: boolean }) | null = null;
-  let reason: string | null = null;
-  let latency: number | null = null;
-
-  if (a.live.strictness >= 2) {
-    // The live path already was the quorum: no second call. Its delta is still recomputed below.
-    if (a.live.error) {
-      source = 'not_checked';
-      reason = 'live_quorum_threw';
-    } else {
-      source = 'live';
-      q = { ...liveVerdict, vetoed: a.live.decision === 'vetoed', rewardSuppressed: a.live.rewardSuppressed };
-    }
-  } else {
-    // Own namespace in the shared HAL cache: a public /hal/evaluate caller cannot fill this entry.
-    const ctxFp = crypto.createHash('sha256').update(JSON.stringify([domain, certainty])).digest('hex').slice(0, 16);
-    const cacheKey = `score-gate:s2:er1:c${ctxFp}`;
-    const t0 = Date.now();
-    try {
-      let r = await getCachedHalResult(text, cacheKey).catch(() => null);
-      source = r ? 'cache' : 'fresh';
-      if (!r) {
-        r = await halService.evaluate({
-          text,
-          context: { domain, certainty },
-          strictness: 2,
-          factCheckEarlyReturn: true,
-          providersFn: a.providersFn,
-        });
-        // A degraded answer is not cached: an outage must not pin "no quorum" on this text for the TTL.
-        if (r.mode === 'fact-check') void cacheHalResult(text, cacheKey, r).catch(() => undefined);
-      }
-      latency = Date.now() - t0;
-      q = {
-        decision: r.decision,
-        hal_score: Number.isFinite(r.hal_score) ? r.hal_score : 0.5,
-        mode: r.mode ?? null,
-        strictness: 2,
-        signals: (r.signals ?? {}) as Record<string, unknown>,
-        provider_responses: r.provider_responses ?? null,
-        vetoed: r.decision === 'vetoed',
-        rewardSuppressed: r.reward_suppressed !== undefined,
-      };
-      if (r.mode !== 'fact-check') reason = `quorum_unavailable:${r.mode}`;
-    } catch (e: unknown) {
-      source = 'not_checked';
-      reason = `quorum_threw:${e instanceof Error ? e.message : String(e)}`.slice(0, 300);
-      latency = Date.now() - t0;
-    }
-  }
-
-  const judged = q
-    ? quorumWouldBeDelta(
-        { hal_score: Number(q.hal_score), vetoed: q.vetoed, mode: q.mode ?? null, signals: q.signals ?? {}, rewardSuppressed: q.rewardSuppressed },
-        a.gates,
-        a.agent,
-      )
-    : null;
-  const families = Array.isArray(q?.signals?.families) ? (q!.signals!.families as unknown[]).map(String) : [];
-
-  await writeHalScoreGateShadow({
-    score_event_id: a.scoreEventId,
-    agent_id: String(a.input.agent_id),
-    mode: 'shadow',
-    live_strictness: a.live.strictness,
-    live_hal_mode: a.live.halMode,
-    live_decision: a.live.scoringDecision,
-    live_hal_score: a.live.hal_score,
-    live_hal_delta: a.live.halDelta,
-    live_receipt_id: liveReceipt,
-    quorum_source: source,
-    quorum_hal_mode: q?.mode ?? null,
-    quorum_raw_decision: judged?.raw_decision ?? null,
-    quorum_decision: judged?.scoring_decision ?? null,
-    quorum_hal_score: q ? Number(q.hal_score) : null,
-    quorum_met: judged?.quorum_met ?? false,
-    quorum_families: families,
-    quorum_hal_delta: judged?.hal_delta ?? null,
-    // 'live': the same verdict, so the same id. Otherwise the quorum's own record.
-    quorum_receipt_id: q ? (source === 'live' ? liveReceipt : halVerdictReceiptId(text, q)) : null,
-    quorum_latency_ms: latency,
-    not_checked_reason: reason,
-  });
-}
-
 async function loadAgent(agentId: string): Promise<{
   id: string;
   current_repid: number;
@@ -1365,4 +1213,156 @@ export async function applyValidationEvent(
   }
 
   return { old_repid, new_repid, delta_applied: Math.round(new_repid - old_repid) };
+}
+
+/**
+ * The HAL delta a QUORUM verdict would earn under this pipeline's gates, before decay and the clamp.
+ * HAL_SCORE_GATE_MODE=shadow records it beside the live delta; nothing applies it.
+ *
+ * It copies the live chain in runScoreEvent, in order: decision-requires-quorum and the no-provider
+ * reward floor (neutralize to 'flagged'), computeDelta, S-DRAIN (a penalty needs a quorum veto),
+ * then the purpose weight. NOT copied: grounding abstain (it acts only on a proof-carrying answer
+ * under HAL_GROUNDING_MODE=enforce). If you change that chain, change this, or the shadow table's
+ * live-vs-quorum deltas stop agreeing on events where the live path already was the quorum.
+ */
+export function quorumWouldBeDelta(
+  q: { hal_score: number; vetoed: boolean; mode: string | null; signals: Record<string, unknown>; rewardSuppressed: boolean },
+  gates: { decisionRequiresQuorum: boolean; penaltyRequiresQuorum: boolean; purposeWeight: number },
+  agent: { current_repid: number; tier: string; vesting_cliff_active: boolean },
+): { raw_decision: HALDecision; scoring_decision: HALDecision; quorum_met: boolean; hal_delta: number } {
+  const raw = deriveHalDecision(q.hal_score, q.vetoed, q.signals.comma_severity as string | null);
+  const providersUsed = Number(q.signals.providers_used ?? 0);
+  const count = process.env.HAL_QUORUM_FAMILY_AWARE !== 'false' ? Number(q.signals.families_used ?? providersUsed) : providersUsed;
+  const quorumMet = q.mode === 'fact-check' && count >= 2;
+  const rewardUnearned = q.rewardSuppressed && raw === 'clean';
+  const neutralized = (gates.decisionRequiresQuorum && !quorumMet && raw !== 'flagged') || rewardUnearned;
+  const scoring: HALDecision = neutralized ? 'flagged' : raw;
+  let d = computeDelta({
+    hal_score: q.hal_score,
+    hal_decision: scoring,
+    current_repid: agent.current_repid,
+    agent_tier: agent.tier,
+    vesting_cliff_active: agent.vesting_cliff_active,
+  }).delta_applied;
+  const caught = raw === 'vetoed' && (gates.penaltyRequiresQuorum ? quorumMet : true);
+  if (process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION !== 'false' && d < 0 && !caught) d = 0;
+  if (d !== 0 && gates.purposeWeight !== 1) d = d * gates.purposeWeight;
+  return { raw_decision: raw, scoring_decision: scoring, quorum_met: quorumMet, hal_delta: Math.round(d) };
+}
+
+/** HAL_SCORE_GATE_MODE=shadow. One hal_score_gate_shadow row per score event. Never touches the live row. */
+async function recordScoreGateShadow(a: {
+  scoreEventId: number;
+  input: ScoreEventInput;
+  agent: { current_repid: number; tier: string; vesting_cliff_active: boolean };
+  live: {
+    strictness: 1 | 2;
+    halMode: string | null;
+    decision: HALDecision;
+    scoringDecision: HALDecision;
+    hal_score: number;
+    halDelta: number;
+    signals: Record<string, unknown>;
+    rewardSuppressed: boolean;
+    error: string | null;
+  };
+  gates: { decisionRequiresQuorum: boolean; penaltyRequiresQuorum: boolean; purposeWeight: number };
+  providersFn: () => FactCheckProviderCfg[];
+}): Promise<void> {
+  const text = a.input.answer;
+  const domain = a.input.task_domain ?? 'finance';
+  const certainty = typeof a.input.certainty === 'number' ? a.input.certainty : 0.85;
+  const liveVerdict: HalVerdictLike = {
+    decision: a.live.scoringDecision,
+    hal_score: a.live.hal_score,
+    mode: a.live.halMode,
+    strictness: a.live.strictness,
+    signals: a.live.signals,
+  };
+  const liveReceipt = halVerdictReceiptId(text, liveVerdict);
+
+  let source: HalScoreGateShadowRow['quorum_source'];
+  let q: (HalVerdictLike & { vetoed: boolean; rewardSuppressed: boolean }) | null = null;
+  let reason: string | null = null;
+  let latency: number | null = null;
+
+  if (a.live.strictness >= 2) {
+    // The live path already was the quorum: no second call. Its delta is still recomputed below.
+    if (a.live.error) {
+      source = 'not_checked';
+      reason = 'live_quorum_threw';
+    } else {
+      source = 'live';
+      q = { ...liveVerdict, vetoed: a.live.decision === 'vetoed', rewardSuppressed: a.live.rewardSuppressed };
+    }
+  } else {
+    // Own namespace in the shared HAL cache: a public /hal/evaluate caller cannot fill this entry.
+    const ctxFp = crypto.createHash('sha256').update(JSON.stringify([domain, certainty])).digest('hex').slice(0, 16);
+    const cacheKey = `score-gate:s2:er1:c${ctxFp}`;
+    const t0 = Date.now();
+    try {
+      let r = await getCachedHalResult(text, cacheKey).catch(() => null);
+      source = r ? 'cache' : 'fresh';
+      if (!r) {
+        r = await halService.evaluate({
+          text,
+          context: { domain, certainty },
+          strictness: 2,
+          factCheckEarlyReturn: true,
+          providersFn: a.providersFn,
+        });
+        // A degraded answer is not cached: an outage must not pin "no quorum" on this text for the TTL.
+        if (r.mode === 'fact-check') void cacheHalResult(text, cacheKey, r).catch(() => undefined);
+      }
+      latency = Date.now() - t0;
+      q = {
+        decision: r.decision,
+        hal_score: Number.isFinite(r.hal_score) ? r.hal_score : 0.5,
+        mode: r.mode ?? null,
+        strictness: 2,
+        signals: (r.signals ?? {}) as Record<string, unknown>,
+        provider_responses: r.provider_responses ?? null,
+        vetoed: r.decision === 'vetoed',
+        rewardSuppressed: r.reward_suppressed !== undefined,
+      };
+      if (r.mode !== 'fact-check') reason = `quorum_unavailable:${r.mode}`;
+    } catch (e: unknown) {
+      source = 'not_checked';
+      reason = `quorum_threw:${e instanceof Error ? e.message : String(e)}`.slice(0, 300);
+      latency = Date.now() - t0;
+    }
+  }
+
+  const judged = q
+    ? quorumWouldBeDelta(
+        { hal_score: Number(q.hal_score), vetoed: q.vetoed, mode: q.mode ?? null, signals: q.signals ?? {}, rewardSuppressed: q.rewardSuppressed },
+        a.gates,
+        a.agent,
+      )
+    : null;
+  const families = Array.isArray(q?.signals?.families) ? (q!.signals!.families as unknown[]).map(String) : [];
+
+  await writeHalScoreGateShadow({
+    score_event_id: a.scoreEventId,
+    agent_id: String(a.input.agent_id),
+    mode: 'shadow',
+    live_strictness: a.live.strictness,
+    live_hal_mode: a.live.halMode,
+    live_decision: a.live.scoringDecision,
+    live_hal_score: a.live.hal_score,
+    live_hal_delta: a.live.halDelta,
+    live_receipt_id: liveReceipt,
+    quorum_source: source,
+    quorum_hal_mode: q?.mode ?? null,
+    quorum_raw_decision: judged?.raw_decision ?? null,
+    quorum_decision: judged?.scoring_decision ?? null,
+    quorum_hal_score: q ? Number(q.hal_score) : null,
+    quorum_met: judged?.quorum_met ?? false,
+    quorum_families: families,
+    quorum_hal_delta: judged?.hal_delta ?? null,
+    // 'live': the same verdict, so the same id. Otherwise the quorum's own record.
+    quorum_receipt_id: q ? (source === 'live' ? liveReceipt : halVerdictReceiptId(text, q)) : null,
+    quorum_latency_ms: latency,
+    not_checked_reason: reason,
+  });
 }
