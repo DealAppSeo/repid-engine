@@ -329,7 +329,12 @@ export async function approvalAfterUnbind(
     if (chainId !== SPEND_CHAIN_ID) return { checked: false, reason: `The RPC answered for chain ${chainId}, not Base Sepolia, so the approval was not read.` };
     allowance = a;
   } catch (e: unknown) {
-    return { checked: false, reason: `Could not read the approval from the chain: ${(e as Error)?.message ?? String(e)}. It may still be live.` };
+    // Never echo the RPC error (Strix on #1559): ethers puts the request URL in its message, and a
+    // provider URL can carry an API key (https://<provider>/v2/<key>). The text goes to the server log.
+    const msg = (e as Error)?.message ?? String(e);
+    console.error('[agent-spend] unbind approval read failed:', msg);
+    const why = /no answer in \d+ ms/.test(msg) ? 'the RPC did not answer in time' : 'the RPC read failed';
+    return { checked: false, reason: `Could not read the approval from the chain: ${why}. It may still be live.` };
   } finally {
     clearTimeout(timer);
   }

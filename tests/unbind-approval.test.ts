@@ -39,6 +39,19 @@ test('a failed read is NOT_CHECKED and says it may still be live, never "0"', as
   if (!out.checked) expect(out.reason).toMatch(/may still be live/);
 });
 
+test('a failed read never echoes the RPC error, which carries the provider URL and any key in it (Strix on #1559)', async () => {
+  const err = new Error('server response 401 (request={ }, response={ }, error=null, info={ "requestUrl": "https://rpc.example.invalid/v2/NOT-A-REAL-KEY-123" })');
+  const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const out = await approvalAfterUnbind(chain(err), OWNER, AGENT);
+    expect(out.checked).toBe(false);
+    const text = JSON.stringify(out);
+    expect(text).not.toMatch(/NOT-A-REAL-KEY-123|rpc\.example|https?:\/\//);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
 test('the wrong chain is NOT_CHECKED', async () => {
   const out = await approvalAfterUnbind(chain(5n, 1n), OWNER, AGENT);
   expect(out).toMatchObject({ checked: false });
