@@ -67,6 +67,7 @@ describe('ServiceHandlerBase (Phase 2.10 production superset)', () => {
   it('processOne claims, fulfils, applies SERVICE_FULFILLED deltas', async () => {
     maybeSingleQueue.push({ data: contract, error: null }); // fetch candidate
     maybeSingleQueue.push({ data: contract, error: null }); // claim wins
+    maybeSingleQueue.push({ data: { id: 'c1' }, error: null }); // escrowed -> fulfilled transition wins
     const h = new TestHandler();
     const r = await h.processOne('p1');
     expect(r).toEqual({ processed: true, contract_id: 'c1' });
@@ -95,7 +96,8 @@ describe('ServiceHandlerBase: no SERVICE_FULFILLED deltas for an unstaffed check
     protected async fulfill(): Promise<Record<string, unknown>> { return this.out; }
   }
   const run = async (out: Record<string, unknown>) => {
-    maybeSingleQueue.push({ data: contract, error: null }, { data: contract, error: null });
+    // fetch candidate, claim wins, escrowed -> fulfilled transition wins
+    maybeSingleQueue.push({ data: contract, error: null }, { data: contract, error: null }, { data: { id: 'c1' }, error: null });
     return new Returns(out).processOne('p1');
   };
   let log: jest.SpyInstance;

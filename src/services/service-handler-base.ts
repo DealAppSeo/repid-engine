@@ -153,7 +153,11 @@ export abstract class ServiceHandlerBase {
         },
       })
       .eq('id', (candidate as any).id)
-      .eq('status', 'escrowed') // optimistic concurrency — lost race ⇒ 0 rows
+      // NOT exclusive: this writes metadata and leaves status 'escrowed', so a second claimer racing this
+      // one also matches and also gets the row (until 2026-11-16 this said "lost race ⇒ 0 rows"). It
+      // only stops a claim of a row that already moved on. Exactly-once is the guarded escrowed →
+      // fulfilled transition in processOne.
+      .eq('status', 'escrowed')
       .select()
       .maybeSingle();
 
@@ -263,6 +267,41 @@ export abstract class ServiceHandlerBase {
           : undefined;
 
       if (routesToDispute(result as any)) {
+        // ONLY FROM escrowed, and only the run that makes the transition files the dispute (Strix on
+        // #1560). Both runs used to insert a dispute_validation_queue row and the dispute worker applies
+        // deltas per row, so one contract was charged twice. Transition first, then file.
+        // NB: do NOT write dispute_panel_validation_queue_id here — that
+        // column's FK references validation_queue(id), NOT
+        // dispute_validation_queue. The contract↔dispute link is preserved
+        // by dispute_validation_queue.contract_id (set below).
+        const { data: disputed, error: dispErr } = await db
+          .from('service_contracts')
+          .update({
+            status: 'disputed',
+            result,
+            disputed_at: new Date().toISOString(),
+          })
+          .eq('id', contract.id)
+          .eq('status', 'escrowed')
+          .select('id')
+          .maybeSingle();
+
+        if (dispErr) {
+          console.error(
+            `[${this.serviceType}] disputed-transition failed for contract ${contract.id}:`,
+            dispErr?.message ?? dispErr,
+            (dispErr as any)?.stack ?? new Error().stack
+          );
+          throw new Error(`Disputed status transition failed: ${dispErr.message}`);
+        }
+        if (!disputed) {
+          console.warn(
+            `[${this.serviceType}] contract ${contract.id} was no longer escrowed at the disputed transition: ` +
+              'another run got there first. No second dispute filed.'
+          );
+          return { processed: false, contract_id: contract.id };
+        }
+
         const { data: dq, error: dqErr } = await db
           .from('dispute_validation_queue')
           .insert({
@@ -290,31 +329,22 @@ export abstract class ServiceHandlerBase {
             dqErr?.message ?? dqErr,
             (dqErr as any)?.stack ?? new Error().stack
           );
+          // Put the contract back so a later cycle retries; a disputed contract with no queue row would
+          // never be resolved. If the put-back fails too, the contract is visibly stuck, never paid twice.
+          const { error: backErr } = await db
+            .from('service_contracts')
+            .update({ status: 'escrowed', result: (contract as any).result ?? null, disputed_at: null })
+            .eq('id', contract.id)
+            .eq('status', 'disputed');
+          if (backErr) {
+            console.error(
+              `[${this.serviceType}] contract ${contract.id} is disputed with NO dispute row, and could not be put back to escrowed:`,
+              backErr?.message ?? backErr
+            );
+          }
           throw new Error(
             `dispute_validation_queue insert failed: ${dqErr?.message ?? 'no row returned'}`
           );
-        }
-
-        // NB: do NOT write dispute_panel_validation_queue_id here — that
-        // column's FK references validation_queue(id), NOT
-        // dispute_validation_queue. The contract↔dispute link is preserved
-        // by dispute_validation_queue.contract_id (set above).
-        const { error: dispErr } = await db
-          .from('service_contracts')
-          .update({
-            status: 'disputed',
-            result,
-            disputed_at: new Date().toISOString(),
-          })
-          .eq('id', contract.id);
-
-        if (dispErr) {
-          console.error(
-            `[${this.serviceType}] disputed-transition failed for contract ${contract.id}:`,
-            dispErr?.message ?? dispErr,
-            (dispErr as any)?.stack ?? new Error().stack
-          );
-          throw new Error(`Disputed status transition failed: ${dispErr.message}`);
         }
 
         console.log(
@@ -326,14 +356,22 @@ export abstract class ServiceHandlerBase {
       }
 
       // PASS / confident FAIL / UNDETERMINED / verdict-less handler → fulfilled path.
-      const { error: updateErr } = await db
+      // ONLY FROM escrowed, and only the run that makes the transition applies the deltas below.
+      // The claim above does not change status, so two runs can both hold one contract; until
+      // 2026-11-16 this update had no status guard and both ran the economy. MEASURED: contract
+      // 7ca47a1d (2026-07-08) got two SERVICE_FULFILLED rounds 3.5 s apart, two outbox rows and
+      // three on-chain writes; the buyer took +5 twice. POST /contracts/:id/fulfill already guards.
+      const { data: transitioned, error: updateErr } = await db
         .from('service_contracts')
         .update({
           status: 'fulfilled',
           result,
           fulfilled_at: new Date().toISOString(),
         })
-        .eq('id', contract.id);
+        .eq('id', contract.id)
+        .eq('status', 'escrowed')
+        .select('id')
+        .maybeSingle();
 
       if (updateErr) {
         console.error(
@@ -342,6 +380,14 @@ export abstract class ServiceHandlerBase {
           (updateErr as any)?.stack ?? new Error().stack
         );
         throw new Error(`Status transition failed: ${updateErr.message}`);
+      }
+      if (!transitioned) {
+        // Another run fulfilled (or disputed) it first. That run applied the deltas; this one must not.
+        console.warn(
+          `[${this.serviceType}] contract ${contract.id} was no longer escrowed at the fulfilled transition: ` +
+            'another run got there first. SERVICE_FULFILLED deltas NOT applied a second time.'
+        );
+        return { processed: false, contract_id: contract.id };
       }
 
       // Canonical Phase 2.6 economy. Signature (Phase 2.9):
