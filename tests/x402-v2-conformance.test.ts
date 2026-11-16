@@ -435,6 +435,9 @@ describe('the route is behind the global per-IP rate limiter', () => {
     expect(first.headers['x-ratelimit-bucket']).toBe('ip');
     const limit = Number(first.headers['x-ratelimit-limit']);
     expect(limit).toBeGreaterThan(0);
+    // The per-route limiter ran too, and is never tighter than the global bucket: a token bucket of
+    // `limit` refilling `limit`/min can pass 2x `limit` in one minute (tests/x402-route-limiter.test.ts).
+    expect(Number(first.headers['ratelimit-limit'])).toBeGreaterThanOrEqual(2 * limit);
 
     let limited: request.Response | undefined;
     for (let i = 0; i <= limit && !limited; i++) {

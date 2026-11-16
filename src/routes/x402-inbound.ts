@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../middleware/client-ip';
 import {
   x402Facilitator,
   PaymentRequirements,
@@ -16,6 +18,27 @@ import { isPayableAddress } from '../services/payee-guard';
 import { db } from '../db';
 
 const router = Router();
+
+/**
+ * Per-route limiter for the paid route. Every /api/v1 request already passes the global token
+ * bucket (src/middleware/rate-limit.ts, 60/min per IP, mounted earlier in src/index.ts); CodeQL's
+ * js/missing-rate-limiting cannot see that one, and this also holds if it ever fails open.
+ *
+ * 120 per minute, not 60: a 60-token bucket refilling 60/min passes at most 120 requests in any
+ * 60 s, so a fixed window of 120 never refuses a request the global limiter let through. Paying
+ * clients are throttled no harder than before. `legacyHeaders: false` keeps it from overwriting
+ * the global limiter's `X-RateLimit-*` headers; it reports in `RateLimit-*` instead.
+ */
+export const X402_ROUTE_LIMIT_PER_MIN = 120;
+export const x402RouteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: X402_ROUTE_LIMIT_PER_MIN,
+  standardHeaders: 'draft-6',
+  legacyHeaders: false,
+  // Bucket on the edge-set client IP, not the caller-writable X-Forwarded-For (same as index.ts).
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
+  message: { error: 'rate_limited', bucket: 'x402-route', limit: X402_ROUTE_LIMIT_PER_MIN },
+});
 
 /**
  * Every 402 that advertises `accepts` carries the x402 v2 challenge twice: base64 in the
@@ -40,7 +63,7 @@ function setPaymentResponse(res: Response, settlement: SettlementResponseV2) {
 }
 
 // SOPHIA trade analysis demo
-router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
+router.post('/:uuid/trade-analysis', x402RouteLimiter, async (req: Request, res: Response) => {
   const { uuid } = req.params;
   // x402 v2 clients send PAYMENT-SIGNATURE; v1 clients and everything we ship send X-PAYMENT.
   // Two headers that disagree are refused (400, spec "Invalid Payment") rather than guessed between:
