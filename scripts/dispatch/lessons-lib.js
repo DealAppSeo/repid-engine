@@ -151,11 +151,18 @@ function selectPacks(matched, brief = '', max = PACKS_MAX) {
   // only its single best section would leave a pack with nothing whenever that one section is
   // too big for what is left, even though a smaller section of it would fit (measured: a
   // brief matching all four packs left one pack out entirely).
+  // Reserve each still-unserved pack's SMALLEST section while others choose. Without it the
+  // most relevant (often largest) sections of earlier packs ate the budget and a later pack got
+  // nothing (measured 2026-11-16: a fifth pack, `chain`, starved on a brief matching all five).
+  // Only when every pack's smallest section fits together; otherwise the old order stands.
+  const minCost = (pk) => Math.min(...pk.order.map((x) => x.text.length + 2 + (pk.intro ? pk.intro.length + 2 : 0)));
+  const canReserve = ranked.reduce((a, pk) => a + minCost(pk), 0) <= max;
+  const reserve = (pk) => (canReserve ? ranked.reduce((a, q) => a + (q !== pk && q.chosen.size === 0 ? minCost(q) : 0), 0) : 0);
   let added = true;
   while (added) {
     added = false;
     for (const pk of ranked) {
-      const s = pk.order.find((x) => !pk.chosen.has(x.j) && used + cost(pk, x) <= max);
+      const s = pk.order.find((x) => !pk.chosen.has(x.j) && used + cost(pk, x) + reserve(pk) <= max);
       if (s) { used += cost(pk, s); pk.chosen.add(s.j); added = true; }
     }
   }

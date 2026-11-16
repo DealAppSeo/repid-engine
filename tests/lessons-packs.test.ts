@@ -22,6 +22,7 @@ const REPRESENTATIVE: Record<string, string> = {
   'hal-eval': 'Measure HAL F1 on the rigorous corpus across all providers and report the quorum and any provider failures.',
   schema: 'Land a migration adding sufficient-statistic columns to the score-event table; read the CHECK constraint before writing SQL.',
   zkp: 'Wire the plonky3 aggregation over the poseidon2 leaf and keep the A1 statement arity fixed.',
+  chain: 'Run the owner budget test on Base Sepolia from the funded wallet and confirm the USDC transfers on chain.',
 };
 
 describe('LESSONS domain packs', () => {
@@ -131,6 +132,17 @@ describe('LESSONS domain packs', () => {
       expect(sel.text).not.toContain('b'.repeat(50)); // not truncated in mid-pack either
       expect(sel.omitted).toEqual([{ pack: 'b', title: '(whole pack)' }]);
       expect(sel.text).toMatch(/left out for space[^]*\bb: \(whole pack\)/);
+    });
+
+    it('reserves room so a later pack is not starved by the biggest relevant sections (2026-11-16)', () => {
+      // Each of A and B has a big section the brief favours and a small one; C has one mid-size
+      // section. Taking A's and B's favoured sections first leaves C nothing; all three fit if
+      // B settles for its small section.
+      const a = sectioned('A', [['Big', 'alpha '.repeat(70)], ['Small', 'beta']]);
+      const b = sectioned('B', [['Big', 'gamma '.repeat(70)], ['Small', 'delta']]);
+      const c = sectioned('C', [['Only', 'epsilon '.repeat(40)]]);
+      const sel = selectPacks([a, b, c], 'alpha gamma', 1000);
+      for (const name of ['A', 'B', 'C']) expect(sel.included.some((x: any) => x.pack === name)).toBe(true);
     });
 
     it('still includes a FIRST section that alone exceeds the cap — visibly too big, not silently empty', () => {

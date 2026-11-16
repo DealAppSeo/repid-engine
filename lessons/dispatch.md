@@ -40,3 +40,10 @@ Two dispatch-specific instances measured here:
 A suite reported "11 passed" in BOTH its enabled and disabled runs — flag-guarded tests returned
 early and still counted. Encode checks so time/main-drift breaks them (filesystem scans), not a
 human re-reading. Break the property, watch it go red, revert. A skip must report as skipped.
+
+## An input's facts are as old as the input
+On 2026-11-16 two models' plans opened with "merge #1553" after it had merged, and "keep the
+HAL gate off" after #1542 had replaced it; a third's summary listed revocation among ACTA's
+open questions, where ACTA scopes it out. **Apply:** before adopting another model's ordered
+list or summary, check each step against live state (gh, DB, the source itself) and mark what
+is already done, replaced or misquoted.

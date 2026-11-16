@@ -26,3 +26,19 @@ Gate integration tests on an explicit `RUN_INTEGRATION=1` plus credentials, neve
 and never special-case one bad host (`localhost:54321`), which fails open for every other
 unreachable endpoint. Export the config-boot dummies knowing they boot `src/config.ts` and do
 NOT enable integration.
+
+## Read the declared link before you join an id (§4)
+`erc8004_reputation_writes.repid_event_id` was joined to `repid_score_events`; its foreign key
+points to `repid_events`. Both tables use bigint ids in the same range, so the wrong join
+returned a plausible row for 29 of 29 writes, all dated 2026-05-04. Two sessions (2026-11-14,
+2026-11-16) then reported a "wrong link" defect that did not exist: following the key, every
+write cited its own settlement event. **Apply:** before any join on an `*_id` column, read
+`select pg_get_constraintdef(oid) from pg_constraint where conrelid = '<table>'::regclass and
+contype = 'f'`. A join that *finds* a defect is a claim: re-derive the link from the key first.
+
+## Trace a duplicate to its first stage (§2)
+A double on-chain write (2026-07-08) was traced to the inline trigger and fixed there. One
+stage up, the settlement had emitted two outbox events for one x402 payment, 3.5 s apart, so
+one job produced three `giveFeedback` transactions. **Apply:** for any duplicate, count the
+same key at every stage (payment, contract, outbox event, write, transaction) and name the
+FIRST stage where the count is above one.
