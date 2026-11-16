@@ -144,7 +144,11 @@ export function refundWaitFailure(e: unknown, txHash: string): Error | { txHash:
   return new RefundBroadcastUnconfirmed(txHash, e instanceof Error ? e.message.split('\n')[0] ?? '' : String(e));
 }
 
-const ERC20_ABI = ['function transfer(address to, uint256 value) returns (bool)'];
+const ERC20_ABI = [
+  'function transfer(address to, uint256 value) returns (bool)',
+  // EIP-3009, FiatToken v2 (Base Sepolia USDC answers version() = "2"). The v,r,s form is in every v2.
+  'function transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s)',
+];
 const ERC20_BALANCE_ABI = ['function balanceOf(address owner) view returns (uint256)'];
 
 /** The chain write, abstracted so tests exercise the guard logic without a live chain. */
@@ -183,7 +187,16 @@ function refused(amount: bigint, to: string | undefined, note: string): RefundIn
  * The real escrow -> builder send. Refuses unless the chain is Base Sepolia and the
  * signer IS the escrow address. Throws on any failure so escrowRefund fails closed.
  */
-async function realSender(to: string, amount: bigint): Promise<{ txHash: string }> {
+function realSender(to: string, amount: bigint): Promise<{ txHash: string }> {
+  return escrowCall((usdc) => usdc.getFunction('transfer').populateTransaction(to, amount));
+}
+
+/**
+ * Every escrow transaction goes through here: the refund, the stake payout, and the gasless-deposit
+ * relay. Same guards for each (Base Sepolia only, signer == escrow, signed before broadcast, outcome
+ * decided only by proof). Messages say "refund" because this began as the refund path.
+ */
+async function escrowCall(build: (usdc: ethers.Contract) => Promise<ethers.ContractTransaction>): Promise<{ txHash: string }> {
   if (!config.stakeEscrowSignerKey) throw new Error('escrow signer not configured');
   if (!config.stakeEscrowAddress) throw new Error('STAKE_ESCROW_ADDRESS not configured');
   const provider = new ethers.JsonRpcProvider(config.baseSepoliaRpc);
@@ -202,7 +215,7 @@ async function realSender(to: string, amount: bigint): Promise<{ txHash: string 
   // and the refund could still land (Grok r8 on #1550). Anything that fails BEFORE the broadcast
   // (building the transaction, a gas estimate that reverts) still means nothing was sent.
   // getFunction returns a defined ContractMethod (satisfies noUncheckedIndexedAccess).
-  const unsigned = await wallet.populateTransaction(await usdc.getFunction('transfer').populateTransaction(to, amount));
+  const unsigned = await wallet.populateTransaction(await build(usdc));
   const signed = await wallet.signTransaction(unsigned);
   const hash = ethers.Transaction.from(signed).hash;
   if (!hash) throw new Error('refusing: could not derive the refund tx hash before broadcast');
@@ -421,4 +434,45 @@ export async function escrowRefund(
     }
     return refused(amount, to, `escrow refund failed: ${msg}`);
   }
+}
+
+/** An EIP-3009 transferWithAuthorization the owner signed. Values are decimal strings or 0x hex. */
+export interface Eip3009Authorization {
+  from: string;
+  to: string;
+  value: string;
+  validAfter: string;
+  validBefore: string;
+  nonce: string;
+}
+
+export type AuthorizationRelay = (a: Eip3009Authorization, signature: string) => Promise<{ txHash: string }>;
+let relay: AuthorizationRelay | null = null;
+
+/** Test seam: inject a fake relay. Call with undefined to reset to the real one. */
+export function __setAuthorizationRelay(r?: AuthorizationRelay | null): void {
+  relay = r ?? null;
+}
+
+/**
+ * GASLESS DEPOSIT: the escrow submits an owner's signed transferWithAuthorization (owner -> escrow)
+ * and pays its gas, so the owner needs no ETH. The USDC contract checks the signature, the time
+ * window and the nonce; this only adds what it would not: the payee must BE the escrow, and the
+ * send shares the escrow's one-at-a-time queue (one nonce). Throws on failure; a broadcast whose
+ * outcome is unknown throws RefundBroadcastUnconfirmed with the hash. Callers check everything
+ * first (services/gasless-deposit.ts), so a revert here is a race, not the normal refusal.
+ */
+export async function escrowRelayAuthorization(a: Eip3009Authorization, signature: string): Promise<{ txHash: string }> {
+  if (!config.stakeEscrowSignerKey || !config.stakeEscrowAddress) throw new Error('escrow signer not configured');
+  if (!isAddress(a.to) || !eqAddr(a.to, config.stakeEscrowAddress)) throw new Error('refusing: the authorization does not pay the escrow');
+  const sig = ethers.Signature.from(signature);
+  const send: AuthorizationRelay =
+    relay ??
+    (() =>
+      escrowCall((usdc) =>
+        usdc
+          .getFunction('transferWithAuthorization')
+          .populateTransaction(a.from, a.to, a.value, a.validAfter, a.validBefore, a.nonce, sig.v, sig.r, sig.s),
+      ));
+  return oneAtATime(() => send(a, signature));
 }

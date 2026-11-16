@@ -524,6 +524,23 @@ router.get('/stake/deposit/message', (req: Request, res: Response) => {
   });
 });
 
+/**
+ * POST /stake/deposit/gasless { authorization, signature } — deposit stake with no ETH (R3, 2026-11-16).
+ * The owner signs a USDC transferWithAuthorization (EIP-3009) to the stake escrow; the escrow submits
+ * it and pays the gas; the stake is credited by depositStake's verified path. Keyless on purpose: the
+ * signature IS the authorization, and only the wallet's owner can make it (auth.ts bypass list).
+ * GASLESS_DEPOSIT_MODE: off (default, refused) | shadow (checks only, nothing sent) | on.
+ */
+router.post('/stake/deposit/gasless', async (req: Request, res: Response) => {
+  const { gaslessDeposit, defaultGaslessDeps } = require('../services/gasless-deposit') as typeof import('../services/gasless-deposit');
+  try {
+    const out = await gaslessDeposit(req.body, defaultGaslessDeps());
+    return res.status(out.status).json(out.body);
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, sent: 'unknown', code: 'internal', error: e?.message ?? 'gasless deposit failed' });
+  }
+});
+
 router.post('/stake/deposit', async (req: Request, res: Response) => {
   let { builder_address, amount, tx_hash, signature } = req.body ?? {};
   if (!builder_address || !amount) return res.status(400).json({ error: 'builder_address and amount required' });
