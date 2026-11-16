@@ -7,7 +7,7 @@
  * nonce set the way the USDC contract does, so replay is tested against "used on chain", not a flag.
  */
 import { ethers } from 'ethers';
-import { gaslessDeposit, gaslessDepositMode, MIN_WINDOW_S, type GaslessDeps } from '../src/services/gasless-deposit';
+import { gaslessDeposit, gaslessDepositMode, createGaslessAdmission, MIN_GASLESS_DEPOSIT, MIN_WINDOW_S, type GaslessDeps } from '../src/services/gasless-deposit';
 import { RefundBroadcastUnconfirmed, type Eip3009Authorization } from '../src/services/escrow-refunder';
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -69,6 +69,7 @@ function harness(over: Partial<GaslessDeps> = {}) {
       return { ok: true, builder_id: 'acct-owner', total_active_stake: amount.toString(), authority_after: '0', is_simulated: false, verified: true, tx_hash: tx };
     },
     now: () => NOW,
+    admit: () => true,
     ...over,
   };
   return { deps, usedNonces, relayed, credits };
@@ -228,12 +229,46 @@ describe('gasless deposit (EIP-3009)', () => {
     expect(out.body).toMatchObject({ ok: false, sent: true, code: 'credit_not_checked', tx_hash: '0x' + 'ab'.repeat(32) });
   });
 
+  test('DUST: below the 1 USDC floor is refused before any send; the floor itself is accepted (Strix on #1558)', async () => {
+    const h = harness();
+    const dust = await gaslessDeposit(await signed({ value: String(MIN_GASLESS_DEPOSIT - 1n) }), h.deps);
+    expect(dust.body.code).toBe('bad_amount');
+    expect((await gaslessDeposit(await signed({ value: '1' }), h.deps)).body.code).toBe('bad_amount');
+    expect(h.relayed).toHaveLength(0);
+    expect((await gaslessDeposit(await signed({ value: String(MIN_GASLESS_DEPOSIT) }), h.deps)).status).toBe(201);
+  });
+
+  test('QUEUE: when the admission budget is spent, 429 and nothing is queued for the escrow (Strix on #1558)', async () => {
+    const h = harness({ admit: () => false });
+    const out = await gaslessDeposit(await signed(), h.deps);
+    expect(out.status).toBe(429);
+    expect(out.body).toMatchObject({ code: 'escrow_busy', sent: false });
+    expect(h.relayed).toHaveLength(0);
+  });
+
+  test('QUEUE: shadow mode and refused deposits use no admission', async () => {
+    const admit = jest.fn(() => true);
+    await gaslessDeposit(await signed(), harness({ mode: 'shadow', admit }).deps);
+    await gaslessDeposit(await signed({}, stranger), harness({ admit }).deps);
+    expect(admit).not.toHaveBeenCalled();
+  });
+
   test('malformed input is refused', async () => {
     const h = harness();
     for (const body of [null, {}, { authorization: {}, signature: '0x' }, { ...(await signed()), signature: 'nope' }]) {
       expect((await gaslessDeposit(body, h.deps)).body.code).toBe('bad_authorization');
     }
     expect((await gaslessDeposit(await signed({ value: '0' }), h.deps)).body.code).toBe('bad_amount');
+  });
+});
+
+describe('createGaslessAdmission', () => {
+  test('admits 4 a minute, process-wide; a minute later it admits again', () => {
+    const admit = createGaslessAdmission(4);
+    const t0 = 1_000_000;
+    expect([0, 1, 2, 3, 4].map((i) => admit(t0 + i * 1000))).toEqual([true, true, true, true, false]);
+    expect(admit(t0 + 59_999)).toBe(false);
+    expect(admit(t0 + 60_000)).toBe(true);
   });
 });
 

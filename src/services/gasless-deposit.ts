@@ -44,6 +44,32 @@ export function gaslessDepositMode(raw: string | undefined = process.env.GASLESS
 /** An authorization must stay valid at least this long, so it cannot expire while the escrow's tx mines. */
 export const MIN_WINDOW_S = 120;
 
+/**
+ * Smallest gasless deposit, in micro-USDC. Every accepted authorization makes the escrow sign,
+ * broadcast and confirm a transaction whose gas it pays, on a keyless route where the caller picks
+ * the amount, so dust is refused before anything is sent (Strix on #1558). 1 USDC is the E2E's own
+ * stake and far above the L2 gas it triggers.
+ */
+export const MIN_GASLESS_DEPOSIT = 1_000_000n;
+
+/**
+ * Admission budget for the escrow's send queue from this keyless route. The escrow sends one
+ * transaction at a time (escrow-refunder.ts oneAtATime), refunds and agent payouts queue on the same
+ * chain, and each send holds it until mined; the per-authorization lock below never makes two
+ * DIFFERENT authorizations wait. Without a budget a caller could queue more sends than one signer
+ * drains and push every withdrawal and payout behind them (Strix on #1558). Process-wide on purpose:
+ * a per-address budget is bypassed by rotating addresses. A refused deposit is retried by the client.
+ */
+export function createGaslessAdmission(maxPerMinute = 4): (nowMs: number) => boolean {
+  const recent: number[] = [];
+  return (nowMs) => {
+    while (recent.length > 0 && nowMs - recent[0]! >= 60_000) recent.shift();
+    if (recent.length >= maxPerMinute) return false;
+    recent.push(nowMs);
+    return true;
+  };
+}
+
 export interface GaslessChain {
   authorizationState(authorizer: string, nonce: string): Promise<boolean>;
   balanceOf(owner: string): Promise<bigint>;
@@ -60,6 +86,8 @@ export interface GaslessDeps {
   relay(a: Eip3009Authorization, signature: string): Promise<{ txHash: string }>;
   credit(wallet: string, amount: bigint, txHash: string): Promise<DepositResult>;
   now(): number;
+  /** Admission to the escrow's send queue; see createGaslessAdmission. */
+  admit(nowMs: number): boolean;
 }
 
 export interface GaslessAnswer {
@@ -97,7 +125,9 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
     return refuse(400, 'bad_authorization', 'Send { authorization: { from, to, value, validAfter, validBefore, nonce }, signature } for a USDC transferWithAuthorization. Nothing was sent.');
   }
   const value = BigInt(a.value);
-  if (value <= 0n) return refuse(400, 'bad_amount', 'The amount must be more than 0. Nothing was sent.');
+  if (value < MIN_GASLESS_DEPOSIT) {
+    return refuse(400, 'bad_amount', `The amount must be at least ${MIN_GASLESS_DEPOSIT} micro-USDC (1 USDC). Nothing was sent.`);
+  }
   if (a.to.toLowerCase() !== deps.escrow.toLowerCase()) {
     return refuse(400, 'wrong_recipient', `The authorization must pay the stake escrow ${ethers.getAddress(deps.escrow)}. Nothing was sent.`);
   }
@@ -153,6 +183,10 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
     return { status: 200, body: { ok: true, mode: 'shadow', sent: false, would_submit: true, ...plan, note: 'Shadow mode: every check passed and nothing was sent.' } };
   }
 
+  // The escrow's send queue is shared with refunds and payouts: admit only a bounded number per minute.
+  if (!deps.admit(now * 1000)) {
+    return refuse(429, 'escrow_busy', 'Too many gasless deposits are being submitted right now, so this one was not queued. Nothing was sent; retry in a minute.');
+  }
   // One submission per authorization at a time in this process; the chain refuses a second use anyway.
   return serializeWithdraw(`gasless:${a.from.toLowerCase()}:${a.nonce.toLowerCase()}`, async (): Promise<GaslessAnswer> => {
     try {
@@ -241,6 +275,7 @@ async function accountOfWallet(wallet: string): Promise<string | null> {
 }
 
 let chainSingleton: GaslessChain | null = null;
+const admission = createGaslessAdmission();
 
 /** Production wiring. */
 export function defaultGaslessDeps(): GaslessDeps {
@@ -255,5 +290,6 @@ export function defaultGaslessDeps(): GaslessDeps {
     relay: escrowRelayAuthorization,
     credit: depositStake,
     now: () => Math.floor(Date.now() / 1000),
+    admit: admission,
   };
 }
