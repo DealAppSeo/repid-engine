@@ -99,6 +99,14 @@ const UINT = /^(0|[1-9][0-9]{0,77}|0x[0-9a-fA-F]{1,64})$/;
 const NONCE = /^0x[0-9a-fA-F]{64}$/;
 const SIG = /^0x[0-9a-fA-F]{130}$/;
 
+/**
+ * A chain, DB or relay error goes to the server log, never into an answer (Strix on #1559 found the
+ * class): ethers puts the request URL in its messages, and a provider URL can carry an API key.
+ */
+function logOnly(where: string, e: unknown): void {
+  console.error(`[gasless-deposit] ${where}:`, (e as Error)?.message ?? String(e));
+}
+
 function parseAuthorization(raw: unknown): Eip3009Authorization | null {
   const a = raw as Record<string, unknown> | null;
   if (!a || typeof a !== 'object') return null;
@@ -141,7 +149,8 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
   try {
     domain = await deps.chain.usdcDomain();
   } catch (e: unknown) {
-    return refuse(503, 'not_checked', `Could not read USDC's signing domain from the chain, so the signature was not checked. Nothing was sent. ${(e as Error)?.message ?? ''}`.trim());
+    logOnly('usdc domain read', e);
+    return refuse(503, 'not_checked', "Could not read USDC's signing domain from the chain, so the signature was not checked. Nothing was sent.");
   }
   // verifyEip3009Local takes an x402 payment header (base64 JSON) and requirements; reuse it as is.
   const header = Buffer.from(JSON.stringify({ authorization: a, signature })).toString('base64');
@@ -162,7 +171,8 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
   try {
     account = await deps.accountOf(a.from);
   } catch (e: unknown) {
-    return refuse(503, 'not_checked', `Could not read whether this wallet has an account. Nothing was sent. ${(e as Error)?.message ?? ''}`.trim());
+    logOnly('account lookup', e);
+    return refuse(503, 'not_checked', 'Could not read whether this wallet has an account. Nothing was sent.');
   }
   if (!account) {
     return refuse(404, 'no_account', 'This wallet has no account here, so the deposit would have nobody to credit. Connect the wallet first (POST /api/v1/account/connect). Nothing was sent.');
@@ -173,7 +183,8 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
   try {
     [used, balance] = await Promise.all([deps.chain.authorizationState(a.from, a.nonce), deps.chain.balanceOf(a.from)]);
   } catch (e: unknown) {
-    return refuse(503, 'not_checked', `Could not read the authorization's state from the chain. Nothing was sent. ${(e as Error)?.message ?? ''}`.trim());
+    logOnly('authorization state / balance read', e);
+    return refuse(503, 'not_checked', "Could not read the authorization's state from the chain. Nothing was sent.");
   }
   if (used) return refuse(409, 'authorization_used', 'This authorization (its nonce) has already been used on chain. Nothing was sent again.');
   if (balance < value) return refuse(400, 'insufficient_balance', 'The wallet holds less USDC than this authorization moves. Nothing was sent.');
@@ -183,10 +194,6 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
     return { status: 200, body: { ok: true, mode: 'shadow', sent: false, would_submit: true, ...plan, note: 'Shadow mode: every check passed and nothing was sent.' } };
   }
 
-  // The escrow's send queue is shared with refunds and payouts: admit only a bounded number per minute.
-  if (!deps.admit(now * 1000)) {
-    return refuse(429, 'escrow_busy', 'Too many gasless deposits are being submitted right now, so this one was not queued. Nothing was sent; retry in a minute.');
-  }
   // One submission per authorization at a time in this process; the chain refuses a second use anyway.
   return serializeWithdraw(`gasless:${a.from.toLowerCase()}:${a.nonce.toLowerCase()}`, async (): Promise<GaslessAnswer> => {
     try {
@@ -194,7 +201,13 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
         return refuse(409, 'authorization_used', 'This authorization (its nonce) has already been used on chain. Nothing was sent again.');
       }
     } catch (e: unknown) {
-      return refuse(503, 'not_checked', `Could not re-read the authorization's state. Nothing was sent. ${(e as Error)?.message ?? ''}`.trim());
+      logOnly('authorization state re-read', e);
+      return refuse(503, 'not_checked', "Could not re-read the authorization's state. Nothing was sent.");
+    }
+    // Admission AFTER every refusal, the in-lock re-check included, so a refused deposit never takes a
+    // slot (Grok r3 on #1558). The escrow's send queue is shared with refunds and payouts.
+    if (!deps.admit(now * 1000)) {
+      return refuse(429, 'escrow_busy', 'Too many gasless deposits are being submitted right now, so this one was not queued. Nothing was sent; retry in a minute.');
     }
     let txHash: string;
     try {
@@ -207,7 +220,8 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
             error: 'The escrow broadcast the deposit but could not confirm it. Check the tx; once it is mined, claim it with POST /api/v1/stake/deposit and this tx_hash.' },
         };
       }
-      return refuse(502, 'not_sent', `The escrow did not submit the deposit, so no USDC moved. ${(e as Error)?.message ?? ''}`.trim());
+      logOnly('relay', e);
+      return refuse(502, 'not_sent', 'The escrow did not submit the deposit, so no USDC moved.');
     }
     // The USDC has moved. From here every answer carries the tx hash: a credit that throws is not
     // "not sent", and a 500 without the hash would leave the owner nothing to claim with.
@@ -215,17 +229,20 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
     try {
       credited = await deps.credit(a.from, value, txHash);
     } catch (e: unknown) {
+      logOnly(`credit of ${txHash}`, e);
       return {
         status: 202,
         body: { ok: false, mode: 'on', sent: true, code: 'credit_not_checked', tx_hash: txHash, basescan_url: `${BASESCAN_TX}${txHash}`, ...plan,
-          error: `The USDC reached the escrow, and the credit could not be confirmed: ${(e as Error)?.message ?? String(e)}. Claim it with POST /api/v1/stake/deposit and this tx_hash; a transfer already credited is refused as a duplicate, never credited twice.` },
+          error: 'The USDC reached the escrow, and the credit could not be confirmed. Claim it with POST /api/v1/stake/deposit and this tx_hash; a transfer already credited is refused as a duplicate, never credited twice.' },
       };
     }
     if (!credited.ok) {
+      // depositStake's error can carry verifyDeposit's raw RPC text, so it is logged, not returned.
+      console.error(`[gasless-deposit] credit of ${txHash} refused:`, credited.error ?? 'unknown');
       return {
         status: 202,
         body: { ok: false, mode: 'on', sent: true, code: 'sent_not_credited', tx_hash: txHash, basescan_url: `${BASESCAN_TX}${txHash}`, ...plan,
-          error: `The USDC reached the escrow, and the credit did not go through: ${credited.error ?? 'unknown'}. Claim it with POST /api/v1/stake/deposit and this tx_hash.` },
+          error: 'The USDC reached the escrow, and the credit did not go through (for example, not enough confirmations yet). Claim it with POST /api/v1/stake/deposit and this tx_hash.' },
       };
     }
     return {

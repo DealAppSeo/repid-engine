@@ -253,6 +253,38 @@ describe('gasless deposit (EIP-3009)', () => {
     expect(admit).not.toHaveBeenCalled();
   });
 
+  test('QUEUE: a deposit the in-lock re-check refuses takes no admission slot (Grok r3 on #1558)', async () => {
+    const admit = jest.fn(() => true);
+    const h = harness({ admit });
+    let reads = 0;
+    h.deps.chain.authorizationState = async () => ++reads > 1; // unused at the pre-check, used by the re-check
+    const out = await gaslessDeposit(await signed(), h.deps);
+    expect(out.body.code).toBe('authorization_used');
+    expect(admit).not.toHaveBeenCalled();
+    expect(h.relayed).toHaveLength(0);
+  });
+
+  test('NO LEAK: a chain, relay or credit error never reaches the answer (ethers puts the RPC URL, and any key in it, in its messages)', async () => {
+    const leak = 'https://rpc.example.invalid/v2/NOT-A-REAL-KEY-123';
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const bodies: unknown[] = [];
+      const read = harness();
+      read.deps.chain.authorizationState = async () => { throw new Error(`server response 401 ${leak}`); };
+      bodies.push((await gaslessDeposit(await signed(), read.deps)).body);
+      const domain = harness();
+      domain.deps.chain.usdcDomain = async () => { throw new Error(`missing response ${leak}`); };
+      bodies.push((await gaslessDeposit(await signed(), domain.deps)).body);
+      bodies.push((await gaslessDeposit(await signed(), harness({ relay: async () => { throw new Error(`could not coalesce ${leak}`); } }).deps)).body);
+      bodies.push((await gaslessDeposit(await signed(), harness({ credit: async () => { throw new Error(`timeout ${leak}`); } }).deps)).body);
+      bodies.push((await gaslessDeposit(await signed(), harness({ credit: async () => ({ ok: false, builder_id: 'x', total_active_stake: '0', authority_after: '0', is_simulated: true, error: `deposit verification failed: rpc error fetching receipt: ${leak}` }) }).deps)).body);
+      for (const b of bodies) expect(JSON.stringify(b)).not.toMatch(/NOT-A-REAL-KEY-123|rpc\.example/);
+      expect(bodies.map((b: any) => b.code)).toEqual(['not_checked', 'not_checked', 'not_sent', 'credit_not_checked', 'sent_not_credited']);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   test('malformed input is refused', async () => {
     const h = harness();
     for (const body of [null, {}, { authorization: {}, signature: '0x' }, { ...(await signed()), signature: 'nope' }]) {
