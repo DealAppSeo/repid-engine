@@ -12,4 +12,4 @@ other signers on that key (crons), and funds. Keys go in at a hidden prompt, nev
 Reputation Registry, where a faucet claim is `claim()` to the faucet. They were then also ruled out
 by an invented timing reason. They came from an unlogged E2E test run. **Apply:** decode from, to
 and selector; read the record behind it; say what you cannot attribute; log every chain run in
-`E:\dev\ops\loop\chain-activity.jsonl`.
+the operator's chain-activity log (`ops/loop/chain-activity.jsonl`).
