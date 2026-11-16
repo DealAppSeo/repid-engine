@@ -55,13 +55,15 @@ async function resolveAgentUuid(raw: string): Promise<string | null> {
   if (/^\d+$/.test(id)) {
     query = query.eq('erc8004_token_id', id);
   } else {
-    // Exact name first, then the trinity- form, which only the 12 originals carry
-    // ("sophia" → trinity-sophia). Same order as fetchAgentRow in agent-passport.ts.
+    // The trinity- form first: it is the canonical name of the 12 originals ("sophia" →
+    // trinity-sophia), so a row that merely holds the bare slug can never outrank one of them.
+    // Then the exact name, for every other agent. Same order as fetchAgentRow in agent-passport.ts.
     const lcName = id.toLowerCase();
-    const { data: exact } = await query.eq('agent_name', lcName).maybeSingle();
-    if (exact && exact.id) return exact.id as string;
-    if (lcName.startsWith('trinity-')) return null;
-    query = db.from('repid_agents').select('id').eq('agent_name', `trinity-${lcName}`);
+    const canonical = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
+    const { data: hit } = await query.eq('agent_name', canonical).maybeSingle();
+    if (hit && hit.id) return hit.id as string;
+    if (lcName === canonical) return null;
+    query = db.from('repid_agents').select('id').eq('agent_name', lcName);
   }
   const { data } = await query.maybeSingle();
   return data && data.id ? (data.id as string) : null;
