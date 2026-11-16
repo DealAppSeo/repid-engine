@@ -176,6 +176,10 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // signature for real). It is NOT unauthenticated. /stake/withdraw is not on
   // this list and stays API-key gated.
   if (req.method === 'POST' && req.path === '/api/v1/stake/deposit') return next();
+  // Gasless deposit (EIP-3009): authorized by the owner's own signature over the transfer, checked in
+  // services/gasless-deposit.ts before the escrow sends anything. A newcomer has no API key. Off by
+  // default (GASLESS_DEPOSIT_MODE), and then it refuses without reading or sending.
+  if (req.method === 'POST' && req.path === '/api/v1/stake/deposit/gasless') return next();
   // Read-only: returns the exact text to sign. Reveals nothing, authorizes nothing.
   if (req.method === 'GET' && req.path === '/api/v1/stake/deposit/message') return next();
   // Read-only escrow config/funding health. Reveals only the escrow ADDRESS, its
