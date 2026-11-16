@@ -198,9 +198,33 @@ export const supabaseAgentLimits: AgentLimitStore = {
   },
 };
 
-/** The owner's account (builder) for an agent, or null when the owner is not a builder account. */
-export async function ownerBuilderOfAgent(agentId: string): Promise<string | null> {
+/**
+ * The account (builder) whose stake funds this agent's owner budget, or null when there is none.
+ *
+ * A builder owner: its own account. A verified human (human_sbt): until 2026-11-16 always null, so a
+ * proof-of-human owner could not hold a budget at all and the first live run stopped at bind
+ * (reports/2026-11-16/owner-budget-e2e-execute.attempt1-sbt-wallet.json). With
+ * HUMAN_SBT_OWNER_BUDGET_ENABLED=true it is the account that holds the same wallet. That wallet is
+ * the binding's, which bind took from human_sbt_registry, never from the caller, and an account is
+ * only created for a wallet that signed (POST /account/connect). The binding itself is unchanged, so
+ * the owner's assurance label stays proof-of-human.
+ */
+export async function ownerBuilderOfAgent(
+  agentId: string,
+  humanSbtBudget: boolean = process.env.HUMAN_SBT_OWNER_BUDGET_ENABLED === 'true',
+): Promise<string | null> {
   const { ownerOfAgent } = require('./human-agent-binding') as typeof import('./human-agent-binding');
   const owner = await ownerOfAgent(agentId);
-  return owner && owner.owner_kind === 'builder' && owner.builder_id ? String(owner.builder_id) : null;
+  if (!owner) return null;
+  if (owner.owner_kind === 'builder') return owner.builder_id ? String(owner.builder_id) : null;
+  if (owner.owner_kind !== 'human_sbt' || !humanSbtBudget) return null;
+  const wallet = typeof owner.human_wallet === 'string' ? owner.human_wallet : '';
+  // Hex only: the value goes into an ILIKE, where % and _ would be wildcards.
+  if (!/^0x[0-9a-fA-F]{40}$/.test(wallet)) return null;
+  const { data, error } = await db.from('builders').select('id').ilike('address', wallet).limit(2);
+  if (error) throw new Error(`owner account lookup failed: ${error.message}`);
+  const rows = (data ?? []) as Array<{ id: string }>;
+  // builders.address is unique only case-sensitively; two spellings of one wallet is refused, never a pick.
+  if (rows.length > 1) throw new Error(`owner account lookup ambiguous: ${rows.length} accounts match this wallet`);
+  return rows[0] ? String(rows[0].id) : null;
 }

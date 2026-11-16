@@ -309,7 +309,7 @@ async function run(execute: boolean): Promise<void> {
   const HINT: Record<string, string> = {
     spending_off: 'AGENT_SPEND_ENABLED is not true on the engine (agent-spend.ts:111-117).',
     owner_budget_not_checked: 'the engine could not read the ledger: is migration 20261114200000_owner_spend_ledger.sql applied? (agent-spend.ts:160-164)',
-    no_owner_budget: "the agent's owner is not a builder account, so no stake funds it (agent-spend.ts:174-179).",
+    no_owner_budget: "no account's stake funds this owner (owner-budget.ts ownerBuilderOfAgent). A proof-of-human (human_sbt) owner has one only where the engine has HUMAN_SBT_OWNER_BUDGET_ENABLED=true.",
     not_bound: 'the agent is not bound (agent-spend.ts:133-138).',
     no_gas: 'the agent wallet has too little ETH: raise GAS_TOPUP_ETH (max 0.002).',
     owner_balance: "the owner's USDC balance is below the amount.",
@@ -389,10 +389,18 @@ async function run(execute: boolean): Promise<void> {
       headers: { ...(await walletHeaders('POST', '/api/v1/human/bind')), 'x-agent-key': a.key },
     });
     if (b.status !== 201 || b.body?.ok !== true) stop('3-bind', `expected 201 ok, got ${b.status} ${b.body?.reason ?? b.body?.error ?? ''}`, b.body);
-    if (b.body.binding?.owner_kind !== 'builder' || String(b.body.binding?.builder_id) !== builderId) {
-      stop('3-bind', `bound as ${b.body.binding?.owner_kind} ${b.body.binding?.builder_id ?? b.body.binding?.human_token_id}, not builder ${builderId}. A wallet with a proof-of-human SBT binds as human_sbt and has no builder stake budget: use another wallet.`, b.body);
+    const kind = b.body.binding?.owner_kind;
+    if (kind === 'human_sbt' && b.body.binding?.human_token_id) {
+      // A proof-of-human wallet binds as human_sbt. Its budget is the stake of the account that holds the
+      // same wallet (step 1), but only where the server has HUMAN_SBT_OWNER_BUDGET_ENABLED=true
+      // (owner-budget.ts ownerBuilderOfAgent). Not readable from here: step 3b answers no_owner_budget
+      // where it is off, before any USDC moves.
+      log('3-bind', `${a.name} bound to the owner as a verified human (${b.body.binding.human_token_id}); its budget is account ${builderId}'s stake`, b.body);
+    } else if (kind !== 'builder' || String(b.body.binding?.builder_id) !== builderId) {
+      stop('3-bind', `bound as ${kind} ${b.body.binding?.builder_id ?? b.body.binding?.human_token_id}, not builder ${builderId}.`, b.body);
+    } else {
+      log('3-bind', `${a.name} bound to the owner as builder ${builderId}`, b.body);
     }
-    log('3-bind', `${a.name} bound to the owner as builder ${builderId}`, b.body);
   }
 
   // ── 3b. spend limits ── stake mode: the agent's key alone may not move the owner's stake (Strix on
