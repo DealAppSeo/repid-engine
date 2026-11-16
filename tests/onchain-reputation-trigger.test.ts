@@ -67,6 +67,9 @@ function makeDb(agentRow: any, priorWrites: any[] = [], settlement: any = CONFIR
         };
         return builder;
       }
+      if (table === 'repid_events') {
+        return { update: () => ({ eq: async () => ({ error: null }) }) };
+      }
       throw new Error(`unexpected table ${table}`);
     },
   };
@@ -259,5 +262,90 @@ describe('settlementGate (pure)', () => {
     [null, 'never'],
   ])('%j → %s', (row, want) => {
     expect(settlementGate(row as never)).toBe(want);
+  });
+});
+
+// R1 (2026-11-16): one RepID event, one on-chain write, linked to its contract.
+// MEASURED: on 2026-07-08, repid_events row 1564 got TWO on-chain writes 4 s apart. One came from
+// this inline trigger (no contract_id, so no receipt could link it); the other came from
+// FeedbackLoopWorker, because the inline path never closed the outbox row it had already written.
+describe('one event, one write, linked to its contract (R1)', () => {
+  function recordingDb(prior: { contract_id?: string; repid_event_id?: number }[] = [], priorErr: { message: string } | null = null) {
+    const updates: { table: string; patch: any; id: unknown }[] = [];
+    const base = makeDb(REAL_AGENT);
+    return {
+      updates,
+      from(table: string) {
+        if (table === 'erc8004_reputation_writes') {
+          const filters: Record<string, unknown> = {};
+          const b: any = {
+            select: () => b,
+            eq: (col: string, val: unknown) => { filters[col] = val; return b; },
+            limit: async () => (priorErr ? { data: null, error: priorErr } : {
+              data: prior.filter((p) =>
+                Object.entries(filters).every(([k, v]) => k === 'agent_id' || (p as any)[k] === v)),
+              error: null,
+            }),
+          };
+          return b;
+        }
+        if (table === 'repid_events') {
+          return { update: (patch: any) => ({ eq: async (_c: string, id: unknown) => { updates.push({ table, patch, id }); return { error: null }; } }) };
+        }
+        return base.from(table);
+      },
+    };
+  }
+  const okWriter = () => ({
+    writeRepIDFeedback: jest.fn().mockResolvedValue({ txHash: '0xbeef', blockNumber: 1, gasUsed: '1' }),
+    chainId: 84532,
+    getContractAddress: () => '0xabc',
+  });
+
+  test('the persisted row carries the contract, so a receipt can prove which exchange caused it', async () => {
+    process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED = 'true';
+    mockWriter = okWriter();
+    (global as any).__triggerDb = recordingDb();
+    await maybeWriteOnChainReputation({ contractId: 'c-1', providerAgentId: REAL_UUID, isSimulated: false, x402PaymentId: 'pay-1', repidEventId: 55 });
+    expect(persistSpy.mock.calls[0][1]).toMatchObject({ contract_id: 'c-1', repid_event_id: 55 });
+  });
+
+  test('a successful write closes its outbox row, so FeedbackLoopWorker does not write the same event again', async () => {
+    process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED = 'true';
+    mockWriter = okWriter();
+    const fake = recordingDb();
+    (global as any).__triggerDb = fake;
+    await maybeWriteOnChainReputation({ contractId: 'c-1', providerAgentId: REAL_UUID, isSimulated: false, x402PaymentId: 'pay-1', repidEventId: 55 });
+    const closed = fake.updates.find((u) => u.id === 55);
+    expect(closed?.patch.processed_at).toEqual(expect.any(String));
+  });
+
+  test('a prior write for the same (agent, contract) blocks a second one, even with no event id', async () => {
+    process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED = 'true';
+    mockWriter = okWriter();
+    (global as any).__triggerDb = recordingDb([{ contract_id: 'c-1', repid_event_id: 7 }]);
+    const out = await maybeWriteOnChainReputation({ contractId: 'c-1', providerAgentId: REAL_UUID, isSimulated: false, x402PaymentId: 'pay-1' });
+    expect(out).toEqual({ attempted: false, reason: 'already_written' });
+    expect(mockWriter.writeRepIDFeedback).not.toHaveBeenCalled();
+  });
+
+  test('an unreadable prior-write check writes nothing and leaves the outbox row open (Grok r1)', async () => {
+    process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED = 'true';
+    mockWriter = okWriter();
+    const fake = recordingDb([], { message: 'connection reset' });
+    (global as any).__triggerDb = fake;
+    const out = await maybeWriteOnChainReputation({ contractId: 'c-1', providerAgentId: REAL_UUID, isSimulated: false, x402PaymentId: 'pay-1', repidEventId: 55 });
+    expect(out).toEqual({ attempted: false, reason: 'prior_write_unreadable' });
+    expect(mockWriter.writeRepIDFeedback).not.toHaveBeenCalled();
+    expect(persistSpy).not.toHaveBeenCalled();
+    expect(fake.updates).toHaveLength(0);
+  });
+
+  test('a prior write for a DIFFERENT contract does not block this one', async () => {
+    process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED = 'true';
+    mockWriter = okWriter();
+    (global as any).__triggerDb = recordingDb([{ contract_id: 'c-other', repid_event_id: 7 }]);
+    const out = await maybeWriteOnChainReputation({ contractId: 'c-1', providerAgentId: REAL_UUID, isSimulated: false, x402PaymentId: 'pay-1' });
+    expect(out).toMatchObject({ attempted: true, ok: true });
   });
 });
