@@ -270,7 +270,7 @@ describe('settlementGate (pure)', () => {
 // this inline trigger (no contract_id, so no receipt could link it); the other came from
 // FeedbackLoopWorker, because the inline path never closed the outbox row it had already written.
 describe('one event, one write, linked to its contract (R1)', () => {
-  function recordingDb(prior: { contract_id?: string; repid_event_id?: number }[] = []) {
+  function recordingDb(prior: { contract_id?: string; repid_event_id?: number }[] = [], priorErr: { message: string } | null = null) {
     const updates: { table: string; patch: any; id: unknown }[] = [];
     const base = makeDb(REAL_AGENT);
     return {
@@ -281,7 +281,7 @@ describe('one event, one write, linked to its contract (R1)', () => {
           const b: any = {
             select: () => b,
             eq: (col: string, val: unknown) => { filters[col] = val; return b; },
-            limit: async () => ({
+            limit: async () => (priorErr ? { data: null, error: priorErr } : {
               data: prior.filter((p) =>
                 Object.entries(filters).every(([k, v]) => k === 'agent_id' || (p as any)[k] === v)),
               error: null,
@@ -327,6 +327,18 @@ describe('one event, one write, linked to its contract (R1)', () => {
     const out = await maybeWriteOnChainReputation({ contractId: 'c-1', providerAgentId: REAL_UUID, isSimulated: false, x402PaymentId: 'pay-1' });
     expect(out).toEqual({ attempted: false, reason: 'already_written' });
     expect(mockWriter.writeRepIDFeedback).not.toHaveBeenCalled();
+  });
+
+  test('an unreadable prior-write check writes nothing and leaves the outbox row open (Grok r1)', async () => {
+    process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED = 'true';
+    mockWriter = okWriter();
+    const fake = recordingDb([], { message: 'connection reset' });
+    (global as any).__triggerDb = fake;
+    const out = await maybeWriteOnChainReputation({ contractId: 'c-1', providerAgentId: REAL_UUID, isSimulated: false, x402PaymentId: 'pay-1', repidEventId: 55 });
+    expect(out).toEqual({ attempted: false, reason: 'prior_write_unreadable' });
+    expect(mockWriter.writeRepIDFeedback).not.toHaveBeenCalled();
+    expect(persistSpy).not.toHaveBeenCalled();
+    expect(fake.updates).toHaveLength(0);
   });
 
   test('a prior write for a DIFFERENT contract does not block this one', async () => {

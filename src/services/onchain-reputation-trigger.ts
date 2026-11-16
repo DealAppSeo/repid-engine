@@ -75,7 +75,7 @@ export interface OnChainTriggerInput {
 }
 
 export type OnChainTriggerOutcome =
-  | { attempted: false; reason: 'disabled' | 'simulated' | 'no_token_id' | 'below_floor' | 'agent_not_found' | 'already_written' | 'no_writer' | 'settlement_pending' | 'settlement_never' | 'settlement_unreadable' }
+  | { attempted: false; reason: 'disabled' | 'simulated' | 'no_token_id' | 'below_floor' | 'agent_not_found' | 'already_written' | 'no_writer' | 'prior_write_unreadable' | 'settlement_pending' | 'settlement_never' | 'settlement_unreadable' }
   | { attempted: true; ok: true; txHash: string }
   | { attempted: true; ok: false; error: string };
 
@@ -142,12 +142,21 @@ export async function maybeWriteOnChainReputation(
     // (c) IDEMPOTENT — if we already wrote for this (agent, contract), stop. contract_id has been a
     // real column since 2026-08-01; until 2026-11-16 this comment said it did not exist and the check
     // ran only when an event id was passed, so a write with no event id was never deduplicated.
-    const { data: prior } = await db
+    const { data: prior, error: priorErr } = await db
       .from('erc8004_reputation_writes')
       .select('id, tx_hash')
       .eq('agent_id', agent.id)
       .eq('contract_id', input.contractId)
       .limit(1);
+    // An unreadable check is not "no prior write" (Grok r1 on #1556). Write nothing and leave the
+    // outbox row open: FeedbackLoopWorker drains it, so a blip costs a delay, never a second write.
+    if (priorErr) {
+      console.error(
+        `[onchain-reputation-trigger] could not read prior writes for agent ${agent.agent_name} contract ${input.contractId}; not writing:`,
+        priorErr.message ?? priorErr,
+      );
+      return { attempted: false, reason: 'prior_write_unreadable' };
+    }
     if (prior && prior.length > 0) {
       console.log(
         `[onchain-reputation-trigger] on-chain write already recorded for agent ${agent.agent_name} contract ${input.contractId} (tx ${prior[0]!.tx_hash}); idempotent skip.`,
