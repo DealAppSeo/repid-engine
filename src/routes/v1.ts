@@ -537,7 +537,10 @@ router.post('/stake/deposit/gasless', async (req: Request, res: Response) => {
     const out = await gaslessDeposit(req.body, defaultGaslessDeps());
     return res.status(out.status).json(out.body);
   } catch (e: any) {
-    return res.status(500).json({ ok: false, sent: 'unknown', code: 'internal', error: e?.message ?? 'gasless deposit failed' });
+    // Never the error text: ethers puts the RPC URL, and any key in it, in its messages.
+    console.error('[stake/deposit/gasless] internal error:', e?.message ?? String(e));
+    return res.status(500).json({ ok: false, sent: 'unknown', code: 'internal',
+      error: 'The gasless deposit failed inside the server, so whether anything was sent is not known. Check this authorization on BaseScan before signing a new one.' });
   }
 });
 

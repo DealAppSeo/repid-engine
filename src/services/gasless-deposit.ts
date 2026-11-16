@@ -31,6 +31,7 @@ import { escrowRelayAuthorization, RefundBroadcastUnconfirmed, type Eip3009Autho
 import { depositStake, serializeWithdraw, type DepositResult } from './stake-vault';
 import { BASE_SEPOLIA_CHAIN_ID } from './testnet-only';
 import { BASESCAN_TX, USDC_BASE_SEPOLIA } from './agent-spend';
+import { getActiveNetwork } from '../config/network';
 
 export type GaslessMode = 'off' | 'shadow' | 'on';
 
@@ -59,6 +60,12 @@ export const MIN_GASLESS_DEPOSIT = 1_000_000n;
  * DIFFERENT authorizations wait. Without a budget a caller could queue more sends than one signer
  * drains and push every withdrawal and payout behind them (Strix on #1558). Process-wide on purpose:
  * a per-address budget is bypassed by rotating addresses. A refused deposit is retried by the client.
+ *
+ * ponytail: the global budget can be GRIEFED. Four wallets, each with an account and 1 USDC, can hold
+ * all four slots every minute and keep everyone else at 429; the USDC is theirs again by withdrawal,
+ * and the escrow pays every gas. The per-payer slot only stops ONE wallet from doing it. Upgrade before
+ * GASLESS_DEPOSIT_MODE=on for strangers: gate admission on something a rotated wallet cannot make for
+ * free (account age, a stake already held, or a signed connect), or charge the gas back from the deposit.
  */
 export function createGaslessAdmission(maxPerMinute = 4, maxPerPayer = 1): (nowMs: number, payer: string) => boolean {
   const recent: Array<{ at: number; payer: string }> = [];
@@ -130,6 +137,17 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
   if (deps.mode === 'off') return refuse(503, 'gasless_deposit_off', 'Gasless deposits are not enabled on this server. Nothing was sent.');
   if (!deps.realStaking) return refuse(503, 'real_staking_off', 'Real staking is not enabled on this server, so a deposit could not be credited. Nothing was sent.');
   if (!deps.escrow) return refuse(503, 'escrow_not_configured', 'The stake escrow is not configured on this server. Nothing was sent.');
+  // verifyEip3009Local takes the EIP-712 chainId from NETWORK (getActiveNetwork); the escrow sends only on
+  // Base Sepolia (84532). With NETWORK naming another chain, signatures would be checked for that chain.
+  let signingChainId: number | null = null;
+  try {
+    signingChainId = getActiveNetwork().chainId;
+  } catch {
+    /* unknown NETWORK: refused below */
+  }
+  if (signingChainId !== BASE_SEPOLIA_CHAIN_ID) {
+    return refuse(503, 'wrong_network', 'This server checks signatures for a chain other than Base Sepolia, so gasless deposits are refused. Nothing was sent.');
+  }
 
   const b = (body ?? {}) as { authorization?: unknown; signature?: unknown };
   const a = parseAuthorization(b.authorization);
@@ -226,6 +244,26 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
         };
       }
       logOnly('relay', e);
+      // A signed authorization can be submitted by anyone, and `to` is the escrow. So a revert here can
+      // mean another submitter used it first and the USDC DID move. Re-read before saying it did not.
+      let usedNow: boolean;
+      try {
+        usedNow = await deps.chain.authorizationState(a.from, a.nonce);
+      } catch (e2: unknown) {
+        logOnly('authorization state after a failed relay', e2);
+        return {
+          status: 202,
+          body: { ok: false, mode: 'on', sent: 'unknown', code: 'send_not_checked', ...plan,
+            error: "The escrow's submission failed and the authorization's state could not be re-read, so it is not known whether USDC moved. Check this authorization on BaseScan before signing a new one." },
+        };
+      }
+      if (usedNow) {
+        return {
+          status: 202,
+          body: { ok: false, mode: 'on', sent: 'unknown', code: 'authorization_used_elsewhere', ...plan,
+            error: "The escrow's submission failed, and the chain shows this authorization as used or canceled. If it was used, its USDC reached the escrow from another submitter: find that transaction on BaseScan and claim it with POST /api/v1/stake/deposit. If you canceled it, nothing moved." },
+        };
+      }
       return refuse(502, 'not_sent', 'The escrow did not submit the deposit, so no USDC moved.');
     }
     // The USDC has moved. From here every answer carries the tx hash: a credit that throws is not
