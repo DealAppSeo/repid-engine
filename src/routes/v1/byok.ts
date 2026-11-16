@@ -608,7 +608,21 @@ router.delete('/human/bind/:agentId', async (req: Request, res: Response) => {
   if (!owner || owner.owner_id !== p.owner.id) {
     return res.status(403).json({ error: 'not_owner', message: 'You do not currently own this agent.' });
   }
-  return res.json(await revokeBinding(String(req.params.agentId)));
+  const agentId = String(req.params.agentId);
+  const revoked = await revokeBinding(agentId);
+  if (!revoked.ok) return res.json(revoked);
+  // R4: an unbind does not touch an on-chain USDC approval (wallet mode). Say what is still live.
+  const { approvalAfterUnbind, rpcSpendChain } = require('../../services/agent-spend') as typeof import('../../services/agent-spend');
+  const { data: agentRow, error: agentErr } = await db.from('repid_agents').select('wallet_address').eq('id', agentId).maybeSingle();
+  // An unreadable agent row is "not checked", never "no wallet, so no approval".
+  const onchain_approval = agentErr
+    ? { checked: false as const, reason: `Could not read this agent's wallet, so the on-chain approval was not read. It may still be live.` }
+    : await approvalAfterUnbind(
+        rpcSpendChain(process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org'),
+        owner.human_wallet,
+        (agentRow as { wallet_address?: string | null } | null)?.wallet_address ?? null,
+      );
+  return res.json({ ...revoked, onchain_approval });
 });
 
 /** "My team of experts" — every agent this caller owns. */
