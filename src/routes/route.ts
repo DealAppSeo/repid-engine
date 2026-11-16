@@ -280,15 +280,12 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
     };
 
     if (agent_id && typeof agent_id === 'string' && !isUuid(agent_id)) {
-      // Exact name, or the trinity- form, which only the 12 originals carry. Names are unique.
+      // Exact name first, then the trinity- form, which only the 12 originals carry.
       const lcName = agent_id.toLowerCase();
-      const names = lcName.startsWith('trinity-') ? [lcName] : [lcName, `trinity-${lcName}`];
+      const lookup = (name: string) => db.from('repid_agents').select('id').eq('agent_name', name).maybeSingle();
       try {
-        const { data } = await db
-          .from('repid_agents')
-          .select('id')
-          .in('agent_name', names)
-          .maybeSingle();
+        let { data } = await lookup(lcName);
+        if (!data && !lcName.startsWith('trinity-')) ({ data } = await lookup(`trinity-${lcName}`));
         if (data && data.id) {
           resolvedAgentId = data.id;
         }

@@ -55,10 +55,13 @@ async function resolveAgentUuid(raw: string): Promise<string | null> {
   if (/^\d+$/.test(id)) {
     query = query.eq('erc8004_token_id', id);
   } else {
-    // Exact name, or the trinity- form, which only the 12 originals carry ("sophia" → trinity-sophia).
-    // Names are unique, so at most one of the two exists.
+    // Exact name first, then the trinity- form, which only the 12 originals carry
+    // ("sophia" → trinity-sophia). Same order as fetchAgentRow in agent-passport.ts.
     const lcName = id.toLowerCase();
-    query = query.in('agent_name', lcName.startsWith('trinity-') ? [lcName] : [lcName, `trinity-${lcName}`]);
+    const { data: exact } = await query.eq('agent_name', lcName).maybeSingle();
+    if (exact && exact.id) return exact.id as string;
+    if (lcName.startsWith('trinity-')) return null;
+    query = db.from('repid_agents').select('id').eq('agent_name', `trinity-${lcName}`);
   }
   const { data } = await query.maybeSingle();
   return data && data.id ? (data.id as string) : null;
