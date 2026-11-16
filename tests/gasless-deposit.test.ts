@@ -221,6 +221,13 @@ describe('gasless deposit (EIP-3009)', () => {
     expect(out.body).toMatchObject({ ok: false, sent: true, code: 'sent_not_credited' });
   });
 
+  test('sent, then the credit THROWS: 202 with the tx hash, never a 500 that drops it (Grok r1 lead on #1558)', async () => {
+    const h = harness({ credit: async () => { throw new Error('connection reset'); } });
+    const out = await gaslessDeposit(await signed(), h.deps);
+    expect(out.status).toBe(202);
+    expect(out.body).toMatchObject({ ok: false, sent: true, code: 'credit_not_checked', tx_hash: '0x' + 'ab'.repeat(32) });
+  });
+
   test('malformed input is refused', async () => {
     const h = harness();
     for (const body of [null, {}, { authorization: {}, signature: '0x' }, { ...(await signed()), signature: 'nope' }]) {

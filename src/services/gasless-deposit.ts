@@ -175,7 +175,18 @@ export async function gaslessDeposit(body: unknown, deps: GaslessDeps): Promise<
       }
       return refuse(502, 'not_sent', `The escrow did not submit the deposit, so no USDC moved. ${(e as Error)?.message ?? ''}`.trim());
     }
-    const credited = await deps.credit(a.from, value, txHash);
+    // The USDC has moved. From here every answer carries the tx hash: a credit that throws is not
+    // "not sent", and a 500 without the hash would leave the owner nothing to claim with.
+    let credited: DepositResult;
+    try {
+      credited = await deps.credit(a.from, value, txHash);
+    } catch (e: unknown) {
+      return {
+        status: 202,
+        body: { ok: false, mode: 'on', sent: true, code: 'credit_not_checked', tx_hash: txHash, basescan_url: `${BASESCAN_TX}${txHash}`, ...plan,
+          error: `The USDC reached the escrow, and the credit could not be confirmed: ${(e as Error)?.message ?? String(e)}. Claim it with POST /api/v1/stake/deposit and this tx_hash; a transfer already credited is refused as a duplicate, never credited twice.` },
+      };
+    }
     if (!credited.ok) {
       return {
         status: 202,
