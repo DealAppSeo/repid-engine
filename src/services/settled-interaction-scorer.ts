@@ -22,6 +22,12 @@
  */
 import { buildShadowScoreEvent, type SettledInteraction, type ShadowScoreResult } from './shadow-scoring';
 import { resolvePaymentProof, type VerifySettlementResult } from './x402-settlement-verifier';
+import {
+  paymentAnchorVerifyMode,
+  shadowCheckPaymentAnchor,
+  type AnchorDeps,
+  type ShadowAnchorResult,
+} from './payment-anchor-verify';
 
 export interface ScoreSettledInteractionOptions {
   /**
@@ -34,11 +40,77 @@ export interface ScoreSettledInteractionOptions {
   tokenAddress?: string | null;
   policyVersion?: string;
   mode?: 'shadow' | 'applied';
+  /** Test seam for the payment-anchor check (see `anchorShadow`). Production reads service_contracts / x402_settlements / payment_anchor_claims. */
+  anchorDeps?: AnchorDeps;
 }
 
 export interface ScoredSettlement extends ShadowScoreResult {
   /** What the chain actually said. Absent only when no proof was supplied at all. */
   settlement?: VerifySettlementResult;
+  /** The payment-anchor check. Absent when PAYMENT_ANCHOR_VERIFY_MODE is off or no proof was supplied. */
+  anchorCheck?: ShadowAnchorResult;
+}
+
+/**
+ * Run the flag-gated payment-anchor check (payment-anchor-verify.ts). It takes the payee, payer and
+ * price from `interaction.contractId`'s record, binds the tx to that contract and refuses a replay.
+ * The answer goes to `metadata.payment.anchor_check`; no delta changes.
+ *
+ * Off: returns undefined and reads nothing (the Supabase adapter is not even imported). Never throws
+ * into scoring.
+ */
+async function anchorShadow(
+  interaction: SettledInteraction,
+  opts: ScoreSettledInteractionOptions,
+): Promise<ShadowAnchorResult | undefined> {
+  const claimed = interaction.paymentProof;
+  if (!claimed) return undefined;
+  const mode = paymentAnchorVerifyMode();
+  if (mode.effective === 'off') return undefined;
+  try {
+    const deps: AnchorDeps =
+      opts.anchorDeps ??
+      (await import('./payment-anchor-db.js').then((m) => ({ loadTerms: m.dbAnchorTerms, replay: m.dbAnchorReplayStore() })));
+    return (
+      (await shadowCheckPaymentAnchor(
+        { txHash: claimed.txHash, chainId: claimed.chainId, contractId: interaction.contractId ?? null },
+        deps,
+        mode,
+      )) ?? undefined
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/** Record the anchor check beside the payment metadata. Shadow: the delta is untouched. */
+function withAnchor(scored: ScoredSettlement, check: ShadowAnchorResult | undefined): ScoredSettlement {
+  if (!check) return scored;
+  const payment = (scored.row.metadata['payment'] ?? {}) as Record<string, unknown>;
+  return {
+    ...scored,
+    anchorCheck: check,
+    row: {
+      ...scored.row,
+      metadata: {
+        ...scored.row.metadata,
+        payment: {
+          ...payment,
+          anchor_check: {
+            mode: check.mode.effective,
+            requested_mode: check.mode.requested,
+            verdict: check.verdict,
+            reason: check.reason,
+            would_refuse: check.would_refuse,
+            contract_id: check.contract_id,
+            ...(check.settlement_kind ? { settlement_kind: check.settlement_kind } : {}),
+            ...(check.net_units ? { net_units: check.net_units } : {}),
+            ...(check.bound_contract_id ? { bound_contract_id: check.bound_contract_id } : {}),
+          },
+        },
+      },
+    },
+  };
 }
 
 /**
@@ -63,6 +135,8 @@ export async function scoreSettledInteraction(
     });
   }
 
+  const anchor = await anchorShadow(interaction, opts);
+
   if (!opts.payeeAddress) {
     // A proof we cannot resolve for want of a payee address must not be trusted
     // just because it is well-formed. Strip it and say why: the outcome is
@@ -77,9 +151,10 @@ export async function scoreSettledInteraction(
     const settlement: VerifySettlementResult = {
       verified: false,
       evidence: 'NOT_CHECKED',
+      code: 'no_payee',
       reason: 'no payee address supplied — settlement could not be resolved',
     };
-    return { ...built, settlement, ...annotate(built, settlement) };
+    return withAnchor({ ...built, settlement, ...annotate(built, settlement) }, anchor);
   }
 
   const { proof, result } = await resolvePaymentProof(claimed, {
@@ -106,7 +181,7 @@ export async function scoreSettledInteraction(
     },
   );
 
-  return { ...built, settlement: result, ...annotate(built, result) };
+  return withAnchor({ ...built, settlement: result, ...annotate(built, result) }, anchor);
 }
 
 /**

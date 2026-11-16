@@ -53,7 +53,23 @@ import { DEFAULT_CHAIN_ID } from './x402-outcome-link';
 
 const ERC20_ABI = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
 const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
+/**
+ * EIP-3009 `AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)`. USDC emits it
+ * for `transferWithAuthorization`, which is how an x402 `exact` settlement moves money. It names
+ * the payer but neither the payee nor the amount, so it never verifies a payment by itself; the
+ * `Transfer` beside it does that. It is reported so a reader can tell an x402 settlement from a
+ * plain transfer.
+ */
+const AUTHORIZATION_USED_TOPIC = ethers.id('AuthorizationUsed(address,bytes32)');
 const iface = new ethers.Interface(ERC20_ABI);
+
+/**
+ * The RPC error text is never copied into a result. ethers v6 puts the request URL in the
+ * message of a SERVER_ERROR (`info={ "requestUrl": ... }`), and a hosted RPC URL carries its API
+ * key. A `reason` lands in score-event metadata, so echoing it would publish the key. MEASURED
+ * 2026-11-16 against ethers 6.16.0 and an RPC answering 401.
+ */
+const RPC_DETAIL_WITHHELD = 'detail withheld: an RPC error message can carry the provider URL and its key';
 
 /** USDC has 6 decimals. A whole-dollar figure times this is the smallest unit. */
 export const USDC_DECIMALS = 6;
@@ -82,6 +98,12 @@ export interface VerifySettlementInput {
   payeeAddress: string;
   /** Service value the caller claims, in whole USDC. Verified as a lower bound. */
   claimedValueUsdc: number;
+  /**
+   * The same claim in the smallest unit. When set it wins over `claimedValueUsdc`, so a value
+   * that is already an integer (a contract's `agreed_price_usdc_raw`) is not round-tripped
+   * through a float.
+   */
+  claimedUnits?: bigint;
   /** Canonical token. Defaults to the configured USDC address. */
   tokenAddress?: string | null;
   minConfirmations?: number;
@@ -91,6 +113,38 @@ export interface VerifySettlementInput {
 
 export type SettlementEvidence = 'MEASURED' | 'NOT_CHECKED';
 
+/**
+ * A fixed code beside the prose `reason`, so a caller can branch on the answer without parsing
+ * English. Every result carries one.
+ */
+export type SettlementCode =
+  | 'malformed_tx_hash'
+  | 'no_payee'
+  | 'token_not_configured'
+  | 'unsupported_chain'
+  | 'rpc_unreachable'
+  | 'tx_not_found'
+  | 'tx_reverted'
+  | 'insufficient_confirmations'
+  | 'wrong_token'
+  | 'transfer_elsewhere'
+  | 'no_transfer_to_payee'
+  | 'below_claimed_value'
+  | 'verified';
+
+/**
+ * What the token's logs in the receipt said, for a caller that must check more than the total
+ * (who paid, whether the payee sent money back in the same tx). Addresses are lowercase.
+ */
+export interface SettlementLogAnalysis {
+  /** Canonical-token units received by the payee, per sender. */
+  inflowBySender: Record<string, bigint>;
+  /** Canonical-token units the payee sent out in the same tx (a refund, or a pass-through). */
+  outflowFromPayee: bigint;
+  /** Authorizers named by an EIP-3009 `AuthorizationUsed` the canonical token emitted. */
+  authorizationUsedBy: string[];
+}
+
 export interface VerifySettlementResult {
   /** True ONLY when a transfer of at least the claimed value to the payee was observed. */
   verified: boolean;
@@ -99,10 +153,13 @@ export interface VerifySettlementResult {
    * an absence, not a finding — never report it as a failed verification.
    */
   evidence: SettlementEvidence;
+  code: SettlementCode;
   reason: string;
   observedAmount?: bigint;
   confirmations?: number;
   blockNumber?: number;
+  /** Present whenever the receipt's logs were read. */
+  analysis?: SettlementLogAnalysis;
 }
 
 function eqAddr(a?: string | null, b?: string | null): boolean {
@@ -135,45 +192,46 @@ export async function verifySettlement(
 
   if (!/^0x[0-9a-fA-F]{64}$/.test(input.txHash ?? '')) {
     // A shape failure is a finding, not an absence — we did look, at the input.
-    return { verified: false, evidence: 'MEASURED', reason: 'tx hash is not a 32-byte hex hash' };
+    return { verified: false, evidence: 'MEASURED', code: 'malformed_tx_hash', reason: 'tx hash is not a 32-byte hex hash' };
   }
   if (!input.payeeAddress) {
-    return { verified: false, evidence: 'NOT_CHECKED', reason: 'no payee address to verify against' };
+    return { verified: false, evidence: 'NOT_CHECKED', code: 'no_payee', reason: 'no payee address to verify against' };
   }
   if (!tokenAddress) {
-    return { verified: false, evidence: 'NOT_CHECKED', reason: 'token address not configured' };
+    return { verified: false, evidence: 'NOT_CHECKED', code: 'token_not_configured', reason: 'token address not configured' };
   }
   if (chainId !== DEFAULT_CHAIN_ID) {
     return {
       verified: false,
       evidence: 'NOT_CHECKED',
+      code: 'unsupported_chain',
       reason: `no provider configured for chain ${chainId}; this verifier reads chain ${DEFAULT_CHAIN_ID}`,
     };
   }
 
-  const claimed = usdcToSmallestUnit(input.claimedValueUsdc);
+  const claimed = input.claimedUnits !== undefined ? input.claimedUnits : usdcToSmallestUnit(input.claimedValueUsdc);
   const provider = providerFactory();
 
   let receipt: ethers.TransactionReceipt | null;
   try {
     receipt = await provider.getTransactionReceipt(input.txHash);
-  } catch (e: any) {
-    return { verified: false, evidence: 'NOT_CHECKED', reason: `rpc error fetching receipt: ${e?.message ?? e}` };
+  } catch {
+    return { verified: false, evidence: 'NOT_CHECKED', code: 'rpc_unreachable', reason: `rpc error fetching receipt (${RPC_DETAIL_WITHHELD})` };
   }
   if (!receipt) {
     // An unmined or unknown tx IS an observation: we asked and the chain has no
     // such settlement. That is a finding.
-    return { verified: false, evidence: 'MEASURED', reason: 'tx not found on chain (unmined or unknown)' };
+    return { verified: false, evidence: 'MEASURED', code: 'tx_not_found', reason: 'tx not found on chain (unmined or unknown)' };
   }
   if ((receipt as any).status === 0) {
-    return { verified: false, evidence: 'MEASURED', reason: 'tx reverted — no value moved' };
+    return { verified: false, evidence: 'MEASURED', code: 'tx_reverted', reason: 'tx reverted — no value moved' };
   }
 
   let head: number;
   try {
     head = await provider.getBlockNumber();
-  } catch (e: any) {
-    return { verified: false, evidence: 'NOT_CHECKED', reason: `rpc error fetching head: ${e?.message ?? e}` };
+  } catch {
+    return { verified: false, evidence: 'NOT_CHECKED', code: 'rpc_unreachable', reason: `rpc error fetching head (${RPC_DETAIL_WITHHELD})` };
   }
 
   const blockNumber = receipt.blockNumber;
@@ -182,6 +240,7 @@ export async function verifySettlement(
     return {
       verified: false,
       evidence: 'MEASURED',
+      code: 'insufficient_confirmations',
       reason: `insufficient confirmations: ${confirmations} < ${minConfirmations}`,
       confirmations,
       blockNumber,
@@ -191,15 +250,23 @@ export async function verifySettlement(
   let observed = 0n;
   let sawWrongToken = false;
   let sawTransferElsewhere = false;
+  const analysis: SettlementLogAnalysis = { inflowBySender: {}, outflowFromPayee: 0n, authorizationUsedBy: [] };
 
   for (const log of receipt.logs ?? []) {
     if (!log.topics || log.topics.length === 0) continue;
-    if (log.topics[0] !== TRANSFER_TOPIC) continue;
+    const topic0 = String(log.topics[0]).toLowerCase();
 
     // The emitter check is the load-bearing one: a Transfer topic from any
     // address other than the canonical token is not a USDC transfer, whatever
     // its arguments say.
     const isUsdc = eqAddr(log.address, tokenAddress);
+
+    if (topic0 === AUTHORIZATION_USED_TOPIC) {
+      const authorizer = log.topics[1] ? `0x${String(log.topics[1]).slice(-40)}`.toLowerCase() : null;
+      if (isUsdc && authorizer) analysis.authorizationUsedBy.push(authorizer);
+      continue;
+    }
+    if (topic0 !== TRANSFER_TOPIC) continue;
 
     let parsed: ethers.LogDescription | null = null;
     try {
@@ -209,6 +276,7 @@ export async function verifySettlement(
     }
     if (!parsed) continue;
 
+    const from = parsed.args?.from as string;
     const to = parsed.args?.to as string;
     const value = parsed.args?.value as bigint;
 
@@ -216,8 +284,12 @@ export async function verifySettlement(
       if (eqAddr(to, input.payeeAddress)) sawWrongToken = true;
       continue;
     }
-    if (eqAddr(to, input.payeeAddress)) observed += value;
-    else sawTransferElsewhere = true;
+    if (eqAddr(from, input.payeeAddress)) analysis.outflowFromPayee += value;
+    if (eqAddr(to, input.payeeAddress)) {
+      observed += value;
+      const sender = String(from).toLowerCase();
+      analysis.inflowBySender[sender] = (analysis.inflowBySender[sender] ?? 0n) + value;
+    } else sawTransferElsewhere = true;
   }
 
   if (observed === 0n) {
@@ -225,26 +297,32 @@ export async function verifySettlement(
       return {
         verified: false,
         evidence: 'MEASURED',
+        code: 'wrong_token',
         reason: 'the transfer to the payee was a different token, not USDC',
         confirmations,
         blockNumber,
+        analysis,
       };
     }
     if (sawTransferElsewhere) {
       return {
         verified: false,
         evidence: 'MEASURED',
+        code: 'transfer_elsewhere',
         reason: 'a USDC transfer occurred but did not land at the payee address',
         confirmations,
         blockNumber,
+        analysis,
       };
     }
     return {
       verified: false,
       evidence: 'MEASURED',
+      code: 'no_transfer_to_payee',
       reason: 'no USDC transfer to the payee found in this tx',
       confirmations,
       blockNumber,
+      analysis,
     };
   }
 
@@ -255,20 +333,24 @@ export async function verifySettlement(
     return {
       verified: false,
       evidence: 'MEASURED',
+      code: 'below_claimed_value',
       reason: `settlement moved ${observed} but the claimed service value is ${claimed} (smallest unit)`,
       observedAmount: observed,
       confirmations,
       blockNumber,
+      analysis,
     };
   }
 
   return {
     verified: true,
     evidence: 'MEASURED',
+    code: 'verified',
     reason: `observed ${observed} USDC (smallest unit) to the payee at ${confirmations} confirmations`,
     observedAmount: observed,
     confirmations,
     blockNumber,
+    analysis,
   };
 }
 
