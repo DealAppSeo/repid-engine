@@ -352,3 +352,22 @@ export async function approvalAfterUnbind(
     how_to_end: `From your wallet, call USDC.approve(${wallet}, 0) on Base Sepolia (USDC ${USDC_BASE_SEPOLIA}).`,
   };
 }
+
+/**
+ * The unbind answer for the agent row as the route read it. Only a row READ with no wallet means no
+ * approval can exist. A read error, or NO row at all, is NOT_CHECKED (Grok r2 on #1559: a missing row
+ * used to reach approvalAfterUnbind as a null wallet and answer "no wallet, 0" without reading
+ * anything). The binding's FK cascades from repid_agents, so a missing row means the agent was deleted
+ * between the owner read and this one; its wallet's approval may still be live.
+ */
+export async function approvalForAgentRow(
+  read: Pick<SpendChain, 'chainId' | 'allowance'>,
+  owner: string | null | undefined,
+  row: { wallet_address?: string | null } | null | undefined,
+  readFailed: boolean,
+): Promise<UnbindApproval> {
+  if (readFailed || !row) {
+    return { checked: false, reason: "Could not read this agent's wallet, so the on-chain approval was not read. It may still be live." };
+  }
+  return approvalAfterUnbind(read, owner, row.wallet_address ?? null);
+}

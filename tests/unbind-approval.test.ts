@@ -7,7 +7,7 @@
  * pins is that the unbind answer SAYS so, from a live read, and that a failed read is NOT_CHECKED,
  * never "0". The chain here is a fake; nothing is read from a chain.
  */
-import { approvalAfterUnbind } from '../src/services/agent-spend';
+import { approvalAfterUnbind, approvalForAgentRow } from '../src/services/agent-spend';
 
 const OWNER = '0x' + 'aa'.repeat(20);
 const AGENT = '0x' + 'bb'.repeat(20);
@@ -73,4 +73,29 @@ test('a read that never answers times out to NOT_CHECKED', async () => {
   } finally {
     jest.useRealTimers();
   }
+});
+
+describe('approvalForAgentRow: the agent row as the unbind route read it (Grok r2 on #1559)', () => {
+  const untouched = {
+    chainId: async (): Promise<bigint> => { throw new Error('the chain must not be read'); },
+    allowance: async (): Promise<bigint> => { throw new Error('the chain must not be read'); },
+  };
+
+  test('NO row is NOT_CHECKED, never "no wallet, 0", and reads no chain', async () => {
+    const out = await approvalForAgentRow(untouched, OWNER, null, false);
+    expect(out).toMatchObject({ checked: false });
+    if (!out.checked) expect(out.reason).toMatch(/may still be live/);
+  });
+
+  test('a read error is NOT_CHECKED and reads no chain', async () => {
+    await expect(approvalForAgentRow(untouched, OWNER, { wallet_address: AGENT }, true)).resolves.toMatchObject({ checked: false });
+  });
+
+  test('a row READ with no wallet is the one case that says no approval can exist', async () => {
+    await expect(approvalForAgentRow(untouched, OWNER, { wallet_address: null }, false)).resolves.toMatchObject({ checked: true, live: false });
+  });
+
+  test('a row with a wallet reads the chain', async () => {
+    await expect(approvalForAgentRow(chain(2_500_000n), OWNER, { wallet_address: AGENT }, false)).resolves.toMatchObject({ checked: true, live: true, allowance_usdc: '2.5' });
+  });
 });
