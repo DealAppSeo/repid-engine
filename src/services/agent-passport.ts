@@ -200,7 +200,8 @@ async function fetchAgentRow(
   // Name/slug: the trinity- form first, because it is the canonical name of the 12
   // original agents and a row holding only the bare slug must never outrank one of
   // them; then the exact name, for every other agent. Same order as resolveAgentUuid
-  // in src/routes/repid.ts. (Until 2026-11-16 this was exact-first, so a sign-up
+  // (repid.ts), the /v1/llm/complete lookup (route.ts) and the task bridge
+  // (trinity-task-bridge.ts). (Until 2026-11-16 this was exact-first, so a sign-up
   // named "sophia" stored without the prefix would have won.)
   const lcName = id.toLowerCase();
   const canonical = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;

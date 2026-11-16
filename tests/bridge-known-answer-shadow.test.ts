@@ -40,8 +40,12 @@ jest.mock('../src/db', () => {
         if (table === 'repid_agents') {
           return {
             select: () => ({
-              eq: () => ({
-                maybeSingle: async () => ({ data: { id: st().agent.id }, error: null }),
+              eq: (_col: string, val: unknown) => ({
+                // knownNames unset: every name lookup hits (the original behaviour of this double).
+                maybeSingle: async () => ({
+                  data: !st().knownNames || st().knownNames.includes(val) ? { id: st().agent.id } : null,
+                  error: null,
+                }),
                 single: async () => ({ data: st().agent, error: null }),
               }),
             }),
@@ -139,9 +143,10 @@ function task(metadata: Record<string, unknown>) {
 }
 
 /** Run one bridge tick over one task and return everything the tick wrote. */
-async function tick(metadata: Record<string, unknown>) {
+async function tick(metadata: Record<string, unknown>, opts: { agent?: string; knownNames?: string[] } = {}) {
   const st = {
-    tasks: [task(metadata)],
+    tasks: [{ ...task(metadata), ...(opts.agent ? { agent_assigned: opts.agent } : {}) }],
+    knownNames: opts.knownNames,
     agent: { id: AGENT_ID, current_repid: 1000, tier: 'ESTABLISHED', vesting_cliff_ends_at: null },
     // count BEFORE the insert is 9, so (9 + 1) % 10 === 0: the every-10th-event proof trigger fires.
     eventCount: 9,
@@ -205,6 +210,18 @@ describe('bridge: canonical is today, exactly (witness for every shadow absence 
     expect(r.proofQueue).toHaveLength(1);
     expect(r.peerEnqueues).toBe(1);
     expect(r.taskUpdates).toHaveLength(1);
+  });
+
+  test('a task recorded as trinity-foo is scored to the agent now named plain "foo"', async () => {
+    // trinity_tasks still prefixes every name; since 2026-11-16 only the 12 originals keep it in repid_agents.
+    const r = await tick({ case_id: 'ka-002' }, { agent: 'trinity-foo', knownNames: ['foo'] });
+    expect(r.inserts).toHaveLength(1);
+    expect(r.agentUpdates).toHaveLength(1);
+  });
+
+  test('an original is still found by its trinity- name, not by a bare slug', async () => {
+    const r = await tick({ case_id: 'ka-003' }, { agent: 'veritas', knownNames: ['trinity-veritas'] });
+    expect(r.inserts).toHaveLength(1);
   });
 
   test("'canonical' and unset and a no-case_id task in shadow mode all write the identical row", async () => {
