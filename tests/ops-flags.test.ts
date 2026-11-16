@@ -12,6 +12,7 @@ jest.mock('../src/db', () => ({ db: { from: jest.fn() } }));
 jest.mock('../src/engine/agent-log', () => ({ logAgentEvent: jest.fn() }));
 
 import { db } from '../src/db';
+import { logAgentEvent } from '../src/engine/agent-log';
 import { authMiddleware } from '../src/middleware/auth';
 import { opsFlagsRouter } from '../src/routes/ops-flags';
 import { FLAG_REGISTRY, classifyEnvValue } from '../src/ops/flag-registry';
@@ -44,6 +45,9 @@ function setEnv(name: string, value: string) {
 
 const app = express();
 app.use(authMiddleware);
+// What authMiddleware left on the request: the rate limiter reads req.apiKey.key as its bucket name.
+let lastApiKey: unknown;
+app.use((req, _res, next) => { lastApiKey = (req as any).apiKey; next(); });
 app.use('/api/v1/ops', opsFlagsRouter);
 // Any authed caller reaches this: it shows what a key can do beyond the flags list.
 app.get('/api/v1/other', (_req, res) => res.json({ reached: true }));
@@ -224,6 +228,20 @@ describe('the look-only key (OPS_READ_KEY)', () => {
     const res = await request(app).get('/api/v1/ops/flags').set('x-api-key', 'short-look-key');
     expect(res.status).toBe(403);
     expect(res.body.flags).toBeUndefined();
+  });
+
+  it('never puts the key value in a log entry, a response or the rate-limit bucket name', async () => {
+    setEnv('OPS_READ_KEY', LOOK_KEY);
+    (logAgentEvent as jest.Mock).mockClear();
+    lastApiKey = undefined;
+    const ok = await request(app).get('/api/v1/ops/flags').set('x-api-key', LOOK_KEY);
+    const refused = await request(app).get('/api/v1/other').set('x-api-key', LOOK_KEY);
+    expect(ok.status).toBe(200);
+    expect(refused.status).toBe(403);
+    expect(lastApiKey).toEqual({ key: 'look-only', tier: 'look-only', lookOnly: true });
+    expect((logAgentEvent as jest.Mock).mock.calls.length).toBe(2);
+    const seen = JSON.stringify([(logAgentEvent as jest.Mock).mock.calls, ok.body, refused.body]);
+    expect(seen).not.toContain(LOOK_KEY);
   });
 
   it('cannot be forged with a REPID_API_KEYS tier name', async () => {
