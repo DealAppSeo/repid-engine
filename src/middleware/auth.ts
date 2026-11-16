@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
-import { matchEnvOperatorKey, validateAgentApiKey } from '../auth/api-keys';
+import { matchEnvOperatorKey, secretEquals, validateAgentApiKey } from '../auth/api-keys';
 import { logAgentEvent } from '../engine/agent-log';
 import {
   assessUnboundContractAccess,
@@ -19,6 +19,23 @@ import {
  */
 export function isOperatorKey(req: Request): boolean {
   return !(req as any).agent_id && (req as any).apiKey?.tier === 'ops';
+}
+
+/**
+ * The LOOK-ONLY key (env OPS_READ_KEY): it reads GET LOOK_ONLY_PATH and nothing else. It is its own
+ * variable, never a REPID_API_KEYS entry, so no other check in the engine recognises it (lesson 8:
+ * a key added to a shared list inherits everything that list is trusted with). authMiddleware
+ * refuses it on every other path. Unset, or shorter than 32 characters, it matches nothing.
+ */
+export const LOOK_ONLY_PATH = '/api/v1/ops/flags';
+const LOOK_ONLY_MIN_LENGTH = 32;
+function matchesLookOnlyKey(key: string): boolean {
+  const expected = process.env.OPS_READ_KEY;
+  return typeof expected === 'string' && expected.length >= LOOK_ONLY_MIN_LENGTH && secretEquals(key, expected);
+}
+/** Set only by authMiddleware, only for the look-only key on LOOK_ONLY_PATH. A tier name cannot forge it. */
+export function isLookOnlyKey(req: Request): boolean {
+  return (req as any).apiKey?.lookOnly === true && !(req as any).agent_id;
 }
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
@@ -263,6 +280,19 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
 
   if (!apiKey) {
     return res.status(401).json({ error: 'Unauthorized: API key required' });
+  }
+
+  // The look-only key, checked before any other key so it can never fall through to one.
+  // `key` is a fixed handle so the secret is never used as a rate-limit bucket name.
+  if (matchesLookOnlyKey(apiKey)) {
+    const allowed = req.method === 'GET' && req.path === LOOK_ONLY_PATH;
+    await logAgentEvent(
+      { action: 'api_auth_attempt', agent: 'look-only-key', metadata: { success: allowed, tier: 'look-only', path: req.path, method: req.method, ip: req.ip } },
+      allowed ? 'info' : 'warn',
+    );
+    if (!allowed) return res.status(403).json({ error: `Forbidden: this key can only read GET ${LOOK_ONLY_PATH}` });
+    (req as any).apiKey = { key: 'look-only', tier: 'look-only', lookOnly: true };
+    return next();
   }
 
   // REPID_API_KEYS, compared in constant time by the one verifier (r32).
