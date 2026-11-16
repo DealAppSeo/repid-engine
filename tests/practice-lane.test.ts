@@ -135,3 +135,22 @@ describe('GET /api/v1/lane/:agent', () => {
     expect(res.body.error).toBe('agent_not_found');
   });
 });
+
+describe('a failed read never echoes its error text (Strix on #1559)', () => {
+  const leak = 'https://rpc.example.invalid/v2/NOT-A-REAL-KEY-123';
+  let spy: jest.SpyInstance;
+  beforeEach(() => { spy = jest.spyOn(console, 'error').mockImplementation(() => {}); });
+  afterEach(() => spy.mockRestore());
+
+  it('chain, binding and agent reads: the public answer carries no URL or key, and the log keeps it', async () => {
+    const answers = [
+      await laneReport(AGENT.id, { reader: reader(), chain: chain(new Error(`server response 401 (info={ "requestUrl": "${leak}" })`)) }),
+      await laneReport(AGENT.id, { reader: reader({ binding: async () => { throw new Error(`fetch failed ${leak}`); } }), chain: chain(5_000_000n) }),
+      await laneReport('x', { reader: reader({ agents: async () => { throw new Error(`fetch failed ${leak}`); } }) }),
+    ];
+    // Only the leaked host and key: the report itself links its spec on github.com.
+    for (const a of answers) expect(JSON.stringify(a)).not.toMatch(/NOT-A-REAL-KEY-123|rpc\.example/);
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(String(spy.mock.calls[0]?.[1])).toContain('NOT-A-REAL-KEY-123');
+  });
+});

@@ -88,7 +88,14 @@ export function laneOf(gates: Gate[]): 'practice' | 'eligible' {
   return gates.length > 0 && gates.every((g) => g.status === 'VERIFIED') ? 'eligible' : 'practice';
 }
 
-const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/**
+ * A failed read is logged with its text and answered with a fixed phrase. GET /api/v1/lane/:agent is
+ * public, and an ethers error carries the request URL (FetchResponse info.requestUrl), so the RPC
+ * provider URL and any key in it would reach an anonymous caller (Strix on #1559).
+ */
+const logOnly = (where: string, e: unknown): void => {
+  console.error(`[practice-lane] ${where}:`, e instanceof Error ? e.message : String(e));
+};
 const usdc = (units: bigint) => {
   const s = units.toString().padStart(USDC_DECIMALS + 1, '0');
   return `${s.slice(0, -USDC_DECIMALS)}.${s.slice(-USDC_DECIMALS)}`.replace(/\.?0+$/, '');
@@ -108,7 +115,8 @@ export async function laneReport(
   try {
     rows = await reader.agents(ref);
   } catch (e: unknown) {
-    return { ok: false, status: 503, error: 'not_checked', message: `could not look up ${ref}: ${errText(e)}` };
+    logOnly('agent lookup', e);
+    return { ok: false, status: 503, error: 'not_checked', message: `could not look up ${ref}: the database read failed` };
   }
   if (rows.length === 0) return { ok: false, status: 404, error: 'agent_not_found', message: `no agent ${ref}` };
   if (rows.length > 1) return { ok: false, status: 409, error: 'ambiguous', message: `more than one agent is named ${ref}; use its id` };
@@ -125,7 +133,8 @@ export async function laneReport(
       ? { id: 'bound_both_ways', title: 'Bound both ways', status: 'VERIFIED', detail: 'A person signed for this agent with their wallet, and the agent proved it holds its own key.' }
       : { id: 'bound_both_ways', title: 'Bound both ways', status: 'FAILED', detail: 'Nobody has claimed this agent yet. Claim it on /bind with your wallet.' };
   } catch (e: unknown) {
-    bound = { id: 'bound_both_ways', title: 'Bound both ways', status: 'NOT_CHECKED', detail: `Could not read who owns this agent: ${errText(e)}` };
+    logOnly('binding read', e);
+    bound = { id: 'bound_both_ways', title: 'Bound both ways', status: 'NOT_CHECKED', detail: 'Could not read who owns this agent: the database read failed.' };
   }
 
   // Gate 2: seen a Caught. /check is anonymous, so nothing ties a Caught to this agent's owner.
@@ -195,6 +204,7 @@ async function limitPart(
       ? { id: 'limit', status: 'VERIFIED', detail: `The owner allows this agent up to ${usdc(allowance)} test USDC.` }
       : { id: 'limit', status: 'FAILED', detail: 'No limit is set (or it was stopped at 0). Set one on /spend.' };
   } catch (e: unknown) {
-    return { id: 'limit', status: 'NOT_CHECKED', detail: `Could not read the allowance from the chain: ${errText(e)}` };
+    logOnly('allowance read', e);
+    return { id: 'limit', status: 'NOT_CHECKED', detail: 'Could not read the allowance from the chain: the RPC read failed.' };
   }
 }
