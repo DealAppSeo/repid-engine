@@ -24,9 +24,18 @@ import { ServiceHandlerBase } from '../src/services/service-handler-base';
 
 type Row = Record<string, any>;
 let row: Row;
+const disputeRows: Row[] = [];
 
 function table() {
   dbFrom.mockImplementation((name: string) => {
+    if (name === 'dispute_validation_queue') {
+      const q: any = {
+        insert: (r: Row) => { const added = { ...r, id: `dq-${disputeRows.length + 1}` }; disputeRows.push(added); q.added = added; return q; },
+        select: () => q,
+        single: async () => ({ data: q.added, error: null }),
+      };
+      return q;
+    }
     if (name !== 'service_contracts') throw new Error(`unexpected table ${name}`);
     const filters: Array<[string, unknown]> = [];
     let patch: Row | null = null;
@@ -53,16 +62,20 @@ function table() {
 let release!: () => void;
 let gate: Promise<void>;
 
+let verdict: Record<string, unknown> = { verdict: 'PASS' };
+
 class GatedHandler extends ServiceHandlerBase {
   protected readonly serviceType = 'verification';
   protected async fulfill(): Promise<Record<string, unknown>> {
     await gate; // both runs have claimed before either transitions
-    return { verdict: 'PASS' };
+    return verdict;
   }
 }
 
 beforeEach(() => {
   applyDeltas.mockClear();
+  disputeRows.length = 0;
+  verdict = { verdict: 'PASS' };
   row = {
     id: 'c-1', status: 'escrowed', work_statement_hash: '0x' + 'ab'.repeat(32), created_at: '2026-07-08T20:17:31Z',
     provider_agent_id: 'p-1', buyer_agent_id: 'b-1', service_id: 's-1', metadata: {},
@@ -101,3 +114,30 @@ test('a contract that moved on (e.g. disputed by another run) is not fulfilled a
   expect(row.status).toBe('disputed');
   expect(applyDeltas).not.toHaveBeenCalled();
 });
+
+test('two concurrent runs that both route to DISPUTE file ONE dispute row (Strix on #1560)', async () => {
+  verdict = { verdict: 'VETO' };
+  const h = new GatedHandler();
+  const a = h.processOne('p-1');
+  const b = h.processOne('p-1');
+  await new Promise((r) => setImmediate(r));
+  release();
+  const [ra, rb] = await Promise.all([a, b]);
+  expect(row.status).toBe('disputed');
+  expect(disputeRows).toHaveLength(1);
+  expect([ra.processed, rb.processed].sort()).toEqual([false, true]);
+  expect(applyDeltas).not.toHaveBeenCalled();
+});
+
+test('a contract another run already FULFILLED is not flipped to disputed, and files no dispute', async () => {
+  verdict = { verdict: 'VETO' };
+  const p = new GatedHandler().processOne('p-1');
+  await new Promise((r) => setImmediate(r));
+  row.status = 'fulfilled';
+  release();
+  const out = await p;
+  expect(out.processed).toBe(false);
+  expect(row.status).toBe('fulfilled');
+  expect(disputeRows).toHaveLength(0);
+});
+
