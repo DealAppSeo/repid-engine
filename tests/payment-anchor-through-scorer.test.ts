@@ -178,6 +178,17 @@ describe('shadow anchor check, through the scorer', () => {
     expect(r.settlement?.reason ?? '').not.toContain('rpc.example.invalid');
   });
 
+  it('5b. RPC down, with the anchor check OFF: the RPC error text still never reaches the row', async () => {
+    // Independent of the new check: the existing settlement verifier copied the RPC error message
+    // into `metadata.payment.settlement_reason`, and ethers puts the RPC URL (key included) there.
+    process.env.PAYMENT_ANCHOR_VERIFY_MODE = 'off';
+    installChain('down');
+    const r = await scoreSettledInteraction(interaction(), CALLER_OPTS);
+    expect(r.settlement?.evidence).toBe('NOT_CHECKED');
+    expect(JSON.stringify(r.row.metadata)).not.toContain('FAKE-RPC-KEY');
+    expect(JSON.stringify(r.row.metadata)).not.toContain('rpc.example.invalid');
+  });
+
   it('an anchor that names no contract is refused, and the check reads no contract table', async () => {
     installChain('real');
     let loaded = 0;
