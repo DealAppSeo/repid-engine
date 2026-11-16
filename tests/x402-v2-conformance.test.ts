@@ -256,20 +256,89 @@ describe('the PAYMENT-REQUIRED header is a strict v2 PaymentRequired', () => {
 });
 
 // ===========================================================================
-describe('current (v1-shaped) clients keep working', () => {
+// These two must pass on main AND on this branch. A "still works" test that only passes after the
+// change cannot show that nothing changed; run it on main to see it is green there too.
+describe('current (v1-shaped) clients keep working: identical on main and on this branch', () => {
   it('the body still carries maxAmountRequired, payTo, asset and the per-entry resource string', async () => {
     const { res } = await challenge();
+    expect(res.status).toBe(402);
     const a = res.body.accepts[0];
     expect(res.body.x402Version).toBe(2);
     expect(res.body.error).toBe('Payment required');
+    expect(a.scheme).toBe('exact');
     expect(a.maxAmountRequired).toBe(PRICE);
     expect(a.payTo).toBe(PAYEE);
     expect(a.asset).toBe(USDC_BASE_SEPOLIA);
     expect(a.network).toBe(NETWORK);
+    expect(a.maxTimeoutSeconds).toBe(3600);
     expect(typeof a.resource).toBe('string');
     expect(a.resource).toMatch(new RegExp(`${ROUTE}$`));
     expect(a.mimeType).toBe('application/json');
-    // and the body also parses as v2, so a body-reading v2 client is not left out.
+  });
+
+  it('a flat X-PAYMENT (what trustshell sends) settles, and the facilitator request is exactly this', async () => {
+    // Deterministic buyer (derived from a label, holds nothing) and a fixed window and nonce, so the
+    // facilitator request is the same bytes on every run and on both sides of this change.
+    const wallet = new ethers.Wallet(ethers.id('x402-v2-conformance deterministic test buyer'));
+    const auth = {
+      from: wallet.address,
+      to: PAYEE,
+      value: PRICE,
+      validAfter: 0,
+      validBefore: 4102444800, // 2100-01-01, so the fixture never expires
+      nonce: ethers.id('x402-v2-conformance fixed nonce'),
+    };
+    const signature = await wallet.signTypedData(
+      { name: 'USDC', version: '2', chainId: 84532, verifyingContract: USDC_BASE_SEPOLIA },
+      {
+        TransferWithAuthorization: [
+          { name: 'from', type: 'address' },
+          { name: 'to', type: 'address' },
+          { name: 'value', type: 'uint256' },
+          { name: 'validAfter', type: 'uint256' },
+          { name: 'validBefore', type: 'uint256' },
+          { name: 'nonce', type: 'bytes32' },
+        ],
+      },
+      auth,
+    );
+    const res = await request(app).post(ROUTE)
+      .set('X-PAYMENT', Buffer.from(JSON.stringify({ ...auth, signature })).toString('base64'))
+      .send({ query: 'BTC' });
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.headers['x-payment-response'])).toEqual({ status: 'settled', txHash: SETTLE_TX });
+    const accepted = {
+      scheme: 'exact',
+      network: NETWORK,
+      amount: PRICE,
+      asset: USDC_BASE_SEPOLIA,
+      payTo: PAYEE,
+      maxTimeoutSeconds: 3600,
+      extra: { assetTransferMethod: 'eip3009', name: 'USDC', version: '2' },
+    };
+    const expected = {
+      x402Version: 2,
+      paymentPayload: {
+        x402Version: 2,
+        accepted,
+        payload: {
+          signature,
+          authorization: { ...auth, validAfter: '0', validBefore: '4102444800' },
+        },
+      },
+      paymentRequirements: accepted,
+    };
+    expect(facilitatorCalls).toEqual([
+      { path: '/verify', body: expected },
+      { path: '/settle', body: expected },
+    ]);
+  });
+});
+
+describe('current clients and v2 clients reach the same settlement', () => {
+  it('the body also parses as v2, so a v2 client that reads the body is not left out', async () => {
+    const { res } = await challenge();
     expect(PaymentRequiredV2Schema.safeParse(res.body).success).toBe(true);
   });
 
