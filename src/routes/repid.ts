@@ -55,9 +55,10 @@ async function resolveAgentUuid(raw: string): Promise<string | null> {
   if (/^\d+$/.test(id)) {
     query = query.eq('erc8004_token_id', id);
   } else {
+    // Exact name, or the trinity- form, which only the 12 originals carry ("sophia" → trinity-sophia).
+    // Names are unique, so at most one of the two exists.
     const lcName = id.toLowerCase();
-    const lookupName = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
-    query = query.eq('agent_name', lookupName);
+    query = query.in('agent_name', lcName.startsWith('trinity-') ? [lcName] : [lcName, `trinity-${lcName}`]);
   }
   const { data } = await query.maybeSingle();
   return data && data.id ? (data.id as string) : null;

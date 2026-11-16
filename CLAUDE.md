@@ -239,7 +239,13 @@ When adding a new event type, update `RepIdUpdateInput.eventType`, the `challeng
 
 The engine reads/writes only these tables (no migrations live in this repo — schema is managed externally):
 
-- `repid_agents` — agent state (current_repid, tier, constitution, activity_30d, erc8004_address)
+- `repid_agents` — agent state (current_repid, tier, constitution, activity_30d, erc8004_address).
+  **Names: the `trinity-` prefix marks Sean's 12 original agents, and nothing else.** It held
+  until 2026-05-13, when the `normalize_agent_name()` trigger began adding `trinity-` to every
+  new name, so the prefix stopped telling anyone anything. The 2026-11-16 SQL (applied by Sean; check `pg_indexes` for `repid_agents_agent_name_unique`
+  before relying on it) gives the prefix back only to the 12, strips it from everyone else, and
+  makes names unique ignoring case. Until that index exists, names are NOT unique. The
+  forge-proof test for an original is a minted ERC-8004 token plus `active`, not the name.
 - `repid_score_events` — append-only audit log of every score change
 - `repid_badges` — milestone awards
 - `repid_bounties` — bounty lifecycle

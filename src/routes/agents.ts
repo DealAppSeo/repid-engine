@@ -67,7 +67,9 @@ router.post('/agents/human', async (req: Request, res: Response) => {
       .from('repid_agents')
       .insert({
         erc8004_address: zkpCommitment,
-        agent_name: 'HUMAN',
+        // Agent names are unique, so each human gets its own. Independent of anonymousId,
+        // which is the human's secret and must never be derivable from a readable column.
+        agent_name: `human-${randomBytes(6).toString('hex')}`,
         current_repid: STARTING_REPID,
         tier: 'PROBATIONARY',
         constitution: {

@@ -175,7 +175,7 @@ export async function getAgentsLeaderboard(
   const { data: agents, error } = await db
     .from('repid_agents')
     .select('agent_name')
-    .neq('agent_name', 'HUMAN');
+    .eq('is_human', false); // was neq('agent_name','HUMAN'); human rows are no longer all named HUMAN
 
   if (error || !agents) return [];
 

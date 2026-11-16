@@ -10,6 +10,7 @@ jest.mock('../../src/db', () => ({
     from: jest.fn().mockReturnThis(),
     select: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
+    in: jest.fn().mockReturnThis(),
     maybeSingle: jest.fn().mockRejectedValue(new Error('db down')),
   },
 }));

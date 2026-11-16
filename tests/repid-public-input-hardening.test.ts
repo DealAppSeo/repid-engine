@@ -38,6 +38,7 @@ jest.mock('../src/db', () => {
     const q: any = {
       select: () => q,
       eq: (col: string, val: unknown) => { rec.filters.push([col, val]); return q; },
+      in: (col: string, val: unknown) => { rec.filters.push([col, val]); return q; },
       order: () => q,
       limit: () => q,
       not: () => q,
