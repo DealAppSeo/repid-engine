@@ -83,7 +83,11 @@ export interface AgentSpendDeps {
   /** The wallet bound as this agent's owner, or null if nobody has bound it. */
   loadOwnerWallet?: (agentId: string) => Promise<string | null>;
   enabled?: () => boolean;
-  /** The owner's account (builder) whose stake is the shared budget, or null if not a builder. */
+  /**
+   * The owner's account (builder) whose stake is the shared budget, or null if there is none
+   * (owner-budget.ts ownerBuilderOfAgent): a builder owner's own account, or, only with
+   * HUMAN_SBT_OWNER_BUDGET_ENABLED=true, the account holding a verified human owner's wallet.
+   */
   loadOwnerBuilder?: (agentId: string) => Promise<string | null>;
   ownerBudget?: OwnerBudgetStore;
   budgetMode?: () => OwnerBudgetMode;
