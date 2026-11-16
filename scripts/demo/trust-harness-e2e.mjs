@@ -71,6 +71,32 @@ try {
   // Left null → verifyProofLocally fails closed on step 3.
 }
 
+/**
+ * The shipped payment-anchor check (src/services/payment-anchor-verify.ts), when
+ * PAYMENT_ANCHOR_VERIFY_MODE is set. DEMO_CONTRACT_ID names the contract the payment settles; its
+ * terms and the replay table are then read from Supabase (needs real credentials). Without it the
+ * verifier refuses the anchor as unbound, before any read. Never throws: a verifier that cannot load
+ * is NOT_CHECKED, never a pass.
+ */
+async function shadowAnchorCheck(txHash) {
+  const raw = (process.env.PAYMENT_ANCHOR_VERIFY_MODE ?? '').trim().toLowerCase();
+  if (raw === '' || raw === 'off') return null;
+  try {
+    const { shadowCheckPaymentAnchor, paymentAnchorVerifyMode } = await import('../../dist/services/payment-anchor-verify.js');
+    const contractId = process.env.DEMO_CONTRACT_ID || null;
+    const deps = contractId
+      ? await import('../../dist/services/payment-anchor-db.js').then((m) => ({ loadTerms: m.dbAnchorTerms, replay: m.dbAnchorReplayStore() }))
+      : {
+          loadTerms: async () => null,
+          replay: { find: async () => null, bind: async () => { throw new Error('no replay store'); } },
+        };
+    return await shadowCheckPaymentAnchor({ txHash, chainId: 84532, contractId }, deps, paymentAnchorVerifyMode());
+  } catch {
+    // dist not built, or config refused to load (it needs SUPABASE_URL set, even to a dummy).
+    return { verdict: 'NOT_CHECKED', reason: 'verifier_unavailable (run npm run build; set SUPABASE_URL)' };
+  }
+}
+
 const ENGINE = process.env.TRUSTSHELL_API_URL || 'https://repid-engine-production.up.railway.app';
 
 // The leaf binary is RESOLVED, not assumed. This used to default to an absolute path under
@@ -375,6 +401,18 @@ if (!deltaFor || !linkPaymentProof) {
   (linked.anchored ? ok : unk)(
     linked.anchored ? `payment anchor attached: ${linked.record.x402PaymentProof}` : 'no payment anchor',
   );
+  // GAP 4 (E2E eval 2026-11-16): the attach above checks the anchor's SHAPE only, so a made-up hash
+  // earned +25 here. With PAYMENT_ANCHOR_VERIFY_MODE=shadow, ask the shipped verifier what it would
+  // do with this anchor. Shadow: it reports, and the delta below is unchanged.
+  if (linked.anchored) {
+    const a = await shadowAnchorCheck(linked.record.x402PaymentProof);
+    if (a) {
+      const tail = 'shadow only: the delta below is unchanged';
+      if (a.verdict === 'VERIFIED') ok(`payment anchor VERIFIED on chain (${a.settlement_kind}), bound to its contract (${tail})`);
+      else if (a.verdict === 'REFUSED') bad(`payment anchor would be REFUSED: ${a.reason}. Under enforce it is stripped and the success demoted (${tail})`);
+      else unk(`payment anchor NOT_CHECKED: ${a.reason}. Under enforce it would not earn (${tail})`);
+    }
+  }
 
   const d = deltaFor(linked.record);
   const newScore = applyDelta(prevScore, d.delta);
