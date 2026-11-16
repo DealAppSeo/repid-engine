@@ -22,7 +22,7 @@ export function isOperatorKey(req: Request): boolean {
 }
 
 /**
- * The LOOK-ONLY key (env OPS_READ_KEY): it reads GET LOOK_ONLY_PATH and nothing else. It is its own
+ * The LOOK-ONLY key (env OPS_READ_KEY): it reads GET /api/v1/ops/flags and nothing else. It is its own
  * variable, never a REPID_API_KEYS entry, so no other check in the engine recognises it (lesson 8:
  * a key added to a shared list inherits everything that list is trusted with). authMiddleware
  * refuses it on every other path. Unset, or shorter than 32 characters, it matches nothing.
@@ -33,7 +33,7 @@ function matchesLookOnlyKey(key: string): boolean {
   const expected = process.env.OPS_READ_KEY;
   return typeof expected === 'string' && expected.length >= LOOK_ONLY_MIN_LENGTH && secretEquals(key, expected);
 }
-/** Set only by authMiddleware, only for the look-only key on LOOK_ONLY_PATH. A tier name cannot forge it. */
+/** Set only by authMiddleware, only for the look-only key on that one path. A tier name cannot forge it. */
 export function isLookOnlyKey(req: Request): boolean {
   return (req as any).apiKey?.lookOnly === true && !(req as any).agent_id;
 }
