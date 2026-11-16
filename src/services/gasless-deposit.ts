@@ -68,9 +68,9 @@ export function createGaslessAdmission(maxPerMinute = 4, maxPerPayer = 1): (nowM
     // A per-payer bound ON TOP of the global one (Strix on #1558): one wallet can no longer spend the
     // whole minute's budget on concurrent deposits the escrow then refuses. Rotating wallets still
     // meets the global cap, and each wallet needs an account here and the USDC it signs for.
-    const key = payer.toLowerCase();
-    if (recent.filter((r) => r.payer === key).length >= maxPerPayer) return false;
-    recent.push({ at: nowMs, payer: key });
+    const wallet = payer.toLowerCase();
+    if (recent.filter((r) => r.payer === wallet).length >= maxPerPayer) return false;
+    recent.push({ at: nowMs, payer: wallet });
     return true;
   };
 }
