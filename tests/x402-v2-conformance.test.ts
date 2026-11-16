@@ -422,6 +422,32 @@ describe('the retry refuses what it cannot settle honestly', () => {
 });
 
 // ===========================================================================
+// CodeQL js/missing-rate-limiting flags this handler (alert #93 on main since 2026-10-10, re-raised
+// on this PR only because the handler moved lines). It does not model the engine's own limiter:
+// `app.use(globalRateLimit())` (src/middleware/rate-limit.ts) is mounted in src/index.ts BEFORE
+// `app.use('/api/v1/x402', x402InboundRouter)` and gates every non-OPTIONS /api/v1 request, with an
+// anonymous caller in the per-IP bucket. This proves it on this route instead of asserting it.
+// Keep this after every describe that sends requests: the burst drains the shared per-IP bucket.
+describe('the route is behind the global per-IP rate limiter', () => {
+  it('the 402 passed through the limiter, and a burst from one IP gets 429 rate_limited', async () => {
+    const first = await request(app).post(ROUTE).send({});
+    expect(first.status).toBe(402);
+    expect(first.headers['x-ratelimit-bucket']).toBe('ip');
+    const limit = Number(first.headers['x-ratelimit-limit']);
+    expect(limit).toBeGreaterThan(0);
+
+    let limited: request.Response | undefined;
+    for (let i = 0; i <= limit && !limited; i++) {
+      const r = await request(app).post(ROUTE).send({});
+      if (r.status === 429) limited = r;
+      else expect(r.status).toBe(402);
+    }
+    expect(limited?.body).toMatchObject({ error: 'rate_limited', bucket: 'ip', limit });
+    expect(limited?.headers['payment-required']).toBeUndefined(); // refused before the handler ran
+  });
+});
+
+// ===========================================================================
 describe('a browser x402 client can use the headers', () => {
   // tests/cors-headers.test.ts scans only `x-` names, so it cannot see these three.
   it('allows PAYMENT-SIGNATURE and exposes PAYMENT-REQUIRED and PAYMENT-RESPONSE', () => {
