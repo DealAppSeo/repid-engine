@@ -60,6 +60,11 @@
 //! replayable and the proofs hid nothing. Now [`hiding_rng`] (OS-seeded ChaCha), pinned by
 //! `two_proofs_of_one_witness_differ`.
 //!
+//! Fresh randomness is necessary, not sufficient [reasoned 2026-11-17, not demonstrated]: the PCS adds
+//! `HEIGHT` random rows per column, and the verifier learns `num_queries + 8` facts per column (one per FRI
+//! query, plus two degree-4 extension openings). At `HEIGHT = 8` and 2 queries that is 10 > 8, so this
+//! circuit is a soundness gate, not a hiding proof. `eligibility::HIDING_MARGIN_HOLDS` is the pinned form.
+//!
 //! ## Honest scope / next steps (NOT done here — see README)
 //! - Membership uses a vanishing-polynomial product over a small public set
 //!   (degree = group size). Production should use a Merkle tree (log-depth path)
@@ -165,6 +170,10 @@ pub mod non_membership;
 /// Merkle trees by chaining D path proofs per neighbour (1 + 2D STARKs total).
 /// (Item 14 step 14.0-d)
 pub mod non_membership_depth_d;
+
+/// Private eligibility (v0, SHADOW ONLY): prove a RepID clears a published bar without showing the score.
+/// Spec: living-docs/03_specs/ZK_PRIVATE_ELIGIBILITY_v0_2026-11-17.md. No caller outside its tests and bench.
+pub mod eligibility;
 
 use poseidon2_hash2::h_p2_field;
 

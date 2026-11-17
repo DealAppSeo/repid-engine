@@ -59,6 +59,21 @@ The first line predates the move to Poseidon2 and is kept as history, not as the
   were replayable and nothing was hidden. It now uses `hiding_rng()` (OS-seeded ChaCha); the
   `two_proofs_of_*_differ` tests fail on any constant seed. `log_blowup=3` so the LDE covers
   the degree-7 quotient domain.
+- **Fresh randomness is necessary, not sufficient** [reasoned 2026-11-17, not demonstrated]. The hiding
+  PCS adds exactly `HEIGHT` random rows per column, while the verifier learns `num_queries + 8` facts per
+  column (one per query, plus two degree-4 extension openings). The circuits in `lib.rs`,
+  `merkle_path.rs` and `ordering_check.rs` run at small heights with 2 queries (the ownership circuit:
+  height 8 against 10 facts), so treat them as soundness gates, not hiding proofs. `eligibility.rs`
+  pins the inequality at compile time.
+
+## Private eligibility (`src/eligibility.rs`, shadow only)
+
+Proves "my score in an anchored snapshot is at least T, here is my nullifier for this verifier, and this
+answers its challenge" without showing the score or which agent. Spec:
+`living-docs/03_specs/ZK_PRIVATE_ELIGIBILITY_v0_2026-11-17.md`. It is inert: nothing outside its tests and
+`examples/eligibility_bench.rs` calls it, and the snapshot anchor is NOT CHECKED. Each constraint C1–C11 has
+a forgery test, and each test is proven to go red when its constraint is deleted (ZK ruler mutants E1–E15).
+Rust and TS share `kat/eligibility_v0_kat.json` (`scripts/zkp/eligibility-kat.ts`, `tests/eligibility-kat.test.ts`).
 
 ## API
 ```rust
