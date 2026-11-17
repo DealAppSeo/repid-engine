@@ -103,7 +103,7 @@ export interface SettledInteraction {
   outcomeClass: OutcomeClass;
   /** Post-calibration confidence, 0–1. */
   halCalibratedConfidence: number;
-  /** 0–100 from the ERC-8004 Validation Registry, when one was requested. */
+  /** 0–100 validator score, when the caller supplies one. Not read from a registry: no ERC-8004 Validation Registry is deployed. */
   validationResponse?: number | null;
 
   /** Price of the service in USDC. */

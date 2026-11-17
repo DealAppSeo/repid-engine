@@ -3,7 +3,7 @@
 ## The Five-Layer Stack
 
 ### Layer 1: ERC-8004 Identity (WHO)
-On-chain agent/human identity on Base Sepolia. ERC-8004 ValidationRegistry + agent cards.
+On-chain agent/human identity on Base Sepolia, plus agent cards. No ERC-8004 Validation Registry is deployed; this line used to list one as part of this layer.
 
 ### Layer 2: RepID Credentials (HOW MUCH TRUST)
 - Formula (current): multiplicative R·W·C with babylonianSqrt(stake) + BUILDER_FLOOR (see authority-math.ts:60-71)

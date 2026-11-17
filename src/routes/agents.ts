@@ -283,7 +283,8 @@ router.get('/agents/:id/history', async (req: Request, res: Response) => {
   return res.json(enriched);
 });
 
-// ZKP tiered disclosure — EAS attestation via ERC-8004 ValidationRegistry
+// ZKP tiered disclosure. No attestation is read or returned here, and no ERC-8004 Validation
+// Registry is deployed to read one from: ENVELOPE serves counts and rates, and merkleRoot is null.
 router.get('/agents/:id/zkp/:proofType', async (req: Request, res: Response) => {
   const { id, proofType } = req.params;
   const pt = (proofType as string).toUpperCase();
@@ -326,7 +327,11 @@ router.get('/agents/:id/zkp/:proofType', async (req: Request, res: Response) => 
         ? Math.round(((wins ?? 0) / decisions) * 100) / 100 : null,
       constitutionalPassRate: decisions
         ? Math.round(((constPasses ?? 0) / decisions) * 100) / 100 : null,
-      merkleRoot: '[ZKP commitment — verify on-chain via ERC-8004 ValidationRegistry]',
+      // null, not a pointer: this used to be '[ZKP commitment — verify on-chain via ERC-8004
+      // ValidationRegistry]', which sent a stranger to a contract that does not exist. The key
+      // stays because trustrepid's ZKPDisclosure type declares it.
+      merkleRoot: null,
+      merkleRootNote: 'Not served. This endpoint does not return a Merkle root or any on-chain commitment.',
       easSchema: 'constitutional-compliance-v1',
       repIdScore: '[ZKP — not revealed at ENVELOPE tier]',
     });
@@ -359,7 +364,8 @@ router.post('/agents/:id/x402-gate', async (req: Request, res: Response) => {
   };
   const limit = tierLimits[agent.tier] ?? 0;
   const tierAllowed = amount <= limit;
-  // Sprint 3: also check latest EAS attestation from ValidationRegistry
+  // Sprint 3: also check the agent's latest EAS attestation. No ERC-8004 Validation Registry is
+  // deployed, so there is no registry to read one from.
   // NOT WIRED: no attestation is read here, so it is reported as NOT_CHECKED, never as passed.
   // `allowed` rests on the tier limit alone, as it always effectively did (the stub was true).
   const easCheck = { passed: null, status: 'NOT_CHECKED' as const, stub: true,
