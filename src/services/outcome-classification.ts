@@ -27,7 +27,7 @@
  */
 
 export enum OutcomeClass {
-  /** Delivered, passed HAL, and (optionally) a Validation Registry response. */
+  /** Delivered, passed HAL, and (optionally) a validator score the caller supplies. */
   SUCCESS_AUDITED = 'SUCCESS_AUDITED',
   /** Delivered, but with light or no audit. */
   SUCCESS_UNAUDITED = 'SUCCESS_UNAUDITED',
@@ -53,7 +53,7 @@ export interface OutcomeRecord {
   halRawSignals?: Record<string, number>;
   /** Economic value of the job, in whatever unit the caller uses consistently. */
   valueAtRisk: number;
-  /** 0–100 from the ERC-8004 Validation Registry, when one was requested. */
+  /** 0–100 validator score, when the caller supplies one. Not read from a registry: no ERC-8004 Validation Registry is deployed. */
   validationResponse?: number | null;
   timestamp: number;
   agentId: string;

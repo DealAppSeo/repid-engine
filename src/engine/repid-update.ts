@@ -480,7 +480,8 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // gated behind CONSTITUTIONAL_AUDIT_ENABLED (default OFF). Its output does NOT
   // steer the RepID delta here; when disabled (`audit.enabled === false`) it is
   // recorded honestly in the audit row as "not measured", never as a real score.
-  // EAS attestation via ERC-8004 ValidationRegistry is a stub UID.
+  // The easAttestationId it returns is a stub UID, or '' when disabled: no EAS attestation is
+  // made, and no ERC-8004 Validation Registry is deployed.
   const audit = await auditConstitutionalCompliance({
     agentId: input.agentId,
     actionType: input.eventType,
@@ -782,7 +783,8 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // insert throws, the score is never touched. (True txn atomicity via an RPC is the follow-up; this
   // reorder eliminates the common drift case.)
   //
-  // eas_attestation_id links every event to an EAS attestation via ERC-8004 ValidationRegistry.
+  // eas_attestation_id holds the constitutional-audit stub UID ('' when the audit is disabled). It
+  // does not link the event to an EAS attestation, and no ERC-8004 Validation Registry is deployed.
   // mirror_test_triggered = ZKP-auditable proof of ideological neutrality (P-023/P-024).
   // HONEST-HAL: record mode in metadata.mode (prod has no top-level `mode` column).
   // Mode label must mirror the ACTUAL behavioral gate (src/scoring/pipeline.ts): the gate uses the

@@ -40,7 +40,8 @@ export interface ConstitutionalAuditResult {
   rulesChecked: string[];        // LASSO-selected rule IDs
   violatedRule?: string;
   halMode: 1|2|3|4|5|6|7;
-  // EAS attestation via ERC-8004 ValidationRegistry
+  // A stub UID ('eas-stub-…'), not an EAS attestation: none is made, and no ERC-8004 Validation
+  // Registry is deployed to post one to. If this is ever built, the intended shape is:
   // Schema: 'constitutional-compliance-v1'
   // Fields: { ruleReference, complianceScore, evidenceMerkleRoot, mirrorTestPassed }
   // Revocable upon new evidence
@@ -77,8 +78,8 @@ function runMirrorTest(_result: Partial<ConstitutionalAuditResult>): boolean {
 }
 
 // Generate EAS attestation stub
-// Real Sprint 3: posts to ERC-8004 ValidationRegistry on Base Sepolia
-// using EAS SchemaRegistry + Attestation contracts
+// Real Sprint 3 (not built): would post an attestation on Base Sepolia using EAS SchemaRegistry +
+// Attestation contracts. No ERC-8004 Validation Registry is deployed, so there is none to post to.
 // Schema: 'constitutional-compliance-v1'
 // Contains: { ruleReference, complianceScore, evidenceMerkleRoot, mirrorTestPassed }
 function generateEASAttestationStub(agentId: string): string {
@@ -127,7 +128,7 @@ export async function auditConstitutionalCompliance(
   // Step 4 — Mirror test (ideological symmetry — VERITAS in Sprint 3)
   const mirrorTestPassed = runMirrorTest({ complianceScore, passed });
 
-  // Step 5 — EAS attestation via ERC-8004 ValidationRegistry (stub)
+  // Step 5 — EAS attestation (stub UID only; no registry is deployed)
   const easAttestationId = generateEASAttestationStub(input.agentId);
 
   // Step 6 — HAL mode assignment
