@@ -393,8 +393,9 @@ async function run(execute: boolean): Promise<void> {
     if (kind === 'human_sbt' && b.body.binding?.human_token_id) {
       // A proof-of-human wallet binds as human_sbt. Its budget is the stake of the account that holds the
       // same wallet (step 1), but only where the server has HUMAN_SBT_OWNER_BUDGET_ENABLED=true
-      // (owner-budget.ts ownerBuilderOfAgent). Not readable from here: step 3b answers no_owner_budget
-      // where it is off, before any USDC moves.
+      // (owner-budget.ts ownerBuilderOfAgent). Not readable from here. Where it is off, the first owner-budget
+      // read answers no_owner_budget before any USDC moves: step 3b in stake mode (the spend-limit route), and
+      // step R in wallet mode, where 3b does not run.
       log('3-bind', `${a.name} bound to the owner as a verified human (${b.body.binding.human_token_id}); its budget is account ${builderId}'s stake`, b.body);
     } else if (kind !== 'builder' || String(b.body.binding?.builder_id) !== builderId) {
       stop('3-bind', `bound as ${kind} ${b.body.binding?.builder_id ?? b.body.binding?.human_token_id}, not builder ${builderId}.`, b.body);

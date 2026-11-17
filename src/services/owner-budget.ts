@@ -205,9 +205,14 @@ export const supabaseAgentLimits: AgentLimitStore = {
  * proof-of-human owner could not hold a budget at all and the first live run stopped at bind
  * (reports/2026-11-16/owner-budget-e2e-execute.attempt1-sbt-wallet.json). With
  * HUMAN_SBT_OWNER_BUDGET_ENABLED=true it is the account that holds the same wallet. That wallet is
- * the binding's, which bind took from human_sbt_registry, never from the caller, and an account is
- * only created for a wallet that signed (POST /account/connect). The binding itself is unchanged, so
- * the owner's assurance label stays proof-of-human.
+ * the binding's, which bind took from human_sbt_registry, never from the caller. The binding itself is
+ * unchanged, so the owner's assurance label stays proof-of-human.
+ *
+ * An account for a wallet does NOT prove that wallet signed. A signed connect (POST /account/connect)
+ * makes one, but so does POST /builder/register, behind an API key and with no signature from the
+ * wallet. This comment said "only created for a wallet that signed" until 2026-11-16 (review of #1557).
+ * What funds the budget is the account's stake, not the account; two accounts for one wallet are
+ * refused below as ambiguous rather than picked between.
  */
 export async function ownerBuilderOfAgent(
   agentId: string,
