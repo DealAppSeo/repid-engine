@@ -27,6 +27,9 @@ export const BROWSER_HEADERS = [
   'x-agent-key', // the agent's own key, second side of a bind (services/human-agent-binding.ts)
   'x-agent-gate-token', // signed-in run budget (routes/agent-gate.ts, routes/route.ts)
   'x-payment', // x402 payment header; the published SDK sends it and can run in a browser
+  // x402 v2 payment header (routes/x402-inbound.ts). Not an `x-` name, so the scan in
+  // tests/cors-headers.test.ts cannot see it; tests/x402-v2-conformance.test.ts pins it instead.
+  'payment-signature',
   'x-arena-key-signature', // AgentChess game key: a browser-held P-256 key signs each move (routes/arena.ts)
   'x-arena-key-time',
 ] as const;
@@ -58,4 +61,8 @@ export const CORS_ALLOWED_HEADERS: string[] = ['Content-Type', 'Authorization', 
 /** Response headers a page is allowed to read. */
 export const CORS_EXPOSED_HEADERS: string[] = [
   'x-taste-remaining', // runs left today (routes/route.ts); /run and /pai show it
+  // x402 v2 (routes/x402-inbound.ts): the 402 challenge and the settlement result. A browser client
+  // that cannot read PAYMENT-REQUIRED cannot pay at all.
+  'payment-required',
+  'payment-response',
 ];

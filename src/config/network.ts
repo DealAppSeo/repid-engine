@@ -5,6 +5,13 @@ export interface NetworkConfig {
   rpcUrls: string[];
   contracts: {
     usdc: string;
+    /**
+     * EIP-712 domain of `usdc`, advertised as `extra {name, version}` in every x402 v2 challenge so a
+     * client can sign EIP-3009 `transferWithAuthorization` without an RPC round trip. It must match
+     * the token contract: a wrong name or version makes every client signature fail verification.
+     * Read on chain with `name()` / `version()` and re-check when `usdc` changes.
+     */
+    usdcEip712Domain: { name: string; version: string };
     reputationRegistry: string;
     identityRegistry: string;
   };
@@ -50,6 +57,8 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     rpcUrls: resolveBaseSepoliaRpcUrls(),
     contracts: {
       usdc: '0x036cbd53842c5426634e7929541ec2318f3dcf7e',
+      // [V eth_call 2026-11-16, sepolia.base.org] name() = "USDC", version() = "2".
+      usdcEip712Domain: { name: 'USDC', version: '2' },
       reputationRegistry: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
       identityRegistry: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
     },
@@ -73,6 +82,9 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     ].filter(Boolean) as string[],
     contracts: {
       usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      // [V eth_call 2026-11-16, mainnet.base.org] name() = "USD Coin", version() = "2". Not "USDC":
+      // mainnet and Sepolia USDC differ here, so this cannot be one shared constant.
+      usdcEip712Domain: { name: 'USD Coin', version: '2' },
       reputationRegistry: process.env.BASE_REPUTATION_REGISTRY || '', // TBD
       identityRegistry: process.env.BASE_IDENTITY_REGISTRY || '', // TBD
     },
