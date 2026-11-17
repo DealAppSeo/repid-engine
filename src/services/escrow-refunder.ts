@@ -35,6 +35,7 @@ import { config } from '../config';
 import { BASE_SEPOLIA_CHAIN_ID } from './testnet-only';
 import type { RefundInitiation } from './stake-vault';
 import { revertedReceipt } from './agent-spend';
+import { errorText } from './deposit-verifier';
 
 /**
  * The refund transaction was BROADCAST and then the wait for its receipt failed (a timeout, a
@@ -437,7 +438,8 @@ export async function escrowRefund(
     const { txHash } = await oneAtATime(() => send(to, amount));
     return { initiated: true, stub: false, amount: amount.toString(), to, txHash };
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
+    // The note reaches the /stake/withdraw caller; ethers puts the RPC URL and its key in messages.
+    const msg = errorText(e);
     if (e instanceof RefundBroadcastUnconfirmed) {
       return { initiated: true, stub: false, unconfirmed: true, amount: amount.toString(), to, txHash: e.txHash, note: msg };
     }
