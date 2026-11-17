@@ -3,7 +3,10 @@ Reproduce (local paths below sanitized to <CARGO_HOME> / <TARGET_DIR>):
 
     cargo build --example recursion_spike --features attempt_incircuit_verify
 
-This is the EXACT missing capability at pin p3-* 0.3.0: there is no way to turn a
+RE-CHECKED 2026-11-17 at the one pin, git 27d59f73 (0.5.1): the same E0277 at the same line
+(`AB::Expr: From<BinomialExtensionField<..., 4>>` not satisfied). The capture below is from 0.3.0.
+
+This is the EXACT missing capability at pin p3-* 0.3.0 (and still at 27d59f73): there is no way to turn a
 verifier's opened value (a degree-4 BabyBear extension-field element — a PCS opening
 from an inner proof) into an AIR constraint expression, because `AB::Expr` does not
 implement `From<Challenge>` and no in-circuit challenger/PCS exists to derive it

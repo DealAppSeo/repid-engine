@@ -1,7 +1,7 @@
 //! `leaf_proof_measure` — REAL, runnable measurement of the leaf STARK at the pin.
 //!
 //! Deliverable (1) of the "Plonky3 REAL PATH" task: generate a **synthetic** leaf
-//! proof at the canonical pin (`p3-* 0.3.0`, Poseidon2-BabyBear width-16) and measure
+//! proof at the canonical pin (`p3-*` git `27d59f73`, 0.5.1; Poseidon2-BabyBear width-16) and measure
 //!   - prove time
 //!   - verify time
 //!   - proof size (bytes, `bincode`-serialized)
@@ -30,7 +30,7 @@ use zkp_vault::{
 
 /// The pin/ruler this number is taken at. Printed with every result so the number is
 /// never quoted bare. Mirrors the constants compiled into the crate.
-const PIN: &str = "p3-* 0.3.0";
+const PIN: &str = "p3-* git 27d59f73 (0.5.1)";
 const HASH: &str = "poseidon2-babybear16 (width=16, sbox=x^7, RF=8, RP=13)";
 const STATEMENT: &str = "Semaphore-style membership + scoped nullifier (no reputation in-circuit)";
 

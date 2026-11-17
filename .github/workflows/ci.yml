@@ -56,15 +56,13 @@ jobs:
   # gated against the SAME committed KAT JSON, so a TS-only PR that edits the
   # artifact must still face the Rust gate.
   #
-  # WHAT `--locked` DOES AND DOES NOT DO (corrected 2026-07-27): it freezes this
-  # crate's tracked Cargo.lock, so a PR cannot silently move a p3-* version. It is
-  # NOT the CANON P-026 / Invariant-5 Plonky3 pin — that pin is the git rev
-  # 27d59f7350 used by the live prover, whereas zkp-vault depends on the crates.io
-  # 0.3.0 release. This line used to say "same family, different mechanism"; that was
-  # wrong: 27d59f7350 resolves to Plonky3 **0.5.1** (hyperdag-core Cargo.lock), so the
-  # vault and the live prover are on DIFFERENT VERSIONS and Invariant 5 is broken until
-  # they are unified. `node scripts/zkp/plonky3-pins.cjs` (run beside sibling checkouts)
-  # lists every prover's Plonky3 source and exits 1 while there is more than one.
+  # WHAT `--locked` DOES: it freezes this crate's tracked Cargo.lock, so a PR cannot
+  # silently move a p3-* version. Since 2026-11-17 the manifest pins the SAME git rev
+  # as the live prover, 27d59f7350 (Plonky3 0.5.1, CANON P-026 / Invariant 5). Until then
+  # the vault used the crates.io 0.3.0 release, a different version, and this comment
+  # said so. CI here cannot see the sibling repos, so the cross-repo check stays
+  # `node scripts/zkp/plonky3-pins.cjs`, run beside sibling checkouts (exit 1 = more
+  # than one Plonky3 source).
   #
   # ACCEPTED RISK: `rust-toolchain@stable` floats, and with `-D warnings` on both
   # steps a future rustc that adds a lint can turn an unrelated PR red. Taken

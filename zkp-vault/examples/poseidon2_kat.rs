@@ -86,7 +86,7 @@ fn main() {
 
     println!("{{");
     println!("  \"scheme\": \"poseidon2_babybear16\",");
-    println!("  \"source\": \"p3-baby-bear 0.3.0 default_babybear_poseidon2_16 (Horizen-Labs published constants)\",");
+    println!("  \"source\": \"p3-baby-bear @ Plonky3 27d59f73 (0.5.1) default_babybear_poseidon2_16 (Horizen-Labs published constants)\",");
     println!("  \"field_prime\": 2013265921,");
     println!("  \"width\": 16,");
     println!("  \"sbox_degree\": 7,");

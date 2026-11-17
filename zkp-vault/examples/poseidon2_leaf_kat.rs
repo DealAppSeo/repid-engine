@@ -111,7 +111,7 @@ fn main() {
 
     println!("{{");
     println!("  \"scheme\": \"poseidon2_babybear16_leaf\",");
-    println!("  \"source\": \"p3-symmetric 0.3.0 PaddingFreeSponge<16,8,8> + TruncatedPermutation<2,8,16> over p3-baby-bear 0.3.0 default_babybear_poseidon2_16 (Horizen-Labs constants)\",");
+    println!("  \"source\": \"p3-symmetric @ Plonky3 27d59f73 (0.5.1) PaddingFreeSponge<16,8,8> + TruncatedPermutation<2,8,16> over p3-baby-bear default_babybear_poseidon2_16 (Horizen-Labs constants)\",");
     println!("  \"field_prime\": 2013265921,");
     println!("  \"width\": 16,");
     println!("  \"rate\": 8,");

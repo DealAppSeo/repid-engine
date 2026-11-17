@@ -24,7 +24,7 @@
 //!
 //! A single-circuit non-membership AIR would require proof composition (recursive
 //! STARK) or a flat AIR with multiple gadgets, neither of which is available at the
-//! current Plonky3 0.3.0 pin. The bundle is sound: a forger cannot substitute any
+//! Plonky3 pin as written (0.3.0; the 0.5.1 pin adds `SubAirBuilder`, which would allow the flat AIR). The bundle is sound: a forger cannot substitute any
 //! sub-proof without failing that sub-proof's verification, because each proof is
 //! bound to its public inputs.
 //!
