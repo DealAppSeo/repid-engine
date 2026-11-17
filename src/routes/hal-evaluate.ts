@@ -20,6 +20,7 @@ import { createHash } from 'crypto';
 import { halService } from '../hal/service';
 import { scanForInjection } from '../hal/injection-guard';
 import { getCachedHalResult, cacheHalResult } from '../cache/hal-cache'; // S-CACHE
+import { withVerdictReceiptId } from '../hal/verdict-receipt-id';
 import { db } from '../db';
 import { publicError } from './public-error';
 
@@ -111,7 +112,7 @@ export async function halCacheFirst(req: Request, res: Response, next: NextFunct
     const cached = await getCachedHalResult(text, cacheProviderFor(s, earlyReturnOn(), context));
     if (cached) {
       res.setHeader('X-HAL-Cache', 'hit');
-      res.json({ ...cached, cached: true, injection });
+      res.json({ ...withVerdictReceiptId(text, cached), cached: true, injection });
       return;
     }
   } catch { /* a cache error is a miss */ }
@@ -156,7 +157,7 @@ router.post('/evaluate', async (req: Request, res: Response) => {
     //
     // Marked only on the cache path, so its ABSENCE is not a claim of freshness by an older
     // caller — but its PRESENCE lets a verifier assert it got a real evaluation.
-    if (cached) return res.json({ ...cached, cached: true, injection });
+    if (cached) return res.json({ ...withVerdictReceiptId(text, cached), cached: true, injection });
 
     const result = await halService.evaluate({
       text,
@@ -167,7 +168,7 @@ router.post('/evaluate', async (req: Request, res: Response) => {
     void cacheHalResult(text, cacheProvider, result);
     // Source-tagged public counter — fire-and-forget, after a successful fresh evaluation.
     recordPublicFactCheck(resolveSource(source), text, result);
-    return res.json({ ...(result as any), injection });
+    return res.json({ ...withVerdictReceiptId(text, result), injection });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return res.status(500).json({ error: 'hal_evaluation_failed', message: msg });

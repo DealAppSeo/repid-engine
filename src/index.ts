@@ -1007,6 +1007,8 @@ if (!IS_TEST) {
     console.log(`[same-owner-settlement] SAME_OWNER_SETTLEMENT_MODE resolved to '${sameOwnerSettlementMode()}'`);
     // Loud at boot: whether SERVICE_FULFILLED rows record a shadow delivery check (no mode changes a number).
     console.log(`[service-delivery-check] SERVICE_DELIVERY_CHECK_MODE resolved to '${deliveryCheckMode()}'`);
+    // Loud at boot: whether score events also get a shadow quorum verdict. 'enforce' is refused (r23).
+    announceHalScoreGateMode();
     // B16: the classify voters' daily canary (a known-true and a known-false claim per voter),
     // reported at GET /api/v1/classify/stats. CLASSIFY_CANARY=off disables it. Never blocks boot.
     startClassifyCanary();
@@ -1540,6 +1542,7 @@ import { startFailedReceiptSettler } from './services/failed-receipt-settler';
 import { DisputeResolutionWorker } from './workers/dispute-resolution-worker';
 import { sameOwnerSettlementMode } from './scoring/grounding';
 import { deliveryCheckMode } from './services/service-delivery-check';
+import { announceHalScoreGateMode } from './scoring/hal-score-gate';
 
 startValidationWorker();
 startHitlExpirationJob();
