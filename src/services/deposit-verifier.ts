@@ -84,6 +84,23 @@ export function __setProviderFactory(f?: () => EthProviderLike): void {
 
 const iface = new ethers.Interface(ERC20_ABI);
 
+/**
+ * Error text with every URL replaced. ethers writes the RPC URL into its messages (`requestUrl`),
+ * and a provider key lives in that URL's path or query. A `reason` here, and a refund `note` in
+ * escrow-refunder, reach the HTTP caller of /stake/deposit and /stake/withdraw, so the raw message
+ * handed any registered user the operator's RPC key (Strix on #1568). Redacted where the text is
+ * first captured, so no caller can forward it by accident.
+ */
+export function hideUrls(text: string): string {
+  return text.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, '[url hidden]');
+}
+
+/** The text of a caught error, URLs hidden. */
+export function errorText(e: unknown): string {
+  const m = e instanceof Error ? e.message : (e as { message?: unknown } | null)?.message ?? e;
+  return m == null ? '' : hideUrls(String(m));
+}
+
 function parseChainId(raw: unknown): number | null {
   if (typeof raw === 'bigint') {
     const n = Number(raw);
@@ -142,7 +159,7 @@ export async function verifyDeposit(input: VerifyDepositInput): Promise<VerifyDe
   try {
     chainId = await readEthChainId(provider);
   } catch (e: any) {
-    return { verified: false, reason: `eth_chainId unreadable: ${e?.message ?? e}` };
+    return { verified: false, reason: `eth_chainId unreadable: ${errorText(e)}` };
   }
   if (chainId !== BASE_SEPOLIA_CHAIN_ID) {
     return { verified: false, reason: 'eth_chainId is not 84532' };
@@ -152,7 +169,7 @@ export async function verifyDeposit(input: VerifyDepositInput): Promise<VerifyDe
   try {
     receipt = await provider.getTransactionReceipt(txHash);
   } catch (e: any) {
-    return { verified: false, reason: `rpc error fetching receipt: ${e?.message ?? e}` };
+    return { verified: false, reason: `rpc error fetching receipt: ${errorText(e)}` };
   }
   if (!receipt) {
     return { verified: false, reason: 'tx not found (unmined or unknown)' };
@@ -167,7 +184,7 @@ export async function verifyDeposit(input: VerifyDepositInput): Promise<VerifyDe
   try {
     head = await provider.getBlockNumber();
   } catch (e: any) {
-    return { verified: false, reason: `rpc error fetching head: ${e?.message ?? e}` };
+    return { verified: false, reason: `rpc error fetching head: ${errorText(e)}` };
   }
   const blockNumber = receipt.blockNumber;
   const confirmations = blockNumber != null ? head - blockNumber + 1 : 0;
@@ -261,7 +278,7 @@ export async function verifyDeposit(input: VerifyDepositInput): Promise<VerifyDe
       };
     }
   } catch (e: any) {
-    return { verified: false, reason: `balanceOf check failed: ${e?.message ?? e}` };
+    return { verified: false, reason: `balanceOf check failed: ${errorText(e)}` };
   }
 
   return { verified: true, observedAmount: observed, confirmations, blockNumber };
