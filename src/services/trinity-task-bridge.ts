@@ -226,11 +226,15 @@ export async function pollCompletedTasks() {
           metadataObj.processedBy;
         const agentName = normalizeAgentName(rawAgent);
 
-        const { data: agentInfo, error: agentErr } = await db
-          .from('repid_agents')
-          .select('id')
-          .eq('agent_name', agentName)
-          .maybeSingle();
+        // The trinity- form first (the 12 originals), then the bare name. Since 2026-11-16 only
+        // the 12 keep the prefix in repid_agents, but trinity_tasks' own trigger still adds it to
+        // every name it stores, so "trinity-foo" here can be the agent now named "foo".
+        const lookupAgent = (name: string) =>
+          db.from('repid_agents').select('id').eq('agent_name', name).maybeSingle();
+        let { data: agentInfo, error: agentErr } = await lookupAgent(agentName);
+        if (!agentErr && !agentInfo && agentName.startsWith('trinity-')) {
+          ({ data: agentInfo, error: agentErr } = await lookupAgent(agentName.slice('trinity-'.length)));
+        }
 
         if (agentErr || !agentInfo) {
           console.warn(`[TrinityTaskBridge] Agent '${agentName}' not found in repid_agents for task ${task.id}, skipping`);

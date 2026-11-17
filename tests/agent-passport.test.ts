@@ -382,6 +382,25 @@ describe('buildAgentPassport', () => {
     expect(p!.agent.agent_id).toBe(MINTED_AGENT.id);
   });
 
+  test('a row holding only the bare slug never outranks the trinity- original', async () => {
+    // Both exist: the original "trinity-shofet" and a later sign-up stored as plain "shofet".
+    const IMPOSTOR = { ...MINTED_AGENT, id: '99999999-0000-4000-8000-000000000001', agent_name: 'shofet' };
+    const byName: Record<string, any> = { 'trinity-shofet': MINTED_AGENT, shofet: IMPOSTOR };
+    const scripted = makeDb(happyScript());
+    const db = {
+      from: (table: string) => {
+        if (table !== 'repid_agents') return scripted.from(table);
+        let name = '';
+        const chain: any = { select: () => chain };
+        chain.eq = (_col: string, val: string) => { name = val; return chain; };
+        chain.maybeSingle = () => Promise.resolve({ data: byName[name] ?? null, error: null });
+        return chain;
+      },
+    } as any;
+    const p = await buildAgentPassport(db, 'shofet');
+    expect(p!.agent.agent_id).toBe(MINTED_AGENT.id);
+  });
+
   test('last-real-settlement query skips hash-less rows and pins nulls last', async () => {
     // Live-prod finding (trinity-shofet, 2026-07-30): 47 real settlements but
     // last_real_settlement=null, because the newest real row had a null

@@ -30,14 +30,24 @@ jest.mock('../src/db', () => {
       eq: () => chain,
       insert: (row: any) => {
         insertedRows.push({ table: tableName, row: { ...row } });
+        let insertError: any = null;
         if (tableName === 'repid_agents') {
           const id = `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`;
           lastInserted = { id, created_at: '2026-05-07T00:00:00Z', erc8004_token_id: null };
+          // What Postgres says when a unique index refuses the row.
+          const taken: Record<string, string> = {
+            TakenName: 'repid_agents_agent_name_unique',
+            TakenWallet: 'repid_agents_erc8004_address_key',
+          };
+          if (taken[row.agent_name]) {
+            lastInserted = null;
+            insertError = { code: '23505', message: `duplicate key value violates unique constraint "${taken[row.agent_name]}"` };
+          }
         }
         // Return another chainable that ALSO is awaitable.
         const insertResult: any = {
           select: () => ({
-            single: async () => ({ data: lastInserted, error: null }),
+            single: async () => ({ data: lastInserted, error: insertError }),
           }),
           then: (resolve: any) => resolve({ data: null, error: null }),
         };
@@ -243,6 +253,22 @@ describe('POST /api/v1/agents/register — anti-spam dedup', () => {
     expect(r2.status).toBe(429);
     expect(r2.body.error).toMatch(/Duplicate registration/i);
     expect(r2.body.hint).toBeTruthy();
+  });
+
+  it('409s a name another agent already has (the unique name index refused it)', async () => {
+    const res = await request(app)
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
+      .send({ name: 'TakenName' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already taken/i);
+  });
+
+  it('a different unique violation (wallet) is still a 500, not "name taken"', async () => {
+    const res = await request(app)
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
+      .send({ name: 'TakenWallet' });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/erc8004_address/);
   });
 
   it('does NOT 429 a different name from the same IP', async () => {

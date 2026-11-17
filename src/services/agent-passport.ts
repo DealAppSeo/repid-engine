@@ -197,16 +197,17 @@ async function fetchAgentRow(
   if (UUID_RE.test(id)) return tryFetch('id', id);
   if (/^\d+$/.test(id)) return tryFetch('erc8004_token_id', id);
 
-  // Name/slug: exact match first, then the legacy trinity- prefix convention
-  // (parity with resolveAgentUuid in src/routes/repid.ts, minus its blind spot
-  // for external agents whose names don't carry the prefix).
+  // Name/slug: the trinity- form first, because it is the canonical name of the 12
+  // original agents and a row holding only the bare slug must never outrank one of
+  // them; then the exact name, for every other agent. Same order as resolveAgentUuid
+  // (repid.ts), the /v1/llm/complete lookup (route.ts) and the task bridge
+  // (trinity-task-bridge.ts). (Until 2026-11-16 this was exact-first, so a sign-up
+  // named "sophia" stored without the prefix would have won.)
   const lcName = id.toLowerCase();
-  const exact = await tryFetch('agent_name', lcName);
-  if (exact) return exact;
-  if (!lcName.startsWith('trinity-')) {
-    return tryFetch('agent_name', `trinity-${lcName}`);
-  }
-  return null;
+  const canonical = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
+  const hit = await tryFetch('agent_name', canonical);
+  if (hit) return hit;
+  return lcName === canonical ? null : tryFetch('agent_name', lcName);
 }
 
 /**

@@ -180,6 +180,14 @@ router.post('/register', async (req: Request, res: Response) => {
       .select('id, created_at, erc8004_token_id')
       .single();
 
+    // Agent names are unique (case-insensitive) since 2026-11-16, enforced by the DB index
+    // repid_agents_agent_name_unique. Match on the index name: erc8004_address is unique too.
+    if (insertErr?.code === '23505' && String(insertErr.message).includes('repid_agents_agent_name_unique')) {
+      return res.status(409).json({
+        error: 'agent name is already taken',
+        hint: 'Pick a different name, for example with a suffix.',
+      });
+    }
     if (insertErr || !newAgent) {
       return res.status(500).json({ error: insertErr?.message ?? 'insert failed' });
     }

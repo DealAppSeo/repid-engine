@@ -280,14 +280,14 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
     };
 
     if (agent_id && typeof agent_id === 'string' && !isUuid(agent_id)) {
+      // The trinity- form first (canonical name of the 12 originals), then the exact name, so a
+      // row holding only the bare slug can never outrank an original.
       const lcName = agent_id.toLowerCase();
-      const lookupName = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
+      const canonical = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
+      const lookup = (name: string) => db.from('repid_agents').select('id').eq('agent_name', name).maybeSingle();
       try {
-        const { data } = await db
-          .from('repid_agents')
-          .select('id')
-          .eq('agent_name', lookupName)
-          .maybeSingle();
+        let { data } = await lookup(canonical);
+        if (!data && lcName !== canonical) ({ data } = await lookup(lcName));
         if (data && data.id) {
           resolvedAgentId = data.id;
         }
