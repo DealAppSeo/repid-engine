@@ -1,7 +1,16 @@
 /**
- * Escrow refunder — the WITHDRAWAL leg of the verified-deposit escrow model, the
- * mirror of deposit-verifier.ts. Broadcasts a real escrow -> builder USDC transfer
- * on Base Sepolia so a real stake can actually be withdrawn end-to-end.
+ * Escrow refunder — every transaction the stake escrow signs, through one queue (oneAtATime, one
+ * nonce). Three kinds use it:
+ *   - escrowRefund: the WITHDRAWAL leg, the mirror of deposit-verifier.ts. A real escrow -> builder
+ *     USDC transfer on Base Sepolia, so a real stake can be withdrawn end to end.
+ *   - escrowRelayAuthorization: the GASLESS DEPOSIT leg (services/gasless-deposit.ts). The escrow
+ *     submits an owner's signed USDC transferWithAuthorization (owner -> escrow) and pays its gas.
+ *   - agent payouts that share the escrow's signer and so its nonce.
+ * Until 2026-11-16 this header named only the first, and a reader would not know a keyless route
+ * can put sends on the same queue.
+ *
+ * The invariants below are stated for a refund. A relay checks CHAIN and SIGNER the same way, and
+ * instead of PAYEE requires the authorization's `to` to BE the escrow.
  *
  * FAIL-CLOSED BY DEFAULT. Until STAKE_ESCROW_SIGNER_KEY is set this returns a STUB
  * (`stub: true`), and stake-vault's withdrawStake refuses on a stub — so a refund is

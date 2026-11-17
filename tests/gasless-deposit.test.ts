@@ -328,3 +328,51 @@ describe('GASLESS_DEPOSIT_MODE', () => {
     expect(gaslessDepositMode(raw as string | undefined)).toBe(want);
   });
 });
+
+describe('gasless deposit follow-ups (review of #1558, before the flag goes on)', () => {
+  beforeAll(() => jest.useFakeTimers({ now: NOW * 1000, doNotFake: ['nextTick', 'setImmediate', 'setTimeout', 'clearTimeout'] }));
+  afterAll(() => jest.useRealTimers());
+  let errSpy: jest.SpyInstance;
+  beforeEach(() => { errSpy = jest.spyOn(console, 'error').mockImplementation(() => {}); });
+  afterEach(() => errSpy.mockRestore());
+
+  test('REVERT: another submitter used the authorization first; the answer is 202 "used elsewhere", never "no USDC moved"', async () => {
+    const h = harness();
+    h.deps.relay = async (a) => {
+      h.usedNonces.add(`${a.from.toLowerCase()}:${a.nonce.toLowerCase()}`); // a front-runner's tx mined first
+      throw new Error('execution reverted: FiatTokenV2: authorization is used or canceled');
+    };
+    const out = await gaslessDeposit(await signed(), h.deps);
+    expect(out).toMatchObject({ status: 202, body: { code: 'authorization_used_elsewhere', sent: 'unknown' } });
+    expect(h.credits).toHaveLength(0);
+  });
+
+  test('REVERT: the re-read fails too; the answer is 202 not-checked, never "no USDC moved"', async () => {
+    const h = harness({ relay: async () => { throw new Error('execution reverted'); } });
+    let reads = 0;
+    h.deps.chain.authorizationState = async () => { if (++reads > 2) throw new Error('rpc down'); return false; };
+    const out = await gaslessDeposit(await signed(), h.deps);
+    expect(out).toMatchObject({ status: 202, body: { code: 'send_not_checked', sent: 'unknown' } });
+  });
+
+  test('REVERT: the authorization is still unused; then and only then "no USDC moved" (502)', async () => {
+    const h = harness({ relay: async () => { throw new Error('nonce too low'); } });
+    expect(await gaslessDeposit(await signed(), h.deps)).toMatchObject({ status: 502, body: { code: 'not_sent', sent: false } });
+  });
+
+  test('NETWORK: a server whose NETWORK is not Base Sepolia refuses before any chain read', async () => {
+    const prior = process.env.NETWORK;
+    process.env.NETWORK = 'base';
+    try {
+      const h = harness();
+      h.deps.chain.usdcDomain = async () => { throw new Error('must not be read'); };
+      const out = await gaslessDeposit(await signed(), h.deps);
+      expect(out).toMatchObject({ status: 503, body: { code: 'wrong_network', sent: false } });
+      process.env.NETWORK = 'no-such-network';
+      expect((await gaslessDeposit(await signed(), h.deps)).body.code).toBe('wrong_network');
+      expect(h.relayed).toHaveLength(0);
+    } finally {
+      if (prior === undefined) delete process.env.NETWORK; else process.env.NETWORK = prior;
+    }
+  });
+});
