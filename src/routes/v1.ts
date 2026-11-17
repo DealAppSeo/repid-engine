@@ -12,6 +12,7 @@ import { resolvedTargetProblem } from '../services/erc8004-feedback-verify';
 import { getBuilderProfile, registerBuilder } from '../services/builder-registry';
 import { depositStake, withdrawStake, snapshotAuthority, getCurrentStake } from '../services/stake-vault';
 import { escrowHealth } from '../services/escrow-refunder';
+import { errorText } from '../services/deposit-verifier';
 import {
   authorizeStakeDeposit,
   stakeDepositMessage,
@@ -586,7 +587,8 @@ router.post('/stake/deposit', async (req: Request, res: Response) => {
     if (!r.ok) return res.status(400).json(r);
     return res.json({ ...r, authorized_by: authz.tier });
   } catch (e: any) {
-    return res.status(400).json({ error: e?.message ?? 'deposit failed' });
+    // errorText hides URLs: ethers puts the RPC URL, and its key, in its messages (Strix on #1568).
+    return res.status(400).json({ error: errorText(e) || 'deposit failed' });
   }
 });
 
@@ -634,7 +636,7 @@ router.post('/stake/withdraw', async (req: Request, res: Response) => {
     if (!r.ok) return res.status(400).json(r);
     return res.json(r);
   } catch (e: any) {
-    return res.status(400).json({ error: e?.message ?? 'withdraw failed' });
+    return res.status(400).json({ error: errorText(e) || 'withdraw failed' });
   }
 });
 
@@ -650,7 +652,7 @@ router.get('/stake/escrow/health', async (_req: Request, res: Response) => {
   try {
     return res.json(await escrowHealth());
   } catch (e: any) {
-    return res.status(500).json({ error: e?.message ?? 'escrow health check failed' });
+    return res.status(500).json({ error: errorText(e) || 'escrow health check failed' });
   }
 });
 
@@ -676,7 +678,7 @@ router.get('/stake/authority/:builder_id', async (req: Request, res: Response) =
       basis: auth.basis,
     });
   } catch (e: any) {
-    return res.status(500).json({ error: e?.message ?? 'authority compute failed' });
+    return res.status(500).json({ error: errorText(e) || 'authority compute failed' });
   }
 });
 
