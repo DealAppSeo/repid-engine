@@ -26,9 +26,11 @@
 // It also requires an operator key (REPID_API_KEYS tier `ops`, same as
 // /observability/x402-metrics): a DB-issued agent key passes authMiddleware, and
 // the list says which enforcement switches are off, which no agent needs.
+// The LOOK-ONLY key (env OPS_READ_KEY, middleware/auth.ts) is also accepted here, and
+// authMiddleware refuses that key on every other path: it can read this list and do nothing else.
 
 import { Router, Request, Response } from 'express';
-import { isOperatorKey } from '../middleware/auth';
+import { isLookOnlyKey, isOperatorKey } from '../middleware/auth';
 import { ALL_KEYS as HAL_KEYS, getHalConfig, type HalConfig, type HalConfigKey } from '../hal/config';
 import { classifyEnvValue, FLAG_REGISTRY } from '../ops/flag-registry';
 import { DEPLOYED_COMMIT } from './readiness';
@@ -46,7 +48,7 @@ function halValue(cfg: HalConfig, key: HalConfigKey): string {
 }
 
 opsFlagsRouter.get('/flags', async (req: Request, res: Response) => {
-  if (!isOperatorKey(req)) return res.status(403).json({ error: 'Forbidden: needs an operator key' });
+  if (!isOperatorKey(req) && !isLookOnlyKey(req)) return res.status(403).json({ error: 'Forbidden: needs an operator key' });
 
   // getHalConfig never throws today; if that changes, this reports unknown rather than a fallback.
   const cfg = await getHalConfig().catch(() => null);
