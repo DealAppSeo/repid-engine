@@ -20,6 +20,15 @@
  * untestable offline. It validates SHAPE and enforces POLICY, and says so —
  * `verified` is only ever true when a caller supplies an actual chain
  * observation.
+ *
+ * SO A CALLER THAT ONLY CALLS THIS HAS CHECKED NOTHING ON CHAIN. Without
+ * `requireVerified`, any 64 hex characters anchor an outcome: the E2E eval of
+ * 2026-11-16 (§3a) passed a made-up hash through the trust harness and earned
+ * +25. The chain checks live elsewhere: `x402-settlement-verifier.ts` (the
+ * receipt holds a canonical-USDC Transfer of at least the value to the payee)
+ * and `payment-anchor-verify.ts` (payee, payer and price from the contract's own
+ * record, the tx bound to that contract, a replay refused; shadow-only behind
+ * PAYMENT_ANCHOR_VERIFY_MODE until Sean enables enforce).
  */
 import { OutcomeClass, type OutcomeRecord } from './outcome-classification';
 

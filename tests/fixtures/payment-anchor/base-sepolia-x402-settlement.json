@@ -1,0 +1,40 @@
+{
+  "_source": {
+    "what": "A real x402 settlement on Base Sepolia, recorded so tests replay it offline. Public chain data only.",
+    "chain_id": 84532,
+    "tx_hash": "0xdd932691421cdd8da4a67b3283e2edd430483078384ddbef750cb17725c8a60f",
+    "block_number": 59543202,
+    "fetched_via": "eth_getTransactionReceipt + eth_getTransactionByHash, https://sepolia.base.org (read-only)",
+    "fetched_at": "2026-11-16"
+  },
+  "tx": {
+    "to": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "selector": "0xe3ee160e"
+  },
+  "receipt": {
+    "status": 1,
+    "blockNumber": 59543202,
+    "logs": [
+      {
+        "address": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+        "topics": [
+          "0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5",
+          "0x000000000000000000000000df6b8215d193b11b4903d223729c3cf7a6de271d",
+          "0x8d9f25019d89ae8908fb1cd921b3d5ed2260df2c2358cd0a0efe3e07da3ba73f"
+        ],
+        "data": "0x",
+        "logIndex": 2
+      },
+      {
+        "address": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+        "topics": [
+          "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+          "0x000000000000000000000000df6b8215d193b11b4903d223729c3cf7a6de271d",
+          "0x000000000000000000000000ced17f65e03e7b3a77d5321a2d3715840317199c"
+        ],
+        "data": "0x00000000000000000000000000000000000000000000000000000000000f4240",
+        "logIndex": 3
+      }
+    ]
+  }
+}
