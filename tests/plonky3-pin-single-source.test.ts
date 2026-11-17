@@ -28,18 +28,19 @@ import { join } from 'node:path';
 const CANONICAL_AGGREGATION_PIN = { mechanism: 'git-rev', value: '27d59f7350' } as const;
 
 /**
- * The pin `zkp-vault`'s leaf tier ACTUALLY resolves today. Divergent from the
- * canonical pin above — deliberately not yet collapsed (KATs are frozen against this
- * release; leaf is not yet wired into aggregation).
+ * The pin `zkp-vault` resolves. It was crates.io 0.3.0 until 2026-11-17 (plan step B2), a
+ * second pin beside the canonical one. Moved onto the canonical rev in the same change that
+ * flipped PINS_RECONCILED; the frozen Poseidon2 KAT files still pass at the new rev, so the
+ * re-freeze produced no new values.
  */
-const LEAF_TIER_PIN = { mechanism: 'crates.io', value: '0.3.0' } as const;
+const LEAF_TIER_PIN = { mechanism: 'git-rev', value: '27d59f7350', version: '0.5.1' } as const;
 
 /**
  * Flip to true ONLY in the same change that collapses zkp-vault onto the canonical
  * pin and re-freezes the leaf KATs. Leaving it false while the pins actually match,
  * or setting it true while they still diverge, both fail the guard below.
  */
-const PINS_RECONCILED = false;
+const PINS_RECONCILED = true;
 
 const CARGO_LOCK = join(__dirname, '..', 'zkp-vault', 'Cargo.lock');
 
@@ -73,15 +74,15 @@ describe('Plonky3 single-pin guard (Invariant 5)', () => {
   it('every p3-* crate in zkp-vault shares ONE version (no split pin)', () => {
     const versions = [...new Set(p3.map((p) => p.version))];
     // If this fails: two Plonky3 versions coexist in one crate — Invariant 5 violation.
-    expect(versions).toEqual([LEAF_TIER_PIN.value]);
+    expect(versions).toEqual([LEAF_TIER_PIN.version]);
   });
 
   it('every p3-* crate in zkp-vault shares ONE source (no mixed git+registry pin)', () => {
     const sources = [...new Set(p3.map((p) => p.source))];
     expect(sources).toHaveLength(1);
-    // The leaf tier resolves from crates.io today (not a git rev).
-    expect(sources[0]).toContain('registry+');
-    expect(sources[0]).not.toContain('git+');
+    // The vault resolves from the canonical git rev (crates.io until 2026-11-17).
+    expect(sources[0]).toContain('git+');
+    expect(sources[0]).toContain(`#${CANONICAL_AGGREGATION_PIN.value}`);
   });
 
   it('pins the KNOWN cross-tier divergence so it cannot silently change', () => {
@@ -94,6 +95,8 @@ describe('Plonky3 single-pin guard (Invariant 5)', () => {
       // single git-rev pin. (When you do this, assert the rev equals the canonical
       // pin and re-freeze the leaf KATs in the same change.)
       expect(actuallyReconciled).toBe(true);
+      expect(registrySource).toContain(`#${CANONICAL_AGGREGATION_PIN.value}`);
+      expect(LEAF_TIER_PIN.value).toBe(CANONICAL_AGGREGATION_PIN.value);
     } else {
       // Documented state: leaf tier diverges from the canonical aggregation pin.
       expect(LEAF_TIER_PIN.value).not.toBe(CANONICAL_AGGREGATION_PIN.value);

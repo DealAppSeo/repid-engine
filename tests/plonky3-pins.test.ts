@@ -43,9 +43,8 @@ describe('plonky3Sources', () => {
 
   it('parses the real zkp-vault lockfile (positive control on the real format)', () => {
     const real = fs.readFileSync(path.join(__dirname, '..', 'zkp-vault', 'Cargo.lock'), 'utf8');
-    // Pins today's state: crates.io 0.3.0. When plan step B2 moves the vault to the live
-    // prover's commit, this expectation changes in the same PR.
-    expect(plonky3Sources(real)).toEqual(['crates.io@0.3.0']);
+    // Plan step B2 (2026-11-17) moved the vault from crates.io 0.3.0 to the live prover's commit.
+    expect(plonky3Sources(real)).toEqual(['git:27d59f7350daf6b02d11b01c3a55af453554b515']);
   });
 });
 
