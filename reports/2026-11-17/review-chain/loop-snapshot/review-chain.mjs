@@ -104,10 +104,17 @@ export function codexOutcome(eventsText, stderr = "", exit = 0, timedOut = false
   return fail(exit ? "server" : "empty_answer", exit ? `codex exited ${exit}: ${errs.slice(0, 160)}` : "no message", { called: true });
 }
 
+/** The environment Codex gets: an allow-list, never the parent's. Its prompt is the PR diff and body (text an
+ *  outsider can write), so it must not hold CEREBRAS_API_KEY, OPENROUTER_API_KEY, NVIDIA_NIM_API_KEY or anything
+ *  else this host exports. It keeps the OS essentials and its own login (CODEX_HOME, else the user profile).
+ *  Same rule as buildChildEnv in repid-engine scripts/dispatch/run-agent.mjs. Strix finding on repid-engine PR 1581. */
+const CODEX_ENV_ALLOW = new Set(["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH", "LANG", "TERM", "CODEX_HOME"]);
+export const codexEnv = (parent = process.env) => Object.fromEntries(Object.entries(parent).filter(([n, v]) => v !== undefined && CODEX_ENV_ALLOW.has(n.toUpperCase())));
+
 export function codexCall(prompt, dir, { timeoutMs = 300_000 } = {}) {
   return new Promise((resolve) => {
-    const p = spawn(process.env.CODEX_BIN || "codex", ["exec", "-s", "read-only", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json", "-C", dir, "-"],
-      { shell: process.platform === "win32", windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    const p = spawn(process.env.CODEX_BIN || "codex", ["exec", "-s", "read-only", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json", "-c", "web_search=disabled", "-C", dir, "-"],
+      { shell: process.platform === "win32", windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: codexEnv() });
     let out = "", err = "", timedOut = false;
     const t = setTimeout(() => { timedOut = true; p.kill(); }, timeoutMs);
     p.stdout.on("data", (d) => { out += d; }); p.stderr.on("data", (d) => { err += d; });
@@ -229,6 +236,9 @@ export async function selftest() {
   const good = (verdict = "PASS", kind = "verdict") => ({ ok: true, kind, ev: { verdict }, called: true });
   const run = (table, skipTable = {}) => runChain([R("a"), R("b"), R("c")], { run: mk(table), skip: (r) => skipTable[r.id] ?? null });
 
+  const cenv = codexEnv({ Path: "p", USERPROFILE: "u", CODEX_HOME: "c", CEREBRAS_API_KEY: "k1", OPENROUTER_API_KEY: "k2", NVIDIA_NIM_API_KEY: "k3", GH_TOKEN: "k4", SUPABASE_SERVICE_KEY: "k5" });
+  eq("Codex gets no provider key or other secret from this host", Object.keys(cenv).sort(), ["CODEX_HOME", "Path", "USERPROFILE"]);
+
   calls.length = 0;
   let x = await run({ a: fail("credit", "HTTP 402", { called: true }), b: good("CHANGES_REQUESTED"), c: good() });
   eq("402, then a second reviewer answers: its verdict stands", [x.verdict, x.by, x.tried.map((t) => `${t.reviewer}:${t.cls}`)], ["CHANGES_REQUESTED", "b", ["a:credit", "b:answered"]]);
@@ -347,6 +357,7 @@ const MUTANTS = [
   ["the key is stored in the reason", "scrubKeys(`HTTP ${res.status}: ${body.slice(0, 200)}`, c.key)", "`HTTP ${res.status}: ${body.slice(0, 200)}`"],
   ["a 402 pauses nobody", "const cls = last.cls ?? \"credit\", ms = cls === \"credit\" ? cfg.pauseMs : PAUSE_MS[cls] ?? 0;", "const cls = last.cls ?? \"credit\", ms = 0;"],
   ["a noisy stderr turns a Codex answer into a failure", "if (msg && String(msg).trim() && !exit) return", "if (false) return"],
+  ["Codex inherits the whole environment", "CODEX_ENV_ALLOW.has(n.toUpperCase()))", "true)"],
   ["the daily cap is global", "(r.reviewer ?? \"grok\") === id;\n  const last", "true;\n  const last"],
 ];
 async function mutants() {
