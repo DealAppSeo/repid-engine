@@ -39,6 +39,7 @@ import {
   type GrantClass,
 } from '../services/principal-grants';
 import { roleCatalog, ROLE_NAMES } from '../services/principal-roles';
+import { isUuidPrincipal } from '../services/uuid-principal';
 import { resolveAccountableRoot, rootRefusalStatus } from '../services/accountable-root';
 import { matchEnvOperatorKey } from '../auth/api-keys';
 import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
@@ -296,6 +297,9 @@ router.post('/grants', async (req: Request, res: Response) => {
 router.get('/grants', async (req: Request, res: Response) => {
   const principal = req.query.principal ? String(req.query.principal) : null;
   if (!principal) return fail(res, 400, 'invalid_principal', 'principal query param is required');
+  // Reject a non-UUID principal here so a crafted value never reaches the PostgREST
+  // `.or()` filter in listGrants (comma-injection -> whole-table disclosure).
+  if (!isUuidPrincipal(principal)) return fail(res, 400, 'invalid_principal', 'principal must be a UUID');
   try {
     const grants = await listGrants(principal);
     return res.json({ principal, grants });

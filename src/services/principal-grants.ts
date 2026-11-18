@@ -52,6 +52,7 @@ import { effectiveAuthority, type EffectiveAuthority } from './effective-authori
 import { resolveAuthorityInputs } from './grantor-authority';
 import { buildGrantIntentMessage, checkGrantIntentSignature, type SignatureCheck } from './principal-grant-intent';
 import { applyRoleCeiling } from './principal-roles';
+import { isUuidPrincipal } from './uuid-principal';
 
 export const MAX_GRANT_DEPTH = 4; // ported constant: identity/delegation.ts MAX_DELEGATION_DEPTH
 
@@ -576,11 +577,17 @@ export interface ListedGrant extends GrantRow {
 
 /** All grants where `principalId` is the grantor or the grantee. Liveness is computed, not stored. */
 export async function listGrants(principalId: string): Promise<ListedGrant[]> {
+  // principalId is interpolated into a PostgREST `.or()` filter below; a comma in it
+  // becomes a second, attacker-chosen OR term that widens the filter past this principal.
+  // A canonical UUID cannot carry that, so reject anything else here — the last trusted
+  // point before the sink — rather than trusting the caller.
+  if (!isUuidPrincipal(principalId)) return [];
   const { data } = await db
     .from('principal_grants')
     .select('*')
     .or(`grantor_agent_id.eq.${principalId},grantee_agent_id.eq.${principalId}`)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(1000);
 
   const rows = ((data as any[]) ?? []) as GrantRow[];
   const out: ListedGrant[] = [];
