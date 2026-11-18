@@ -6,11 +6,13 @@
  * Pure/injected-dependency, same shape as its neighbors: `fetchPending`/`attestFn`/`writeback`
  * are all passed in, so the sweep itself is testable with no live DB and no chain call.
  *
- * NOT wired to a real trigger. `src/index.ts` does not import this file. Doing so means an
- * unattended process starts spending real EAS-attestation gas from the funded attester wallet
- * on a schedule nobody has approved — that decision, plus the actual `agent_memory_roots` JOIN
- * `repid_agents` query and a shadow/enable flag, is left for Sean per this loop's hard line on
- * infra/spend flips, and is called out in the ledger rather than landed silently.
+ * CORRECTED 2026-11-18: this header said `src/index.ts` does not import this file. It does, behind
+ * MEMORY_ROOT_ANCHOR_SWEEP_ENABLED (off | shadow = dry run | enforce = real EAS gas from the funded
+ * attester). Two measured facts about that wiring: `agent_memory_roots` does not exist in prod
+ * (to_regclass NULL, 2026-11-18), so both modes fail at fetch today; and the select names
+ * `repid_snapshot`, a column no migration created (file added: 20261118000000_...repid_snapshot.sql).
+ * This sweep has NO fee ceiling and NO readback dedupe; `memory-root-anchor-due.ts` has both and is
+ * not wired. Do not set `enforce` before that is decided.
  */
 import { anchorMemoryRoot, isOffPeakHour, selectOffPeakBatch, type AttestFn } from './memory-root-anchor';
 
