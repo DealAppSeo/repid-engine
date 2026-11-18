@@ -1,0 +1,53 @@
+{
+  "note": "Claim-shape fixtures for signed HAL receipts. Votes are SIMULATED provider responses (no network). Each case pins (a) the verdict the receipt carries and (b) that its receipt is bound to the exact claim text, so it fails verification against the near-miss text in `near_miss`.",
+  "cases": [
+    {
+      "id": "negation",
+      "text": "The release workflow did not pass on main.",
+      "near_miss": "The release workflow passed on main.",
+      "decision": "vetoed", "families": ["llama", "gemini", "qwen"],
+      "votes": [["groq", "llama-3.3-70b", "FALSE"], ["gemini", "gemini-2.5-flash", "FALSE"], ["qwen", "qwen3-32b", "UNCERTAIN"]],
+      "expect": { "verdict": "CONTRADICTED", "reason": "quorum_veto" }
+    },
+    {
+      "id": "wrong-workflow-name",
+      "text": "The deploy-prod.yml workflow passed on commit 992118b1.",
+      "near_miss": "The test.yml workflow passed on commit 992118b1.",
+      "decision": "vetoed", "families": ["llama", "gemini"],
+      "votes": [["groq", "llama-3.3-70b", "FALSE"], ["gemini", "gemini-2.5-flash", "FALSE"]],
+      "expect": { "verdict": "CONTRADICTED", "reason": "quorum_veto" }
+    },
+    {
+      "id": "first-attempt",
+      "text": "CI passed on the first attempt.",
+      "near_miss": "CI passed.",
+      "decision": "flagged", "families": ["llama", "gemini"],
+      "votes": [["groq", "llama-3.3-70b", "UNCERTAIN"], ["gemini", "gemini-2.5-flash", "TRUE"]],
+      "expect": { "verdict": "SUPPORTED", "reason": "quorum_flagged" }
+    },
+    {
+      "id": "per-line-1",
+      "text": "Water boils at 100 degrees Celsius at sea level.",
+      "near_miss": "Water boils at 100 degrees Celsius at sea level.\nThe Moon is made of cheese.",
+      "decision": "clean", "families": ["llama", "gemini", "qwen"],
+      "votes": [["groq", "llama-3.3-70b", "TRUE"], ["gemini", "gemini-2.5-flash", "TRUE"], ["qwen", "qwen3-32b", "TRUE"]],
+      "expect": { "verdict": "SUPPORTED", "reason": "quorum_clean" }
+    },
+    {
+      "id": "per-line-2",
+      "text": "The Moon is made of cheese.",
+      "near_miss": "Water boils at 100 degrees Celsius at sea level.\nThe Moon is made of cheese.",
+      "decision": "vetoed", "families": ["llama", "gemini", "qwen"],
+      "votes": [["groq", "llama-3.3-70b", "FALSE"], ["gemini", "gemini-2.5-flash", "FALSE"], ["qwen", "qwen3-32b", "FALSE"]],
+      "expect": { "verdict": "CONTRADICTED", "reason": "quorum_veto" }
+    },
+    {
+      "id": "provider-failure",
+      "text": "The quorum could not reach any checker for this sentence.",
+      "near_miss": "The quorum reached every checker for this sentence.",
+      "decision": "abstain", "families": [],
+      "votes": [["together", "llama-3.3-70b", "ERROR", "HTTP 402 Payment Required"], ["groq", "gpt-oss-120b", "ERROR", "HTTP 429 rate limit"]],
+      "expect": { "verdict": "NOT_CHECKED", "reason": "all_providers_failed:provider_refused_credit,rate_limited" }
+    }
+  ]
+}

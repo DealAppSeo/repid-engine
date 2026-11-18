@@ -21,6 +21,12 @@ import { canonicalJson } from '../services/auditChainWriter';
 export const HAL_VERDICT_RECEIPT_VERSION = 'hal-verdict-v1';
 
 /** The fields of a HAL result the id reads. Every HalEvaluationResponse fits this shape. */
+/**
+ * How many leading characters of a claim the fact-check prompt shows the checkers (fact-check.ts
+ * slices to this). A receipt records it, so a verdict is never read as covering text no model saw.
+ */
+export const HAL_JUDGED_CHARS = 1200;
+
 export interface HalVerdictLike {
   decision: string;
   hal_score: number | null | undefined;
@@ -60,8 +66,21 @@ export function halVerdictReceiptId(text: string, v: HalVerdictLike): string {
   return 'halv1_' + createHash('sha256').update(canonicalJson(halVerdictRecord(text, v))).digest('hex');
 }
 
-/** Off unless HAL_VERDICT_RECEIPT_ID_ENABLED is exactly `true`. Off = the response is unchanged. */
-export function withVerdictReceiptId<T extends HalVerdictLike>(text: string, body: T): T | (T & { receipt_id: string }) {
-  if (process.env.HAL_VERDICT_RECEIPT_ID_ENABLED !== 'true') return body;
-  return { ...body, receipt_id: halVerdictReceiptId(text, body) };
+/**
+ * Off unless HAL_VERDICT_RECEIPT_ID_ENABLED is exactly `true`. Off = the response is unchanged.
+ * HAL_SIGNED_RECEIPT_ENABLED (exactly `true`, independent flag, default off) also attaches
+ * `signed_receipt` (signed-verdict-receipt.ts). Both off = byte-identical to before.
+ */
+export function withVerdictReceiptId<T extends HalVerdictLike>(text: string, body: T): T | (T & { receipt_id?: string; signed_receipt?: unknown }) {
+  const idOn = process.env.HAL_VERDICT_RECEIPT_ID_ENABLED === 'true';
+  const signedOn = process.env.HAL_SIGNED_RECEIPT_ENABLED === 'true';
+  if (!idOn && !signedOn) return body;
+  // Required here, not at the top: signed-verdict-receipt imports this module.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const signed = signedOn ? (require('./signed-verdict-receipt') as typeof import('./signed-verdict-receipt')).signedHalReceipt(text, body) : undefined;
+  return {
+    ...body,
+    ...(idOn ? { receipt_id: halVerdictReceiptId(text, body) } : {}),
+    ...(signed ? { signed_receipt: signed } : {}),
+  };
 }

@@ -27,8 +27,13 @@
  *   applied to prod anyway; enabling this against prod is a Sean-gated action.)
  * - **Never throws.** Designed for fire-and-forget (`setImmediate`) use off the scoring hot
  *   path — any DB error is caught and logged, and the scoring decision is never blocked.
- * - **`buildQuorumReceipt` is a PURE function** (no I/O), so the row shape is unit-testable
- *   without a client at all.
+ * - **`buildQuorumReceipt` is NOT pure** (corrected 2026-11-18): it needs no client, but when the
+ *   quorum is not met it calls `pageOperator`. This line used to call it a PURE function with no I/O,
+ *   which would invite calling it per request. The row shape is still testable without a client.
+ * - **Zero callers of `writeQuorumReceipt` / `buildQuorumReceipt` in `src/`** [MEASURED 2026-11-18,
+ *   grep]. The only live path to these tables is `writeReceiptVote` via POST /api/v1/hal/receipt.
+ *   Both tables are anon-writable until the RLS DDL lands, so a row here proves nothing. The
+ *   receipt a third party can check is `signed-verdict-receipt.ts`, which reads and writes no table.
  *
  * This does NOT change any veto/flag threshold, does NOT mutate RepID, and does NOT touch the
  * TrustTrader on-chain `trinity_receipt_bft_results` path (a different, on-chain-reveal domain).
