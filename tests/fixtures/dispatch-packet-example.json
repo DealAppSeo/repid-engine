@@ -1,0 +1,34 @@
+{
+  "packet_version": "1",
+  "task_id": "dispatch-loop-drill-2026-11-18",
+  "objective": "Prove the existing T12 lane store can run a durable dispatch loop, and add only the thin pieces it lacks.",
+  "who_benefits": "Every agent that gets a ticket, and the operator reading a five-line status.",
+  "why_now": "Leases tonight exist only as a worktree and a branch; nothing reconciles them on wake.",
+  "expected_artifact": ["scripts/t12/restart-drill.ts", "src/orchestration/dispatch-*.ts", "tests/dispatch-*.test.ts"],
+  "repo_and_base_sha": "DealAppSeo/repid-engine @ 992118b1",
+  "exact_read_and_write_paths": { "write": ["scripts/t12/restart-drill.ts", "src/orchestration/dispatch-packet.ts"], "read_only": ["src/orchestration/t12-lane-store.ts"] },
+  "allowed_environment_and_write_mode": "local only; throwaway embedded Postgres; no prod connection",
+  "prerequisite_gates": [],
+  "authoritative_refs": [
+    {
+      "source": "src/orchestration/t12-lane-store.ts",
+      "locator": "claimMake / heartbeat / submit / releaseMake",
+      "version": "992118b1",
+      "last_verified": "2026-11-18",
+      "owner": "repid-engine",
+      "status": "LIVE",
+      "why_it_matters": "This is the durable store; extend it, do not build a second conductor.",
+      "relationship": "depends_on"
+    }
+  ],
+  "related_failures_and_lessons": ["Rehearsal 3 conductor killed after 3 of 24 with no resume", "LESSONS 2: check the write's error"],
+  "known_good_baseline": "npx jest --config jest.config.js tests/t12-lanes.test.ts tests/write-lease.test.ts",
+  "implementation_constraints": "default-inert; pure functions with an injected clock",
+  "verification_commands": ["npx ts-node scripts/t12/restart-drill.ts", "npx jest --config jest.config.js tests/dispatch-*.test.ts"],
+  "positive_and_negative_controls": "five drill lines PASS; fence broken via a test double turns stale-lease and duplicate lines FAIL",
+  "expected_results": "five PASS lines; receipts verify after each step; zero rows ever in done/verified/shadow_reject",
+  "lease_heartbeat_and_checkpoint": "branch cc/2026-11-18-dispatch-loop-c; checkpoint lines in DISPATCH_LOOP.md",
+  "retry_budget_and_stop_conditions": "3 attempts per failing step, then diagnose and move on",
+  "reviewer_requirements": { "author": "CC", "reviewers": ["dispatcher", "independent-reviewer"] },
+  "handoff_and_next_action": "push the branch; dispatcher schedules the reconcile check"
+}
