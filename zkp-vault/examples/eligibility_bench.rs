@@ -64,7 +64,7 @@ fn main() {
             // BEGIN verify-zk (what a verifier writes; counted for the integration column)
             let policy = Policy::score_gte(500, "repid", "repid-engine/attester/v0", 1);
             let scope = Scope { domain: "repid".into(), verifier_id: "trustmarket/sandbox-1".into(), scope_epoch: "2026-11-17".into() };
-            let mut verifier = VerifierState::default();
+            let mut verifier = VerifierState::new(scope.clone(), fri, std::time::Duration::from_secs(300));
             let challenge = verifier.issue_challenge();
             // END verify-zk
             let st = Statement { threshold: 500, epoch, root: snap.root(), pc_null: scope.pc_null(), nullifier: nullifier(&w.sk, &scope),
@@ -76,11 +76,11 @@ fn main() {
             bytes = proof_to_bytes(&proof).len();
             let t1 = Instant::now();
             let (verdict, vh) = peak_during(|| {
-                verifier.present(fri, &policy, &scope, &challenge, epoch, epoch, &snap.root(), false, &st.nullifier, &proof)
+                verifier.present(&policy, &challenge, epoch, epoch, &snap.root(), false, &st.nullifier, &proof)
             });
             verify_ms.push(t1.elapsed().as_secs_f64() * 1e3);
             verify_heap = verify_heap.max(vh);
-            assert!(matches!(verdict, Verdict::Eligible { .. }), "honest presentation rejected");
+            assert!(matches!(verdict, Verdict::NotChecked(_)), "honest presentation rejected"); // unanchored root, as in shadow
         }
         rows.push(serde_json::json!({
             "approach": "c) ZK predicate (this circuit)",

@@ -26,7 +26,8 @@
 //! circuit, and `dependency_graph_has_no_lookup_crates` keeps it that way.
 
 use core::borrow::Borrow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use p3_air::{Air, BaseAir, PeriodicAirBuilder, WindowAccess};
 use p3_baby_bear::default_babybear_poseidon2_16;
@@ -549,40 +550,54 @@ pub fn proof_from_bytes(b: &[u8]) -> Result<EligibilityProof, bincode::Error> {
 
 #[derive(Debug, PartialEq)]
 pub enum Verdict {
-    /// Every step that ran passed. `not_checked` names the steps that did NOT run; never empty in shadow.
-    Eligible { not_checked: Vec<&'static str> },
+    /// Every required check ran and passed.
+    Eligible,
     NotEligible(&'static str),
+    /// Every check that ran passed, and these did not run (or ran at test strength). Never a pass (spec §5).
+    /// In shadow this always names the root anchor.
+    NotChecked(Vec<&'static str>),
 }
 
 fn key8(d: &Digest) -> [u32; 8] {
     d.map(|x| x.as_canonical_u32())
 }
 
-/// What a verifier keeps between presentations: the challenges it issued and the nullifiers it has seen.
-#[derive(Default)]
+/// One verifier: its OWN scope and FRI profile (never taken from a presentation), the challenges it issued
+/// with their issue time, and the nullifiers it has seen in its scope. Interim Codex review, 2026-11-17:
+/// a scope or profile passed in per call lets a caller pick a fresh scope (a fresh nullifier) or a 7-bit
+/// profile per presentation.
 pub struct VerifierState {
-    issued: HashSet<[u32; 8]>,
-    seen: HashSet<(String, [u32; 8])>,
+    scope: Scope,
+    fri: Fri,
+    challenge_ttl: Duration,
+    issued: HashMap<[u32; 8], Instant>,
+    seen: HashSet<[u32; 8]>,
 }
 
 impl VerifierState {
+    pub fn new(scope: Scope, fri: Fri, challenge_ttl: Duration) -> Self {
+        Self { scope, fri, challenge_ttl, issued: HashMap::new(), seen: HashSet::new() }
+    }
+
+    pub fn scope(&self) -> &Scope {
+        &self.scope
+    }
+
     pub fn issue_challenge(&mut self) -> Digest {
         use rand::RngExt;
         let mut rng = hiding_rng();
         let c: Digest = core::array::from_fn(|_| Val::from_u32(rng.random_range(0..Val::ORDER_U32)));
-        self.issued.insert(key8(&c));
+        self.issued.insert(key8(&c), Instant::now());
         c
     }
 
     /// Check one presentation. The statement is assembled HERE from the verifier's own policy, scope and
     /// challenge; the prover supplies only (epoch, root, nullifier, proof). `root_anchored` is whether the
-    /// caller checked R's EAS anchor; in shadow it is false and the verdict says so.
+    /// caller checked R's EAS anchor; in shadow it is false and the verdict is NotChecked.
     #[allow(clippy::too_many_arguments)]
     pub fn present(
         &mut self,
-        fri: Fri,
         policy: &Policy,
-        scope: &Scope,
         challenge: &Digest,
         current_epoch: u32,
         epoch: u32,
@@ -595,17 +610,24 @@ impl VerifierState {
         if policy.predicate != "score_gte" || policy.circuit_id != CIRCUIT_ID || policy.threshold > MAX_THRESHOLD {
             return Verdict::NotEligible("policy is not a score_gte policy for this circuit, or T is out of range");
         }
-        // 3. A challenge this verifier issued and has not seen answered.
-        if !self.issued.contains(&key8(challenge)) {
-            return Verdict::NotEligible("challenge was not issued by this verifier, or was already used");
+        if policy.domain != self.scope.domain {
+            return Verdict::NotEligible("policy domain is not this verifier's domain");
+        }
+        // 3. A challenge this verifier issued, unexpired, not yet answered.
+        match self.issued.get(&key8(challenge)) {
+            None => return Verdict::NotEligible("challenge was not issued by this verifier, or was already used"),
+            Some(at) if at.elapsed() > self.challenge_ttl => {
+                self.issued.remove(&key8(challenge));
+                return Verdict::NotEligible("challenge expired");
+            }
+            Some(_) => {}
         }
         // 4 (epoch half). The anchor half is the caller's.
         if epoch > current_epoch || current_epoch - epoch > policy.max_epoch_age {
             return Verdict::NotEligible("snapshot epoch is outside the policy's window");
         }
         // 5. Nullifier not seen in this scope.
-        let seen_key = (scope.key(), key8(claimed_nullifier));
-        if self.seen.contains(&seen_key) {
+        if self.seen.contains(&key8(claimed_nullifier)) {
             return Verdict::NotEligible("nullifier already used in this scope");
         }
         // 2 + 6. PC_null and the policy hash recomputed here, then the STARK.
@@ -613,17 +635,24 @@ impl VerifierState {
             threshold: policy.threshold,
             epoch,
             root: *root,
-            pc_null: scope.pc_null(),
+            pc_null: self.scope.pc_null(),
             nullifier: *claimed_nullifier,
             policy_hash: policy.hash(),
             challenge: *challenge,
         };
-        if !verify_stark(fri, proof, &st) {
+        if !verify_stark(self.fri, proof, &st) {
             return Verdict::NotEligible("proof does not verify against this statement");
         }
         self.issued.remove(&key8(challenge));
-        self.seen.insert(seen_key);
-        Verdict::Eligible { not_checked: if root_anchored { vec![] } else { vec!["root anchor (EAS)"] } }
+        self.seen.insert(key8(claimed_nullifier));
+        let mut not_checked = vec![];
+        if !root_anchored {
+            not_checked.push("root anchor (EAS)");
+        }
+        if self.fri == Fri::Test {
+            not_checked.push("test FRI profile (7 conjectured bits)");
+        }
+        if not_checked.is_empty() { Verdict::Eligible } else { Verdict::NotChecked(not_checked) }
     }
 }
 

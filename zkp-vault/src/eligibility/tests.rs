@@ -460,40 +460,67 @@ fn one_row_rule_equals_the_full_sponge() {
 
 // ---- the verifier procedure (spec §5) ---------------------------------------------------------------------
 
+const TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+fn verifier(f: &Fx, fri: Fri) -> VerifierState {
+    VerifierState::new(f.scope.clone(), fri, TTL)
+}
+
+/// Prove agent `i` against a challenge, then present it to `v` (unanchored, as in shadow).
 fn present_with(v: &mut VerifierState, f: &Fx, policy: &Policy, i: usize, c: Digest, now: u32) -> Verdict {
     let w = witness(&f.snap, i);
-    let st = Statement { challenge: c, ..statement(&f.snap, policy, &f.scope, &w.sk, c) };
+    let st = statement(&f.snap, policy, &f.scope, &w.sk, c);
     let p = prove_eligibility(Fri::Test, &w, &st).unwrap();
-    v.present(Fri::Test, policy, &f.scope, &c, now, EPOCH, &f.snap.root(), false, &st.nullifier, &p)
+    v.present(policy, &c, now, EPOCH, &f.snap.root(), false, &st.nullifier, &p)
 }
+
+const SHADOW_UNANCHORED_TEST: [&str; 2] = ["root anchor (EAS)", "test FRI profile (7 conjectured bits)"];
 
 #[test]
 fn verifier_accepts_once_and_names_what_it_did_not_check() {
     let f = fx();
-    let mut v = VerifierState::default();
+    let mut v = verifier(&f, Fri::Test);
     let c = v.issue_challenge();
-    assert_eq!(present_with(&mut v, &f, &f.policy, ME, c, EPOCH), Verdict::Eligible { not_checked: vec!["root anchor (EAS)"] });
+    assert_eq!(present_with(&mut v, &f, &f.policy, ME, c, EPOCH), Verdict::NotChecked(SHADOW_UNANCHORED_TEST.to_vec()));
+}
+
+#[test]
+fn only_an_anchored_root_at_shadow_strength_is_eligible() {
+    let f = fx();
+    let w = witness(&f.snap, ME);
+    let mut v = verifier(&f, Fri::Shadow);
+    let c = v.issue_challenge();
+    let st = statement(&f.snap, &f.policy, &f.scope, &w.sk, c);
+    let p = prove_eligibility(Fri::Shadow, &w, &st).unwrap();
+    assert_eq!(v.present(&f.policy, &c, EPOCH, EPOCH, &f.snap.root(), true, &st.nullifier, &p), Verdict::Eligible);
+    // The same presentation logic at test strength never reads as a pass, anchored or not.
+    let mut t = verifier(&f, Fri::Test);
+    let c = t.issue_challenge();
+    let st = statement(&f.snap, &f.policy, &f.scope, &w.sk, c);
+    let p = prove_eligibility(Fri::Test, &w, &st).unwrap();
+    assert_eq!(t.present(&f.policy, &c, EPOCH, EPOCH, &f.snap.root(), true, &st.nullifier, &p),
+        Verdict::NotChecked(vec!["test FRI profile (7 conjectured bits)"]));
 }
 
 #[test]
 fn replayed_presentation_is_rejected() {
     let f = fx();
-    let mut v = VerifierState::default();
+    let mut v = verifier(&f, Fri::Test);
     let c = v.issue_challenge();
     let w = witness(&f.snap, ME);
     let st = statement(&f.snap, &f.policy, &f.scope, &w.sk, c);
     let p = prove_eligibility(Fri::Test, &w, &st).unwrap();
-    let go = |v: &mut VerifierState| v.present(Fri::Test, &f.policy, &f.scope, &c, EPOCH, EPOCH, &f.snap.root(), false, &st.nullifier, &p);
-    assert!(matches!(go(&mut v), Verdict::Eligible { .. }));
+    let go = |v: &mut VerifierState| v.present(&f.policy, &c, EPOCH, EPOCH, &f.snap.root(), false, &st.nullifier, &p);
+    assert!(matches!(go(&mut v), Verdict::NotChecked(_)));
     assert!(matches!(go(&mut v), Verdict::NotEligible(_)), "the same presentation twice");
 }
 
 #[test]
 fn second_presentation_in_one_scope_is_rejected_and_another_scope_is_unlinkable() {
     let f = fx();
-    let mut v = VerifierState::default();
+    let mut v = verifier(&f, Fri::Test);
     let c1 = v.issue_challenge();
-    assert!(matches!(present_with(&mut v, &f, &f.policy, ME, c1, EPOCH), Verdict::Eligible { .. }));
+    assert!(matches!(present_with(&mut v, &f, &f.policy, ME, c1, EPOCH), Verdict::NotChecked(_)));
     let c2 = v.issue_challenge();
     assert_eq!(present_with(&mut v, &f, &f.policy, ME, c2, EPOCH), Verdict::NotEligible("nullifier already used in this scope"));
     let other = Scope { verifier_id: "trustmarket/sandbox-2".into(), ..f.scope.clone() };
@@ -503,10 +530,30 @@ fn second_presentation_in_one_scope_is_rejected_and_another_scope_is_unlinkable(
 #[test]
 fn uninvited_challenge_and_stale_snapshot_are_rejected() {
     let f = fx();
-    let mut v = VerifierState::default();
+    let mut v = verifier(&f, Fri::Test);
     assert!(matches!(present_with(&mut v, &f, &f.policy, ME, d8(9), EPOCH), Verdict::NotEligible(_)), "a challenge never issued");
     let c = v.issue_challenge();
     assert_eq!(present_with(&mut v, &f, &f.policy, ME, c, EPOCH + 2), Verdict::NotEligible("snapshot epoch is outside the policy's window"));
+}
+
+#[test]
+fn expired_challenge_is_rejected() {
+    // Interim Codex review 2026-11-17: issued challenges had no expiry.
+    let f = fx();
+    let mut v = VerifierState::new(f.scope.clone(), Fri::Test, std::time::Duration::ZERO);
+    let c = v.issue_challenge();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    assert_eq!(present_with(&mut v, &f, &f.policy, ME, c, EPOCH), Verdict::NotEligible("challenge expired"));
+}
+
+#[test]
+fn policy_for_another_domain_is_rejected() {
+    // Interim Codex review 2026-11-17: the verifier never tied the policy's domain to its own scope.
+    let f = fx();
+    let health = Policy::score_gte(T, "health", "repid-engine/attester/v0", 1);
+    let mut v = verifier(&f, Fri::Test);
+    let c = v.issue_challenge();
+    assert_eq!(present_with(&mut v, &f, &health, ME, c, EPOCH), Verdict::NotEligible("policy domain is not this verifier's domain"));
 }
 
 #[test]
@@ -515,14 +562,11 @@ fn threshold_near_the_modulus_proves_in_circuit_but_the_verifier_refuses_it() {
     // circuit alone accepts "30 >= 2013265911". Only the verifier's integer range check on T stops it.
     let f = fx();
     let big = Policy::score_gte(Val::ORDER_U32 as u64 - 10, "repid", "repid-engine/attester/v0", 1);
-    let mut v = VerifierState::default();
+    let mut v = verifier(&f, Fri::Test);
     let c = v.issue_challenge();
     let st = statement(&f.snap, &big, &f.scope, &sk_of(4), c);
     let (r0, r1, h, t, p, _) = honest_parts_below(&f, 4); // score 30
     let proof = prove_spec(Fri::Test, &spec_from(r0, r1, h, t, &p, bits_of(30 + 10)), &st);
     assert!(verify_stark(Fri::Test, &proof, &st), "test construction: the wrapped statement holds in the field");
-    assert!(matches!(
-        v.present(Fri::Test, &big, &f.scope, &c, EPOCH, EPOCH, &f.snap.root(), false, &st.nullifier, &proof),
-        Verdict::NotEligible(_)
-    ));
+    assert!(matches!(v.present(&big, &c, EPOCH, EPOCH, &f.snap.root(), false, &st.nullifier, &proof), Verdict::NotEligible(_)));
 }
