@@ -810,8 +810,16 @@ mod tests {
         std::panic::set_hook(prev);
 
         match built {
-            // Prover refused to build it (debug `check_constraints`). Rejected.
-            Err(_) => {}
+            // Prover refused to build it (debug `check_constraints`). Rejected, but ONLY for that panic:
+            // any other (a bug in the forgery itself) is re-raised, or an unrelated failure would read as
+            // "rejected". Same flaw Codex found in HyperDAG-core #23's helper, 2026-11-17.
+            Err(payload) => {
+                let msg = payload.downcast_ref::<String>().map(String::as_str)
+                    .or_else(|| payload.downcast_ref::<&str>().copied()).unwrap_or("");
+                if !msg.contains("constraints not satisfied") {
+                    std::panic::resume_unwind(payload);
+                }
+            }
             // Prover built it (release). The verifier is now the only thing standing.
             Ok(proof) => assert!(
                 verify_ownership(&proof, context, claimed_nullifier, group).is_err(),

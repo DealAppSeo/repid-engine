@@ -87,7 +87,17 @@ fn rejected(spec: &TraceSpec, st: &Statement) -> bool {
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prove_spec(Fri::Test, spec, st)));
     std::panic::set_hook(prev);
     match built {
-        Err(_) => true,
+        // Only Plonky3's own constraint check counts as a rejection. Any other panic (a bug in the forgery,
+        // an index out of range) is re-raised: swallowing it would read an unrelated failure as "rejected".
+        // Same flaw Codex found in HyperDAG-core #23's helper (fixed there in 8096df28).
+        Err(payload) => {
+            let msg = payload.downcast_ref::<String>().map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied()).unwrap_or("");
+            if !msg.contains("constraints not satisfied") {
+                std::panic::resume_unwind(payload);
+            }
+            true
+        }
         Ok(p) => !verify_stark(Fri::Test, &p, st),
     }
 }
