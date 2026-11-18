@@ -1,0 +1,327 @@
+--- /e/dev/ops/loop/grok-review-loop.mjs.bak-2026-11-17	2026-11-17 10:35:14.890611700 -0800
++++ /e/dev/ops/loop/grok-review-loop.mjs	2026-11-17 23:20:50.938487500 -0800
+@@ -3,6 +3,8 @@
+ //   node grok-review-loop.mjs dry        print what it would do for each open PR; no Grok call, no post
+ //   node grok-review-loop.mjs selftest   selection, classification and comment rules on fixtures; no network
+ //   node grok-review-loop.mjs resume     lift a 402 pause now (after the grok.com usage pool is topped up)
++//   node grok-review-loop.mjs pr <owner/repo> <n> <local-test-log>   one named PR through the same chain, for a repo with no CI `test` job
++//                                        (2026-11-17). The log's first line must name the PR's head commit; the review says it is LOCAL, not CI.
+ // Scheduled every 15 min as HyperDAG-Loop-GrokReview (run-loop.cmd grok-review-loop). Log: logs\grok-review-loop.log.
+ //
+ // Rules:
+@@ -19,6 +21,11 @@
+ // - Every posted body is scrubbed (claims-lib scrub, plus GitHub tokens): the repos are public.
+ // - Bot PRs (Dependabot) are skipped unless labelled. Labelled PRs go first, then the rest by PR number.
+ // - ponytail: one PR per cycle. Add priority (MAJOR first) if the queue backs up.
++// - 2026-11-17 (Sean: "several LLMs to fall back on"): the review is a CHAIN (review-chain.mjs): Grok first; when it cannot answer (402, timeout, non-JSON,
++//   fence open, answer thrown out) the next reviewer, from another model family (Codex on the ChatGPT plan, then an open-weights model). Each reviewer is
++//   paused and capped on its own, a 402 from one no longer stops the others, and a failure always has a name. All fail = NOT_CHECKED, never a pass.
++//   Same fences: comment only, pinned to the commit, one review per commit, scrubbed. If review-chain.mjs cannot load, no review runs and the log says why (selftest fails too): Grok-only would hide that.
++//   `resume [reviewer]` lifts pauses. Whether a non-Grok review counts as "the Grok vote" in D-161 is Sean's call, not this file's.
+ import fs from "node:fs";
+ import path from "node:path";
+ import { spawnSync } from "node:child_process";
+@@ -34,6 +41,9 @@
+ const TEST_JOB = "test", LABEL = "grok-review";
+ export const CFG = { maxAttempts: 3, dailyCap: 12, pauseMs: 6 * 3600_000, maxPaths: 10 };
+ 
++let CH = null, CH_ERR = "";
++try { CH = await import("./review-chain.mjs"); } catch (e) { CH_ERR = String(e.message).slice(0, 200); } // loud, not silently Grok-only: cycle() and selftest() say so
++
+ const redact = (s) => scrub(s).replace(/\b(?:ghp|gho|ghs|ghu|github_pat)_[A-Za-z0-9_]{20,}/g, "[redacted]");
+ const short = (sha) => String(sha).slice(0, 8);
+ const log = (...a) => console.log(new Date().toISOString(), ...a);
+@@ -43,12 +53,13 @@
+ const FINAL = new Set(["verdict", "honest_nc", "gave_up"]);
+ const COUNTS = new Set(["verdict", "honest_nc", "retry", "gave_up"]); // runs that reached Grok count toward the daily cap
+ 
+-/** null when the loop may run now, else why not. */
++/** null when GROK may run now, else why not. Rows of other reviewers (they carry `reviewer`) are not Grok's; the chain's blockedFor does the same per reviewer. */
+ export function blocked(state, now, cfg = CFG) {
+-  const p = state.filter((r) => r.kind === "pool_exhausted" || r.kind === "resume").at(-1);
++  const grok = (r) => (r.reviewer ?? "grok") === "grok";
++  const p = state.filter((r) => r.kind === "resume" || (r.kind === "pool_exhausted" && grok(r))).at(-1);
+   if (p?.kind === "pool_exhausted" && now - Date.parse(p.at) < cfg.pauseMs) return `paused: Grok usage pool empty at ${p.at}, retry after ${new Date(Date.parse(p.at) + cfg.pauseMs).toISOString()}`;
+   const day = new Date(now).toISOString().slice(0, 10);
+-  const runs = state.filter((r) => COUNTS.has(r.kind) && r.grok_called && r.at.startsWith(day)).length;
++  const runs = state.filter((r) => grok(r) && COUNTS.has(r.kind) && r.grok_called && r.at.startsWith(day)).length;
+   if (runs >= cfg.dailyCap) return `daily cap: ${runs} Grok runs today (cap ${cfg.dailyCap})`;
+   return null;
+ }
+@@ -81,10 +92,14 @@
+ const cell = (s) => redact(String(s ?? "")).replace(/\|/g, "\\|").replace(/\s+/g, " ").trim().slice(0, 300);
+ 
+ /** The PR review body. Names the full commit; everything from Grok is scrubbed. */
+-export function commentBody({ sha, ev, answer, kind, attempt, record }) {
++export function commentBody({ sha, ev, answer, kind, attempt, record, reviewer, tried = [] }) {
+   const verdict = kind === "gave_up" ? "NOT_CHECKED" : ev.verdict;
+-  const out = [`### Grok review of \`${short(sha)}\`: ${verdict}`, "",
+-    `Automated read-only GrokCode review of commit \`${sha}\`, graded by \`grok-review.v5\` (six fixed items; every quote is checked against the file). A Grok finding is a judgment: check it against this commit before acting on it.`, ""];
++  const who = reviewer && reviewer.id !== "grok" ? reviewer : null, label = who ? `${who.label} (${who.family})` : "Grok";
++  const before = tried.filter((t) => t.reviewer !== who?.id && !t.ok).map((t) => `\`${t.reviewer}\`: ${cell(t.cls)}${t.reason && t.reason !== t.cls ? ` (${cell(t.reason).slice(0, 120)})` : ""}`);
++  const out = [kind === "gave_up" && tried.length > 1 ? `### Review of \`${short(sha)}\`: NOT_CHECKED` : `### ${who ? who.label : "Grok"} review of \`${short(sha)}\`: ${verdict}`, "",
++    who ? `Automated read-only review of commit \`${sha}\` by ${label}, a different model family from Grok. It had no tools: every file was given to it in the prompt. It is graded by the same checks as the Grok lane (\`grok-review.v5\`: six fixed items; every quote is checked against the file it was given). This is not a Grok review. A finding is a judgment: check it against this commit before acting on it.`
++      : `Automated read-only GrokCode review of commit \`${sha}\`, graded by \`grok-review.v5\` (six fixed items; every quote is checked against the file). A Grok finding is a judgment: check it against this commit before acting on it.`, "",
++    ...(who && before.length ? [`Reviewers that did not answer first: ${before.join("; ")}.`, ""] : [])];
+   if (answer?.checklist) {
+     out.push("| item | status | note |", "|---|---|---|");
+     for (const [id, it] of Object.entries(answer.checklist)) out.push(`| ${id} | ${cell(it?.status)} | ${cell(it?.note)} |`);
+@@ -93,13 +108,16 @@
+     out.push(f.length ? "**Findings**" : "**Findings:** none.");
+     for (const x of f) out.push(`- **${cell(x.severity)}** \`${cell(x.file)}:${Number(x.line) || 0}\`: ${cell(x.wrong_result)} Fix: ${cell(x.suggested_fix)}`);
+   } else if (kind === "honest_nc") {
+-    out.push("Grok answered, but these items could not be settled from the files it was given:");
++    out.push(`${who ? who.label : "Grok"} answered, but these items could not be settled from the files it was given:`);
+     for (const n of ev.items_not_checked || []) out.push(`- ${cell(n)}`);
++  } else if (tried.length > 1) {
++    out.push(`No usable answer after ${attempt} runs from any reviewer, so this commit has **no review verdict**. Every reviewer's reason, last run:`);
++    for (const t of tried.slice(0, 8)) out.push(`- \`${t.reviewer}\`: ${cell(t.cls)}${t.reason && t.reason !== t.cls ? `: ${cell(t.reason).slice(0, 160)}` : ""}`);
+   } else {
+     out.push(`No usable answer after ${attempt} runs, so this commit has **no Grok verdict**. The last run's reasons:`);
+     for (const r of (ev.reasons || []).slice(0, 8)) out.push(`- ${cell(r)}`);
+   }
+-  out.push("", `<sub>grok-review-loop · comment only: it never approves, blocks or merges · run record \`${record}\` on the review host</sub>`);
++  out.push("", `<sub>grok-review-loop · ${who ? `reviewer \`${who.id}\` · ` : ""}comment only: it never approves, blocks or merges · run record \`${record}\` on the review host</sub>`);
+   return redact(out.join("\n"));
+ }
+ 
+@@ -134,15 +152,52 @@
+   return { ready: true, job };
+ }
+ 
+-function reviewOne(repo, pr, attempt) {
++const LOCK = path.join(DIR, "lock"), LOCK_MS = 50 * 60_000;
++/** The chain's worst case (Grok 15 min, Codex 5, a chat model 4) is longer than the 15-minute schedule: a second cycle must not review the same commit twice. */
++function takeLock() {
++  try { if (Date.now() - Number(fs.readFileSync(LOCK, "utf8")) < LOCK_MS) return false; } catch { /* no lock */ }
++  fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(LOCK, String(Date.now())); return true;
++}
++const dropLock = () => { try { fs.rmSync(LOCK, { force: true }); } catch { /* already gone */ } };
++
++/** What a reviewer WITHOUT tools is given, read from GitHub at this exact commit: the diff, the PR text, the CI log, then the changed files. {stale} when the PR moved. */
++function stageForChat(repo, pr, sha, logFile, paths, base, nonce) {
++  const live = ghJson(["api", `repos/${repo}/pulls/${pr.number}`]);
++  if (live.head?.sha !== sha) return { stale: `PR head is ${live.head?.sha}, this review names ${sha}` };
++  const raw = sh("gh", ["api", "-H", "Accept: application/vnd.github.v3.diff", `repos/${repo}/pulls/${pr.number}`], 180_000);
++  const diff = raw.length > 150_000 ? raw.slice(0, 150_000) + `\n[diff cut here: ${raw.length - 150_000} more characters not shown]\n` : raw;
++  const files = {
++    "handoff.json": JSON.stringify({ kind: "review_handoff", repo, pr: pr.number, head_sha: sha, handoff_nonce: nonce, paths, ask: "Do the six checklist items hold for this exact commit?" }, null, 2) + "\n",
++    "repo/.git/HEAD": sha + "\n", "evidence/diff.patch": diff, "evidence/pr-body.md": live.body?.trim() ? live.body : "(the PR description is empty)\n",
++    [`evidence/${path.basename(logFile)}`]: fs.readFileSync(logFile, "utf8") };
++  for (const p of paths) {
++    try { files[`repo/${p}`] = sh("gh", ["api", "-H", "Accept: application/vnd.github.raw", `repos/${repo}/contents/${p.split("/").map(encodeURIComponent).join("/")}?ref=${sha}`]); }
++    catch { /* a file the API will not serve is simply not given; the prompt lists what was left out */ }
++  }
++  const dir = `${base}.stage`;
++  fs.rmSync(dir, { recursive: true, force: true });
++  CH.writeStage(dir, files);
++  return { dir, files, sha, nonce };
++}
++
++/** The reason Grok gave, from its own error text. (The state rows used to say "answer is not JSON" for a 402: that was the wrapper's follow-on, not the cause.) */
++const grokWhy = (ev) => redact(String(ev.grok_stderr_tail || "").match(/"message":\s*"([^"]+)"/)?.[1] || (ev.reasons || [])[0] || ev.grok_stderr_tail || "no reason").slice(0, 200);
++
++/** `localLog`: `pr` mode only, for a repo whose CI has no `test` job (2026-11-17: HyperDAG-core and hyperdag-proof-verifier have none, so `cycle`
++ *  never saw them, and a session that reviewed them by hand called the Grok wrapper alone and lost the fallback chain on a 402). */
++async function reviewOne(repo, pr, attempt, localLog = null) {
+   const sha = pr.headRefOid, name = `${repo.split("/")[1]}-${pr.number}-${short(sha)}-a${attempt}-${Date.now().toString(36)}`, base = path.join(RUNS, name);
+   fs.mkdirSync(RUNS, { recursive: true });
+-  const { job } = testJob(repo, sha);
+   const files = ghJson(["api", `repos/${repo}/pulls/${pr.number}/files?per_page=100`]).filter((f) => f.status !== "removed")
+     .map((f) => f.filename).filter((f) => !/(package-lock\.json|\.lock|\.(png|jpe?g|gif|svg|ico|pdf|woff2?))$/i.test(f));
+-  const logFile = `${base}.ci-test.log`;
+-  fs.writeFileSync(logFile, `# CI job "${job.name}" (${job.conclusion}) on commit ${sha}: ${job.html_url}\n# Filtered by grok-review-loop: the summary, every FAIL line and failure name, and the PASS lines of the test files this PR changes. ANSI codes removed; kept lines are verbatim.\n` +
+-    filterTestLog(sh("gh", ["api", `repos/${repo}/actions/jobs/${job.id}/logs`], 300_000), files) + "\n");
++  const logFile = `${base}.${localLog ? "local" : "ci"}-test.log`;
++  if (localLog) {
++    fs.writeFileSync(logFile, `# NOT CI. ${repo} has no CI "${TEST_JOB}" job, so this run output was produced locally by the session that asked for the review (\`pr\` mode) and is copied unfiltered. Its own first line says where and when.\n` + fs.readFileSync(localLog, "utf8"));
++  } else {
++    const { job } = testJob(repo, sha);
++    fs.writeFileSync(logFile, `# CI job "${job.name}" (${job.conclusion}) on commit ${sha}: ${job.html_url}\n# Filtered by grok-review-loop: the summary, every FAIL line and failure name, and the PASS lines of the test files this PR changes. ANSI codes removed; kept lines are verbatim.\n` +
++      filterTestLog(sh("gh", ["api", `repos/${repo}/actions/jobs/${job.id}/logs`], 300_000), files) + "\n");
++  }
+   const paths = [...files.filter((f) => !/test/i.test(f)), ...files.filter((f) => /test/i.test(f))].slice(0, CFG.maxPaths);
+   const handoff = {
+     kind: "a2a_handoff", from: "grok-review-loop", to: "grokcode", task_id: `${repo}#${pr.number}/auto`,
+@@ -155,49 +210,113 @@
+     "Automated review by grok-review-loop. There are no author notes beyond the PR description.",
+     "", "Read these changed files at this commit (the code under review):", ...paths.map((p) => `- \`repo/${p}\``),
+     ...(files.length > paths.length ? ["", "Changed but not listed above (see the diff only):", ...files.slice(paths.length).map((p) => `- \`${p}\``)] : []),
+-    "", `The supplied run output \`evidence/${path.basename(logFile)}\` is the CI \`${TEST_JOB}\` job for this exact commit, filtered to per-file PASS/FAIL lines and the summary.`,
++    "", localLog
++      ? `The supplied run output \`evidence/${path.basename(logFile)}\` is a LOCAL test run at this exact commit, NOT CI: this repo has no CI \`${TEST_JOB}\` job. Its header says so.`
++      : `The supplied run output \`evidence/${path.basename(logFile)}\` is the CI \`${TEST_JOB}\` job for this exact commit, filtered to per-file PASS/FAIL lines and the summary.`,
+   ].join("\n") + "\n");
+-  log(`reviewing ${repo}#${pr.number} at ${short(sha)}, run ${attempt}`);
+-  spawnSync(process.execPath, [WRAPPER, `${base}.handoff.json`, `${base}.author.md`, base, PROFILE], { encoding: "utf8", timeout: 900_000, windowsHide: true });
+-  let ev;
+-  try { ev = JSON.parse(fs.readFileSync(`${base}.run-evidence.json`, "utf8")); } catch { ev = { verdict: "NOT_CHECKED", reasons: ["the wrapper wrote no run-evidence.json"] }; }
+-  const c = classify(ev, attempt);
+-  let posted = false;
+-  if (c.post) {
+-    let answer = null;
+-    try { answer = JSON.parse(fs.readFileSync(`${base}.challenge.json`, "utf8")); } catch { /* only PASS / CHANGES_REQUESTED write one */ }
+-    const bodyFile = `${base}.comment.md`;
+-    fs.writeFileSync(bodyFile, commentBody({ sha, ev, answer, kind: c.kind, attempt, record: `grok-review/runs/${name}` }));
+-    sh("gh", ["api", "-X", "POST", `repos/${repo}/pulls/${pr.number}/reviews`, "-f", `commit_id=${sha}`, "-f", "event=COMMENT", "-F", `body=@${bodyFile}`]);
+-    posted = true;
++
++  const reviewers = CH.chain();
++  let staged = null, stale = null;
++  const runGrok = () => {
++    log(`reviewing ${repo}#${pr.number} at ${short(sha)}, run ${attempt}: grok`);
++    spawnSync(process.execPath, [WRAPPER, `${base}.handoff.json`, `${base}.author.md`, base, PROFILE], { encoding: "utf8", timeout: 900_000, windowsHide: true });
++    let ev;
++    try { ev = JSON.parse(fs.readFileSync(`${base}.run-evidence.json`, "utf8")); } catch { ev = { verdict: "NOT_CHECKED", reasons: ["the wrapper wrote no run-evidence.json"] }; }
++    const c = classify(ev, attempt);
++    if (c.kind === "stale") { stale = (ev.reasons || [])[0]; return { ok: false, cls: "stale", reason: stale, called: false }; }
++    if (c.kind === "pool_exhausted") return { ok: false, cls: "credit", reason: grokWhy(ev), called: true };
++    if (c.kind === "verdict" || c.kind === "honest_nc") {
++      let answer = null;
++      try { answer = JSON.parse(fs.readFileSync(`${base}.challenge.json`, "utf8")); } catch { /* only PASS / CHANGES_REQUESTED write one */ }
++      return { ok: true, kind: c.kind, ev, answer, called: true };
++    }
++    return { ok: false, cls: "unusable", reason: grokWhy(ev), called: c.grok_called };
++  };
++  const runOther = async (r) => {
++    log(`reviewing ${repo}#${pr.number} at ${short(sha)}, run ${attempt}: ${r.id}`);
++    try { staged ??= stageForChat(repo, pr, sha, logFile, paths, base, handoff.handoff_nonce); }
++    catch (e) { return { ok: false, cls: "server", reason: `could not stage the files: ${redact(e.message)}`, called: false }; }
++    if (staged.stale) { stale = staged.stale; return { ok: false, cls: "stale", reason: stale, called: false }; }
++    return CH.runReviewer(r, staged);
++  };
++  const res = await CH.runChain(reviewers, {
++    skip: (r) => (stale ? `the PR moved: ${stale}` : CH.blockedFor(readState(), Date.now(), r.id, CFG)),
++    run: (r) => (r.kind === "grok" ? runGrok() : runOther(r)),
++    onTry: (e, out) => {
++      if (e.skipped) { log(`${repo}#${pr.number} ${short(sha)}: ${e.reviewer} skipped, ${e.reason}`); return; }
++      if (out.raw) fs.writeFileSync(`${base}.${e.reviewer.replace(/[^\w.-]/g, "_")}.raw.txt`, redact(out.raw));
++      if (e.ok || e.cls === "stale") return; // the final row below / the stale row below
++      record({ repo, pr: pr.number, sha, attempt, kind: e.cls === "credit" ? "pool_exhausted" : "reviewer_failed", reviewer: e.reviewer, cls: e.cls, called: e.called, grok_called: e.reviewer === "grok" && e.called,
++        verdict: "NOT_CHECKED", posted: false, reason: redact(e.reason).slice(0, 200), run: name });
++      log(`${repo}#${pr.number} ${short(sha)}: ${e.reviewer} failed: ${e.cls}, ${redact(e.reason).slice(0, 120)}`);
++    },
++  });
++  if (stale) { record({ repo, pr: pr.number, sha, attempt, kind: "stale", grok_called: false, posted: false, reason: redact(stale).slice(0, 200), run: name }); log(`${repo}#${pr.number}: stale, ${redact(stale)}`); return; }
++  const post = (body) => { const bodyFile = `${base}.comment.md`; fs.writeFileSync(bodyFile, body); sh("gh", ["api", "-X", "POST", `repos/${repo}/pulls/${pr.number}/reviews`, "-f", `commit_id=${sha}`, "-f", "event=COMMENT", "-F", `body=@${bodyFile}`]); };
++  if (res.by) {
++    const r = reviewers.find((x) => x.id === res.by);
++    post(commentBody({ sha, ev: res.out.ev, answer: res.out.answer ?? null, kind: res.kind, attempt, record: `grok-review/runs/${name}`, reviewer: r, tried: res.tried }));
++    record({ repo, pr: pr.number, sha, attempt, kind: res.kind, reviewer: r.id, called: true, grok_called: r.id === "grok", verdict: res.out.ev.verdict, posted: true, reason: "", run: name });
++    log(`${repo}#${pr.number} ${short(sha)}: ${res.kind} (${res.out.ev.verdict}) by ${r.id}, posted`);
++    return;
+   }
+-  record({ repo, pr: pr.number, sha, attempt, kind: c.kind, grok_called: c.grok_called, verdict: ev.verdict, posted, reason: redact((ev.reasons || [])[0] || ev.grok_stderr_tail || "").slice(0, 200), run: name });
+-  log(`${repo}#${pr.number} ${short(sha)}: ${c.kind}${ev.verdict ? ` (${ev.verdict})` : ""}${posted ? ", posted" : ""}`);
++  const why = res.tried.map((t) => `${t.reviewer}: ${t.cls}`).join(" | ");
++  if (!res.tried.some((t) => t.called)) { log(`${repo}#${pr.number} ${short(sha)}: no reviewer could run (${why}); nothing recorded`); return; }
++  const kind = attempt >= CFG.maxAttempts ? "gave_up" : "retry";
++  if (kind === "gave_up") post(commentBody({ sha, ev: { verdict: "NOT_CHECKED", reasons: [] }, answer: null, kind, attempt, record: `grok-review/runs/${name}`, tried: res.tried }));
++  record({ repo, pr: pr.number, sha, attempt, kind, reviewer: "chain", called: false, grok_called: false, verdict: "NOT_CHECKED", posted: kind === "gave_up", reason: redact(why).slice(0, 200), run: name });
++  log(`${repo}#${pr.number} ${short(sha)}: ${kind}, no reviewer answered (${redact(why)})`);
++}
++
++/** `pr <owner/repo> <n> <local-test-log>`: one review of one named PR through the same chain (Grok, then the fallbacks), for a repo whose CI has
++ *  no `test` job. The log must be a test run at the PR's head: its first line has to name that commit, or nothing runs. */
++async function reviewNamed(repo, n, localLog) {
++  if (!CH) { log(`the review chain did not load, so no review runs: ${CH_ERR}`); return 1; }
++  if (!repo || !n || !localLog || !fs.existsSync(localLog)) { log("usage: pr <owner/repo> <number> <local-test-log>"); return 1; }
++  const pr = ghJson(["pr", "view", String(n), "--repo", repo, "--json", "number,headRefOid,isDraft,labels,title,author"]);
++  if (!fs.readFileSync(localLog, "utf8").split("\n")[0].includes(pr.headRefOid)) {
++    log(`${repo}#${n}: the local log's first line does not name the PR head ${pr.headRefOid}; refusing (a log from another commit is not evidence for this one)`); return 1;
++  }
++  if (testJob(repo, pr.headRefOid).ready) { log(`${repo}#${n}: this commit has a passing CI test job; the normal cycle reviews it with the CI log`); return 1; }
++  const state = readState(), why = skipReason(pr, repo, state);
++  if (why) { log(`${repo}#${n}: skip, ${why}`); return 0; }
++  if (!takeLock()) { log("a previous review is still running (lock held)"); return 0; }
++  try {
++    const attempt = state.filter((r) => sameCommit(r, repo, pr.number, pr.headRefOid) && r.kind === "retry").length + 1;
++    log(`pr mode, local test log: ${repo}#${n} at ${short(pr.headRefOid)}`);
++    await reviewOne(repo, pr, attempt, localLog);
++    return 0;
++  } finally { dropLock(); }
+ }
+ 
+-function cycle(dry) {
+-  const state = readState(), now = Date.now();
+-  const stop = blocked(state, now);
+-  if (stop) { log(stop); return 0; }
+-  for (const repo of REPOS) {
+-    const prs = ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,headRefOid,isDraft,labels,title,author"]);
+-    for (const pr of order(prs)) {
+-      const why = skipReason(pr, repo, state);
+-      if (why) { if (dry) log(`${repo}#${pr.number}: skip, ${why}`); continue; }
+-      const t = testJob(repo, pr.headRefOid);
+-      if (!t.ready) { if (dry) log(`${repo}#${pr.number}: skip, ${t.why}`); continue; }
+-      const attempt = state.filter((r) => sameCommit(r, repo, pr.number, pr.headRefOid) && r.kind === "retry").length + 1;
+-      if (dry) { log(`${repo}#${pr.number}: WOULD REVIEW ${short(pr.headRefOid)} (run ${attempt}) "${pr.title}"`); continue; }
+-      reviewOne(repo, pr, attempt);
+-      return 0; // one per cycle
++async function cycle(dry) {
++  if (!CH) { log(`the review chain did not load, so no review runs: ${CH_ERR}`); return 1; }
++  const state = readState(), now = Date.now(), reviewers = CH.chain();
++  const gate = reviewers.map((r) => [r.id, CH.blockedFor(state, now, r.id, CFG)]);
++  if (gate.every(([, w]) => w)) { log(`every reviewer is paused or capped: ${gate.map(([i, w]) => `${i}: ${w}`).join(" | ")}`); return 0; }
++  log(`chain: ${gate.map(([i, w]) => (w ? `${i} (${w})` : i)).join(" -> ")}`);
++  if (!dry && !takeLock()) { log("a previous review is still running (lock held): skipping this cycle"); return 0; }
++  try {
++    for (const repo of REPOS) {
++      const prs = ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,headRefOid,isDraft,labels,title,author"]);
++      for (const pr of order(prs)) {
++        const why = skipReason(pr, repo, state);
++        if (why) { if (dry) log(`${repo}#${pr.number}: skip, ${why}`); continue; }
++        const t = testJob(repo, pr.headRefOid);
++        if (!t.ready) { if (dry) log(`${repo}#${pr.number}: skip, ${t.why}`); continue; }
++        const attempt = state.filter((r) => sameCommit(r, repo, pr.number, pr.headRefOid) && r.kind === "retry").length + 1;
++        if (dry) { log(`${repo}#${pr.number}: WOULD REVIEW ${short(pr.headRefOid)} (run ${attempt}) "${pr.title}"`); continue; }
++        await reviewOne(repo, pr, attempt);
++        return 0; // one per cycle
++      }
+     }
+-  }
+-  if (!dry) log("nothing to review");
+-  return 0;
++    if (!dry) log("nothing to review");
++    return 0;
++  } finally { if (!dry) dropLock(); }
+ }
+ 
+ // ── selftest ─────────────────────────────────────────────────────────────────────────────────────────────────────
+-function selftest() {
++async function selftest() {
+   let fails = 0;
+   const eq = (name, got, want) => { const ok = JSON.stringify(got) === JSON.stringify(want); if (!ok) fails++; console.log(`${ok ? "ok  " : "FAIL"} ${name}${ok ? "" : `: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`); };
+   const R = "o/r", S = "a".repeat(40), now = Date.parse("2026-11-16T20:00:00Z");
+@@ -249,6 +368,20 @@
+     filterTestLog(logText, ["src/a.ts", "tests/a.test.ts"]).split("\n"),
+     ["2026-11-16T09:33:22Z PASS tests/a.test.ts", "2026-11-16T09:33:23Z FAIL tests/b.test.ts", "2026-11-16T09:33:23Z   ● b › breaks", "2026-11-16T09:40:00Z Tests:       12 passed, 12 total"]);
+ 
++  // the chain (2026-11-17): rows of one reviewer never stop another, and a non-Grok review says what it is
++  eq("another reviewer's 402 row does not pause Grok", blocked([row({ kind: "pool_exhausted", reviewer: "codex" })], now), null);
++  eq("another reviewer's runs do not count toward Grok's cap", blocked(Array.from({ length: 12 }, () => row({ kind: "verdict", reviewer: "codex", grok_called: true })), now), null);
++  const other = { id: "codex", label: "Codex (ChatGPT plan)", family: "OpenAI GPT" };
++  const tried = [{ reviewer: "grok", ok: false, cls: "credit", reason: "API error (status 402 Payment Required)" }, { reviewer: "codex", ok: true, cls: "answered", reason: "verdict" }];
++  const cb = commentBody({ sha: S, kind: "verdict", attempt: 1, record: "r", ev: { verdict: "PASS" }, answer: { checklist: {}, findings: [] }, reviewer: other, tried });
++  eq("a non-Grok review says it is not a Grok review, names its family, and names who failed first", [cb.includes("This is not a Grok review"), cb.includes("OpenAI GPT"), cb.includes("`grok`: credit"), cb.includes("### Codex (ChatGPT plan) review of")], [true, true, true, true]);
++  eq("a Grok review keeps its old wording", commentBody({ sha: S, kind: "verdict", attempt: 1, record: "r", ev: { verdict: "PASS" }, answer: { checklist: {}, findings: [] } }).includes("### Grok review of"), true);
++  const gu = commentBody({ sha: S, kind: "gave_up", attempt: 3, record: "r", ev: { verdict: "NOT_CHECKED", reasons: [] }, tried: [{ reviewer: "grok", ok: false, cls: "credit", reason: "402" }, { reviewer: "codex", ok: false, cls: "timeout", reason: "300s" }, { reviewer: "open:x", ok: false, cls: "paused", reason: "paused: 429" }] });
++  eq("when every reviewer failed the comment lists each reason and gives no verdict", [gu.includes("`grok`: credit"), gu.includes("`codex`: timeout"), gu.includes("`open:x`: paused"), gu.includes("no review verdict"), /: PASS|: CHANGES_REQUESTED/.test(gu)], [true, true, true, true, false]);
++  eq("a provider key in a failure reason is scrubbed from the comment", commentBody({ sha: S, kind: "gave_up", attempt: 3, record: "r", ev: { verdict: "NOT_CHECKED", reasons: [] }, tried: [{ reviewer: "a", ok: false, cls: "auth", reason: "bad " + fake }, { reviewer: "b", ok: false, cls: "auth", reason: "x" }] }).includes(fake), false);
++  if (!CH) { fails++; console.log(`FAIL the review chain did not load: ${CH_ERR}`); }
++  else fails += await CH.selftest();
++
+   console.log(fails ? `${fails} FAILED` : "all passed");
+   return fails ? 1 : 0;
+ }
+@@ -256,8 +389,9 @@
+ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+   const mode = process.argv[2];
+   try {
+-    if (mode === "resume") { record({ kind: "resume" }); log("pause lifted: the next cycle reviews again"); }
+-    else process.exitCode = mode === "selftest" ? selftest() : cycle(mode === "dry");
++    if (mode === "pr") process.exitCode = await reviewNamed(process.argv[3], Number(process.argv[4]), process.argv[5]);
++    else if (mode === "resume") { const who = process.argv[3]; record({ kind: "resume", ...(who && { reviewer: who }) }); log(`pause lifted${who ? ` for ${who}` : " for every reviewer"}: the next cycle reviews again`); }
++    else process.exitCode = mode === "selftest" ? await selftest() : await cycle(mode === "dry");
+   }
+   catch (e) { log("error:", redact(e.message)); process.exitCode = 1; }
+ }
