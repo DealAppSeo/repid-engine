@@ -3,7 +3,7 @@
  * only the receipt and a public key, and a provider failure that is a reason-coded NOT_CHECKED.
  * No network, no database. The key is a throwaway generated per run.
  */
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,8 @@ import path from 'node:path';
 import express from 'express';
 import request from 'supertest';
 import { buildHalReceipt, checkHalReceipt, signedHalReceipt, failureCode, type SignedHalReceipt } from '../src/hal/signed-verdict-receipt';
-import { withVerdictReceiptId } from '../src/hal/verdict-receipt-id';
+import { HAL_JUDGED_CHARS, withVerdictReceiptId } from '../src/hal/verdict-receipt-id';
+import { canonicalJson } from '../src/services/auditChainWriter';
 import { signerFromPublicKey } from '../src/kernel/receipt-signing';
 import receiptVerifyRouter from '../src/routes/receipt-verify';
 
@@ -202,5 +203,54 @@ describe('wiring is default-off', () => {
     process.env.KERNEL_RECEIPT_TRUSTED_SIGNERS = key.pub;
     const pinned = await request(app).post('/api/v1/receipt/verify').send({ receipt_id: 'x', signed_receipt });
     expect(pinned.body.signature_check).toMatchObject({ verified: true, verdict: 'SUPPORTED', receipt_id: signed_receipt.receipt_id });
+  });
+});
+
+// Strix on #1583: a receipt must say how much of the claim was judged, and whether the verdict was a cache serve.
+describe('signed HAL receipt — judged extent and cache serve', () => {
+  const key = freshKey();
+  beforeEach(() => { process.env.KERNEL_RECEIPT_SIGNING_KEY = key.pkcs8; });
+  const c = fixtures.cases[0]!;
+  const pin = () => [signerFromPublicKey(key.pub)!];
+
+  it('a claim longer than the prompt window records the window, not the whole text', () => {
+    const long = 'Paris is the capital of France. ' + 'x'.repeat(HAL_JUDGED_CHARS) + ' The moon is made of cheese.';
+    const r = signedHalReceipt(long, halResponse(c));
+    expect(r.claim_chars_judged).toBe(HAL_JUDGED_CHARS);
+    expect(r.claim_chars_judged).toBeLessThan(long.length);
+    expect(checkHalReceipt(r, pin(), long)).toMatchObject({ verified: true, claim_chars_judged: HAL_JUDGED_CHARS });
+    expect(standalone(r, key.pub, long)).toMatchObject({ verified: true, claim_chars_judged: HAL_JUDGED_CHARS });
+    // a short claim is judged whole
+    expect(signedHalReceipt(c.text, halResponse(c)).claim_chars_judged).toBe(c.text.length);
+  });
+
+  it('the judged bound is signed: lowering or raising it breaks the receipt', () => {
+    const r = signedHalReceipt(c.text, halResponse(c));
+    for (const n of [0, c.text.length + 50]) {
+      expect(checkHalReceipt({ ...r, claim_chars_judged: n }, pin(), c.text)).toEqual({ verified: false, reason: 'receipt_id_mismatch' });
+      expect(standalone({ ...r, claim_chars_judged: n }, key.pub, c.text).reason).toBe('receipt_id_mismatch');
+    }
+  });
+
+  it('a receipt without the judged bound is malformed, never verified', () => {
+    const { claim_chars_judged: _n, ...old } = buildHalReceipt(c.text, halResponse(c));
+    const body = { ...old, receipt_id: '' } as unknown as SignedHalReceipt;
+    const { receipt_id: _i, ...b } = body;
+    body.receipt_id = 'halr1_' + createHash('sha256').update(canonicalJson(b)).digest('hex');
+    body.signer = signedHalReceipt(c.text, halResponse(c)).signer;
+    body.signature = '0x' + '00'.repeat(64);
+    expect(checkHalReceipt(body, pin())).toEqual({ verified: false, reason: 'malformed' });
+    expect(standalone(body, key.pub)).toEqual({ verified: false, reason: 'malformed' });
+  });
+
+  it('a cache serve is marked, signed, and changes the receipt id', () => {
+    const fresh = signedHalReceipt(c.text, halResponse(c));
+    const served = signedHalReceipt(c.text.toUpperCase(), { ...halResponse(c), _cached: true } as ReturnType<typeof halResponse>);
+    expect(fresh.served_from_cache).toBe(false);
+    expect(served.served_from_cache).toBe(true);
+    expect(checkHalReceipt(served, pin(), c.text.toUpperCase())).toMatchObject({ verified: true, served_from_cache: true });
+    expect(standalone(served, key.pub, c.text.toUpperCase())).toMatchObject({ verified: true, served_from_cache: true });
+    // stripping the marker is caught
+    expect(checkHalReceipt({ ...served, served_from_cache: false }, pin())).toEqual({ verified: false, reason: 'receipt_id_mismatch' });
   });
 });

@@ -21,6 +21,12 @@ import { canonicalJson } from '../services/auditChainWriter';
 export const HAL_VERDICT_RECEIPT_VERSION = 'hal-verdict-v1';
 
 /** The fields of a HAL result the id reads. Every HalEvaluationResponse fits this shape. */
+/**
+ * How many leading characters of a claim the fact-check prompt shows the checkers (fact-check.ts
+ * slices to this). A receipt records it, so a verdict is never read as covering text no model saw.
+ */
+export const HAL_JUDGED_CHARS = 1200;
+
 export interface HalVerdictLike {
   decision: string;
   hal_score: number | null | undefined;

@@ -90,6 +90,7 @@ import { grokApiKey } from '../providers/xai-key';
 import { gradeEvidence, type CragResult, type CragGrade } from './crag';
 import { publishDetectorSnapshot } from '../services/detector-coverage';
 import { modelFamily } from '../classify/free-votes';
+import { HAL_JUDGED_CHARS } from './verdict-receipt-id';
 
 export interface FactCheckProviderCfg {
   name: string;
@@ -501,7 +502,7 @@ const FACT_CHECK_SYSTEM =
 function factCheckPrompt(deliverable: string): string {
   return (
     'Assess whether the following statement is factually true.\n' +
-    `Statement: "${deliverable.replace(/"/g, "'").slice(0, 1200)}"\n\n` +
+    `Statement: "${deliverable.replace(/"/g, "'").slice(0, HAL_JUDGED_CHARS)}"\n\n` +
     'Reply with ONLY this JSON (no prose, no markdown):\n' +
     '{"verdict":"TRUE|FALSE|UNCERTAIN","confidence":0-100,"note":"<=12 words"}\n' +
     '- TRUE: central factual claim is correct.\n' +

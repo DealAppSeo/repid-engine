@@ -22,7 +22,7 @@ import { createHash } from 'crypto';
 import { canonicalJson } from '../services/auditChainWriter';
 import { kernelReceiptSigningKey, signerFromPublicKey, verifyEd25519 } from '../kernel/receipt-signing';
 import type { ReceiptSigner } from '../kernel/types';
-import { halVerdictReceiptId, type HalVerdictLike } from './verdict-receipt-id';
+import { HAL_JUDGED_CHARS, halVerdictReceiptId, type HalVerdictLike } from './verdict-receipt-id';
 
 export const HAL_SIGNED_RECEIPT_VERSION = 'hal-signed-receipt-v1';
 /** Prefixed to the signed bytes. Distinct from KERNEL_RECEIPT_SIGNATURE_DOMAIN on purpose. */
@@ -49,6 +49,16 @@ export interface SignedHalReceipt {
   verdict: ReceiptVerdict;
   reason: string;
   claim_sha256: string;
+  /** Leading characters of the claim the checker prompt showed the models. Text past this was not judged. */
+  claim_chars_judged: number;
+  /** sha256 of that judged prefix, so a verifier holding the claim can confirm the bound. */
+  claim_judged_sha256: string;
+  /**
+   * True when the verdict was served from the HAL cache. That cache is keyed on the trimmed,
+   * lower-cased text, so the verdict may have been produced for a variant differing in case or
+   * surrounding whitespace, not for these exact bytes.
+   */
+  served_from_cache: boolean;
   decision: string;
   hal_score: number | null;
   mode: string | null;
@@ -129,6 +139,7 @@ export function buildHalReceipt(text: string, v: HalVerdictLike): SignedHalRecei
   const votes = votesOf(v);
   const { verdict, reason } = receiptVerdictOf(v, votes, familiesUsed);
   const claim_sha256 = sha256(text);
+  const claim_chars_judged = Math.min(text.length, HAL_JUDGED_CHARS);
   const r: SignedHalReceipt = {
     v: HAL_SIGNED_RECEIPT_VERSION,
     receipt_id: '',
@@ -136,6 +147,9 @@ export function buildHalReceipt(text: string, v: HalVerdictLike): SignedHalRecei
     verdict,
     reason,
     claim_sha256,
+    claim_chars_judged,
+    claim_judged_sha256: sha256(text.slice(0, claim_chars_judged)),
+    served_from_cache: (v as { _cached?: unknown })._cached === true,
     decision: v.decision,
     hal_score: typeof v.hal_score === 'number' && Number.isFinite(v.hal_score) ? Math.round(v.hal_score * 1e4) / 1e4 : null,
     mode: v.mode ?? null,
@@ -174,7 +188,7 @@ export function signedHalReceipt(text: string, v: HalVerdictLike): SignedHalRece
 }
 
 export type ReceiptCheck =
-  | { verified: true; receipt_id: string; verdict: ReceiptVerdict; signer_fingerprint: string }
+  | { verified: true; receipt_id: string; verdict: ReceiptVerdict; signer_fingerprint: string; claim_chars_judged: number; served_from_cache: boolean }
   | { verified: false; reason: string };
 
 /**
@@ -186,12 +200,13 @@ export function checkHalReceipt(input: unknown, trusted: ReceiptSigner[], claimT
   const r = input as SignedHalReceipt;
   if (r.v !== HAL_SIGNED_RECEIPT_VERSION || typeof r.receipt_id !== 'string') return { verified: false, reason: 'malformed' };
   if (r.receipt_id !== 'halr1_' + sha256(canonicalJson(bodyOf(r)))) return { verified: false, reason: 'receipt_id_mismatch' };
+  if (!Number.isInteger(r.claim_chars_judged) || r.claim_chars_judged < 0 || typeof r.served_from_cache !== 'boolean') return { verified: false, reason: 'malformed' };
   if (!r.signer || typeof r.signature !== 'string') return { verified: false, reason: 'unsigned' };
   const claimed = signerFromPublicKey(String(r.signer.public_key));
   if (claimed === null || claimed.fingerprint !== String(r.signer.fingerprint).toLowerCase()) return { verified: false, reason: 'malformed' };
   // Pin by fingerprint (sha256 of the public key): the credential-safety test refuses `===` on key fields.
   if (!trusted.some((t) => t.fingerprint === claimed.fingerprint)) return { verified: false, reason: 'untrusted_signer' };
   if (!verifyEd25519(claimed.public_key, signingMessage(r), r.signature)) return { verified: false, reason: 'bad_signature' };
-  if (claimText !== undefined && sha256(claimText) !== r.claim_sha256) return { verified: false, reason: 'claim_mismatch' };
-  return { verified: true, receipt_id: r.receipt_id, verdict: r.verdict, signer_fingerprint: claimed.fingerprint };
+  if (claimText !== undefined && (sha256(claimText) !== r.claim_sha256 || sha256(claimText.slice(0, r.claim_chars_judged)) !== r.claim_judged_sha256)) return { verified: false, reason: 'claim_mismatch' };
+  return { verified: true, receipt_id: r.receipt_id, verdict: r.verdict, signer_fingerprint: claimed.fingerprint, claim_chars_judged: r.claim_chars_judged, served_from_cache: r.served_from_cache };
 }

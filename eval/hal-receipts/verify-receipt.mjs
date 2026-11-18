@@ -22,6 +22,7 @@ export function verifyReceipt(r, pubHex, claimText) {
   if (!r || r.v !== 'hal-signed-receipt-v1') return { verified: false, reason: 'malformed' };
   const { receipt_id, signer, signature, ...body } = r;
   if (receipt_id !== 'halr1_' + sha256(canon(JSON.parse(JSON.stringify(body))))) return { verified: false, reason: 'receipt_id_mismatch' };
+  if (!Number.isInteger(r.claim_chars_judged) || r.claim_chars_judged < 0 || typeof r.served_from_cache !== 'boolean') return { verified: false, reason: 'malformed' };
   if (!signer || typeof signature !== 'string' || !/^0x[0-9a-f]{128}$/i.test(signature)) return { verified: false, reason: 'unsigned' };
   if (String(signer.public_key).toLowerCase() !== pubHex.toLowerCase()) return { verified: false, reason: 'untrusted_signer' };
   const raw = Buffer.from(pubHex.slice(2), 'hex');
@@ -30,8 +31,10 @@ export function verifyReceipt(r, pubHex, claimText) {
   const key = createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: raw.toString('base64url') }, format: 'jwk' });
   const ok = verify(null, Buffer.from(DOMAIN + canon(JSON.parse(JSON.stringify(signed))), 'utf8'), key, Buffer.from(signature.slice(2), 'hex'));
   if (!ok) return { verified: false, reason: 'bad_signature' };
-  if (claimText !== undefined && sha256(claimText) !== r.claim_sha256) return { verified: false, reason: 'claim_mismatch' };
-  return { verified: true, receipt_id, verdict: r.verdict, reason: r.reason };
+  if (claimText !== undefined && (sha256(claimText) !== r.claim_sha256 || sha256(claimText.slice(0, r.claim_chars_judged)) !== r.claim_judged_sha256)) return { verified: false, reason: 'claim_mismatch' };
+  // claim_chars_judged: text past this many characters was NOT judged. served_from_cache: the verdict
+  // may be for a variant of the claim differing in case or surrounding whitespace.
+  return { verified: true, receipt_id, verdict: r.verdict, reason: r.reason, claim_chars_judged: r.claim_chars_judged, served_from_cache: r.served_from_cache };
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/').split('/').pop())) {
