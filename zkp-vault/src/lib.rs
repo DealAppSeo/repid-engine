@@ -44,8 +44,9 @@
 //! and the TypeScript port are gated against it.
 //!
 //! The in-AIR constraints are **not hand-rolled**: they come from the audited
-//! `p3-poseidon2-air` 0.3.0 `Poseidon2Air` gadget at the same pinned 0.3.0 family, fed
-//! `RoundConstants` built from `BABYBEAR_RC16_*` — the *same* constants
+//! `p3-poseidon2-air` `Poseidon2Air` gadget at the one Plonky3 pin (`27d59f73`, 0.5.1; crates.io
+//! 0.3.0 until 2026-11-17), fed `RoundConstants` built from `BABYBEAR_POSEIDON2_RC_16_*` (named
+//! `BABYBEAR_RC16_*` at 0.3.0; the committed KAT files prove the values did not change) — the *same* constants
 //! `default_babybear_poseidon2_16()` uses, so in-AIR and off-circuit agree by
 //! construction. `circuit_matches_off_circuit_h_p2` in the test module is the gate.
 //!
@@ -76,10 +77,10 @@
 
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{
-    BabyBear, GenericPoseidon2LinearLayersBabyBear, BABYBEAR_RC16_EXTERNAL_FINAL,
-    BABYBEAR_RC16_EXTERNAL_INITIAL, BABYBEAR_RC16_INTERNAL,
+    BabyBear, GenericPoseidon2LinearLayersBabyBear, BABYBEAR_POSEIDON2_RC_16_EXTERNAL_FINAL,
+    BABYBEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL, BABYBEAR_POSEIDON2_RC_16_INTERNAL,
 };
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
@@ -89,7 +90,6 @@ use p3_field::PrimeCharacteristicRing;
 use p3_fri::{FriParameters, HidingFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use p3_poseidon2_air::{
@@ -97,7 +97,7 @@ use p3_poseidon2_air::{
 };
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{prove, verify, Proof, StarkConfig, VerificationError};
-use rand::rngs::StdRng;
+use rand::rngs::{StdRng, SysRng};
 use rand::SeedableRng;
 
 /// Blinding randomness for every hiding PCS and MMCS in this crate: a ChaCha CSPRNG seeded
@@ -107,8 +107,39 @@ use rand::SeedableRng;
 /// the configs used `SmallRng::seed_from_u64(1|2|3)`: a non-cryptographic generator with a
 /// constant seed published in this repo, so anyone could replay it and strip the masks.
 /// Never seed this from a constant. Pinned by the `two_proofs_of_*_differ` tests.
-pub(crate) fn hiding_rng() -> StdRng {
-    StdRng::from_os_rng()
+///
+/// Plonky3 at the pinned rev bounds this only by `Rng`, not `CryptoRng` [V hiding_pcs.rs], and
+/// even a `CryptoRng` bound would accept a constant-seeded `StdRng`. So the type system does not
+/// catch the 2026-11-15 mistake; the tests above are the guard.
+pub(crate) fn hiding_rng() -> HidingRng {
+    HidingRng(StdRng::try_from_rng(&mut SysRng).expect("OS entropy unavailable"))
+}
+
+/// The hiding RNG type. Its `Clone` is a FRESH OS-seeded generator, never a copy of the state.
+///
+/// rand 0.10 removed `Clone` from `StdRng` so a stream cannot be duplicated by accident, but
+/// Plonky3's `Pcs: Clone` bound needs one. A state-copying clone would let two copies of a
+/// config emit the same masks; reseeding makes that impossible.
+#[derive(Debug)]
+pub struct HidingRng(StdRng);
+
+impl Clone for HidingRng {
+    fn clone(&self) -> Self {
+        hiding_rng()
+    }
+}
+
+impl core::ops::Deref for HidingRng {
+    type Target = StdRng;
+    fn deref(&self) -> &StdRng {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for HidingRng {
+    fn deref_mut(&mut self) -> &mut StdRng {
+        &mut self.0
+    }
 }
 
 /// Canonical off-circuit Poseidon2-BabyBear 2-scalar hash `H_p2` (backlog 4.0-d.1).
@@ -208,9 +239,9 @@ const W: usize = num_cols::<
 /// highest-risk integration point, gated by `circuit_matches_off_circuit_h_p2`.
 fn p2_round_constants() -> P2Constants {
     P2Constants::new(
-        BABYBEAR_RC16_EXTERNAL_INITIAL,
-        BABYBEAR_RC16_INTERNAL,
-        BABYBEAR_RC16_EXTERNAL_FINAL,
+        BABYBEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL,
+        BABYBEAR_POSEIDON2_RC_16_INTERNAL,
+        BABYBEAR_POSEIDON2_RC_16_EXTERNAL_FINAL,
     )
 }
 
@@ -227,14 +258,15 @@ type ValHidingMmcs = MerkleTreeHidingMmcs<
     [u64; p3_keccak::VECTOR_LEN],
     FieldHash,
     MyCompress,
-    StdRng,
+    HidingRng,
+    2,
     4,
     4,
 >;
 type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
 type Dft = Radix2DitParallel<Val>;
 type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, StdRng>;
+type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, HidingRng>;
 type VaultConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 // ---- H_p2 in the clear (witness generation) ----------------------------------
@@ -287,12 +319,17 @@ impl BaseAir<Val> for OwnershipAir {
     fn width(&self) -> usize {
         W
     }
+    // Plonky3 0.5.1 sizes the public-value vector from this (default 0) and the verifier
+    // rejects any other length.
+    fn num_public_values(&self) -> usize {
+        2 + GROUP_SIZE // context, nullifier, group
+    }
 }
 
 impl<AB> Air<AB> for OwnershipAir
 where
-    AB: AirBuilderWithPublicValues<F = Val>,
-    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, P2_WIDTH>,
+    AB: AirBuilder<F = Val>,
+    LinearLayers: GenericPoseidon2LinearLayers<P2_WIDTH>,
 {
     fn eval(&self, builder: &mut AB) {
         // 1. The audited Poseidon2 round constraints, applied to every row.
@@ -312,8 +349,8 @@ where
 
         let (local, next) = {
             let main = builder.main();
-            let local_row = main.row_slice(0).expect("trace has no rows");
-            let next_row = main.row_slice(1).expect("trace has no next row");
+            let local_row = main.current_slice();
+            let next_row = main.next_slice();
             let local: &P2Cols<AB::Var> = (*local_row).borrow();
             let next: &P2Cols<AB::Var> = (*next_row).borrow();
             (local_to_owned(local), local_to_owned(next))
@@ -374,8 +411,8 @@ fn make_config() -> VaultConfig {
     // Independent generators for the trace tree and the FRI commit-phase tree. Cloning
     // `val_mmcs` would copy its RNG state and reuse one salt stream in both trees.
     let challenge_mmcs =
-        ChallengeHidingMmcs::new(ValHidingMmcs::new(field_hash.clone(), compress.clone(), hiding_rng()));
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, hiding_rng());
+        ChallengeHidingMmcs::new(ValHidingMmcs::new(field_hash.clone(), compress.clone(), 0, hiding_rng()));
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, 0, hiding_rng());
     let dft = Dft::default();
     // log_blowup=3 (blowup 8) so the LDE covers the quotient domain. Inherited from
     // the MiMC version, whose x^7 S-box gave degree-7 constraints; the Poseidon2
@@ -387,7 +424,9 @@ fn make_config() -> VaultConfig {
         log_blowup: 3,
         log_final_poly_len: 2,
         num_queries: 2,
-        proof_of_work_bits: 1,
+        max_log_arity: 1, // binary folding, as in 0.3.0
+        commit_proof_of_work_bits: 0,
+        query_proof_of_work_bits: 1,
         mmcs: challenge_mmcs,
     };
     let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, hiding_rng());
@@ -467,6 +506,7 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<Proof<VaultConfig>, bincode::Err
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p3_matrix::Matrix;
     use p3_field::PrimeField32;
     use std::time::Instant;
 
@@ -584,7 +624,7 @@ mod tests {
     // which asserts the VERIFIER rejects, is `nullifier_secret_binding_holds_in_any_profile`.
     #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "constraints had nonzero value")]
+    #[should_panic(expected = "constraints not satisfied")]
     fn nullifier_must_use_the_same_secret_as_the_leaf() {
         let (secret, agent_id, context) = (777u64, 555u64, 9001u64);
         let impostor_secret = 888u64;

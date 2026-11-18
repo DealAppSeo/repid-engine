@@ -50,7 +50,7 @@
 //!   4. `b_k[i] · (1 − b_k[i]) = 0` for each bit (binary)
 //!   5. `sum_i b_k[i] · 2^i − e_k = 0` (bit reconstruction)
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::BabyBear;
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
@@ -60,11 +60,10 @@ use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::{FriParameters, HidingFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{prove, verify, Proof, StarkConfig, VerificationError};
-use rand::rngs::StdRng;
+use crate::HidingRng;
 use crate::hiding_rng;
 
 // ---- BabyBear ordering constants ---------------------------------------------
@@ -104,14 +103,15 @@ type ValHidingMmcs = MerkleTreeHidingMmcs<
     [u64; p3_keccak::VECTOR_LEN],
     FieldHash,
     MyCompress,
-    StdRng,
+    HidingRng,
+    2,
     4,
     4,
 >;
 type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
 type Dft = Radix2DitParallel<Val>;
 type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, StdRng>;
+type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, HidingRng>;
 pub type OrdConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 fn make_config() -> OrdConfig {
@@ -122,14 +122,16 @@ fn make_config() -> OrdConfig {
     // Independent generators for the trace tree and the FRI commit-phase tree. Cloning
     // `val_mmcs` would copy its RNG state and reuse one salt stream in both trees.
     let challenge_mmcs =
-        ChallengeHidingMmcs::new(ValHidingMmcs::new(field_hash.clone(), compress.clone(), hiding_rng()));
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, hiding_rng());
+        ChallengeHidingMmcs::new(ValHidingMmcs::new(field_hash.clone(), compress.clone(), 0, hiding_rng()));
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, 0, hiding_rng());
     let dft = Dft::default();
     let fri_params = FriParameters {
         log_blowup: 3,
         log_final_poly_len: 2,
         num_queries: 2,
-        proof_of_work_bits: 1,
+        max_log_arity: 1, // binary folding, as in 0.3.0
+        commit_proof_of_work_bits: 0,
+        query_proof_of_work_bits: 1,
         mmcs: challenge_mmcs,
     };
     let pcs = HidingFriPcs::new(dft, val_mmcs, fri_params, 4, hiding_rng());
@@ -148,15 +150,20 @@ impl BaseAir<Val> for OrderingCheckAir {
     fn width(&self) -> usize {
         W_ORD
     }
+    // Plonky3 0.5.1 sizes the public-value vector from this (default 0) and the verifier
+    // rejects any other length.
+    fn num_public_values(&self) -> usize {
+        3 // low, target, high
+    }
 }
 
 impl<AB> Air<AB> for OrderingCheckAir
 where
-    AB: AirBuilderWithPublicValues<F = Val>,
+    AB: AirBuilder<F = Val>,
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let row = main.row_slice(0).expect("trace has no rows");
+        let row = main.current_slice();
         // Copy public vars before any mutable borrows.
         let pis = builder.public_values();
         let low: AB::Expr = pis[0].into();

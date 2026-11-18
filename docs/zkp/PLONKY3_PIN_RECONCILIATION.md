@@ -5,6 +5,23 @@ circuits.* A single revision must bind every circuit so a leaf produced by one c
 aggregation-compatible with every other, and no crate can silently drift the pin and
 break the others.
 
+## Status: RECONCILED 2026-11-17 (plan step B2, repid-engine #1578)
+
+`zkp-vault` now builds every `p3-*` crate from git `27d59f7350daf6b02d11b01c3a55af453554b515`
+(0.5.1), the same rev as the live prover, the leaf crate and the verifier.
+`node scripts/zkp/plonky3-pins.cjs` prints PASS (one source across four files). The frozen
+Poseidon2 KAT files pass unchanged at the new rev, so "re-freeze the leaf KATs" produced no new
+values, and the TS port, gated on the same files, agrees with both versions. The guard below
+now asserts the reconciled state (`PINS_RECONCILED = true`).
+
+Two premises in this document turned out wrong and are kept below as history:
+- Reason 1 says `27d59f7350` "was the abandoned custom-STARK salvage branch". It is the rev the
+  live prover builds (hyperdag-core `services/zkp-postcard/Cargo.lock`, `p3-* 0.5.1`).
+- Reason 3 waits for leaf wiring. The trigger came first instead: a new circuit
+  (`zkp-vault/src/eligibility.rs`) would otherwise have been built on the second pin.
+
+The API changes the move needed are listed in #1578.
+
 ## The divergence the audit found (audit item #7)
 
 There are **two** Plonky3 pins in play, on two different mechanisms:

@@ -313,8 +313,9 @@ describing it.*
   pinned by `two_proofs_of_*_differ`. Still open: the secret is ONE BabyBear element (~31 bits),
   so a nullifier brute-forces back to its secret and links every context. That is the defect
   `src/zkp/nullifier-identity.ts` already fixed in TS. Do not describe the vault as anonymous or
-  unlinkable until the secret is widened. Its Plonky3 is crates.io **0.3.0**; the live prover's
-  `27d59f73` is **0.5.1**, so Invariant 5 (one pin) does not hold today.
+  unlinkable until the secret is widened. Its Plonky3 was crates.io **0.3.0** until 2026-11-17,
+  against the live prover's `27d59f73` (**0.5.1**), so Invariant 5 (one pin) did not hold. It now
+  builds from `27d59f73`; `node scripts/zkp/plonky3-pins.cjs` prints PASS [MEASURED 2026-11-17].
 
 ### Pointing HAL at a local OpenAI-compatible gateway (OmniRoute, Ollama, LM Studio)
 

@@ -3,7 +3,7 @@
 //! Three checks that turn the `examples/poseidon2_kat` oracle into a regression
 //! gate and, crucially, prove the harness calls p3-poseidon2 *correctly*:
 //!
-//! 1. `published_rng_vector_reproduces` — reproduces p3-poseidon2 0.3.0's OWN
+//! 1. `published_rng_vector_reproduces` — reproduces p3-poseidon2 0.3.0's OWN (and still passes at the 27d59f73 pin, 2026-11-17)
 //!    published width-16 test vector (`test_poseidon2_width_16_random`) using the
 //!    identical constructor + PRNG (`new_from_rng_128` over `Xoroshiro128Plus`
 //!    seed 1). This is the INDEPENDENT ground truth: if our `new_array` →

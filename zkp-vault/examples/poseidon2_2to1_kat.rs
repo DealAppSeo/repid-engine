@@ -72,7 +72,7 @@ fn main() {
 
     println!("{{");
     println!("  \"scheme\": \"poseidon2_babybear16_2to1\",");
-    println!("  \"source\": \"p3-baby-bear 0.3.0 default_babybear_poseidon2_16 (Horizen-Labs constants), H_p2(a,b) = permute([a,b,0..])[0]\",");
+    println!("  \"source\": \"p3-baby-bear @ Plonky3 27d59f73 (0.5.1) default_babybear_poseidon2_16 (Horizen-Labs constants), H_p2(a,b) = permute([a,b,0..])[0]\",");
     println!("  \"field_prime\": 2013265921,");
     println!("  \"width\": 16,");
     println!("  \"note\": \"2-scalar -> 1-field hash for the ownership circuit leaf/nullifier; inputs in lanes 0,1; output lane 0\",");

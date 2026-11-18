@@ -50,7 +50,7 @@ The first line predates the move to Poseidon2 and is kept as history, not as the
 
 ## Hash & config
 - In-AIR **Poseidon2** over BabyBear (width 16, S-box `x^7`, 4+4 full and 13 partial rounds,
-  Horizen-Labs constants), from the audited `p3-poseidon2-air` 0.3.0 gadget; the off-circuit
+  Horizen-Labs constants), from the audited `p3-poseidon2-air` gadget at the one Plonky3 pin `27d59f73` (0.5.1; crates.io 0.3.0 until 2026-11-17); the off-circuit
   `poseidon2_hash2::h_p2_field` and its KAT are gated against it. This replaced an earlier
   hand-written MiMC (this line said MiMC until 2026-10-06, after the code had moved on).
 - **Zero-knowledge** via the hiding FRI PCS (`HidingFriPcs` + `MerkleTreeHidingMmcs`),

@@ -22,8 +22,9 @@
 //!   but produces D separate proofs, not one.
 //! - **Flat AIR** (D Poseidon2 gadgets in one wide row): feasible but requires
 //!   extending the trace beyond the gadget's W columns, which collides with the
-//!   `debug_assert` in `Borrow<P2Cols>` in the current Plonky3 0.3.0 pin. A future
-//!   beat can build this once that constraint is understood or the API extended.
+//!   `debug_assert` in `Borrow<P2Cols>` (still present at the `27d59f73` pin). At that
+//!   pin `p3_uni_stark::SubAirBuilder` hands the gadget only its own column range, which
+//!   removes the collision; this module has not been rebuilt on it.
 //! - **Proof composition** (recursive STARK): requires the `attempt_incircuit_verify`
 //!   feature which intentionally fails to compile at this Plonky3 pin — not yet.
 //!
@@ -50,10 +51,10 @@
 
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilderWithPublicValues, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{
-    BabyBear, GenericPoseidon2LinearLayersBabyBear, BABYBEAR_RC16_EXTERNAL_FINAL,
-    BABYBEAR_RC16_EXTERNAL_INITIAL, BABYBEAR_RC16_INTERNAL,
+    BabyBear, GenericPoseidon2LinearLayersBabyBear, BABYBEAR_POSEIDON2_RC_16_EXTERNAL_FINAL,
+    BABYBEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL, BABYBEAR_POSEIDON2_RC_16_INTERNAL,
 };
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
@@ -63,7 +64,6 @@ use p3_field::PrimeCharacteristicRing;
 use p3_fri::{FriParameters, HidingFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use p3_poseidon2_air::{
@@ -71,7 +71,7 @@ use p3_poseidon2_air::{
 };
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{prove, verify, Proof, StarkConfig, VerificationError};
-use rand::rngs::StdRng;
+use crate::HidingRng;
 use crate::hiding_rng;
 
 use crate::poseidon2_hash2::h_p2_field;
@@ -122,9 +122,9 @@ const HEIGHT: usize = 8;
 
 fn p2_round_constants() -> P2Constants {
     P2Constants::new(
-        BABYBEAR_RC16_EXTERNAL_INITIAL,
-        BABYBEAR_RC16_INTERNAL,
-        BABYBEAR_RC16_EXTERNAL_FINAL,
+        BABYBEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL,
+        BABYBEAR_POSEIDON2_RC_16_INTERNAL,
+        BABYBEAR_POSEIDON2_RC_16_EXTERNAL_FINAL,
     )
 }
 
@@ -140,14 +140,15 @@ type ValHidingMmcs = MerkleTreeHidingMmcs<
     [u64; p3_keccak::VECTOR_LEN],
     FieldHash,
     MyCompress,
-    StdRng,
+    HidingRng,
+    2,
     4,
     4,
 >;
 type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
 type Dft = Radix2DitParallel<Val>;
 type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, StdRng>;
+type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, HidingRng>;
 pub type MerkleConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 fn make_config() -> MerkleConfig {
@@ -158,14 +159,16 @@ fn make_config() -> MerkleConfig {
     // Independent generators for the trace tree and the FRI commit-phase tree. Cloning
     // `val_mmcs` would copy its RNG state and reuse one salt stream in both trees.
     let challenge_mmcs =
-        ChallengeHidingMmcs::new(ValHidingMmcs::new(field_hash.clone(), compress.clone(), hiding_rng()));
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, hiding_rng());
+        ChallengeHidingMmcs::new(ValHidingMmcs::new(field_hash.clone(), compress.clone(), 0, hiding_rng()));
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, 0, hiding_rng());
     let dft = Dft::default();
     let fri_params = FriParameters {
         log_blowup: 3,
         log_final_poly_len: 2,
         num_queries: 2,
-        proof_of_work_bits: 1,
+        max_log_arity: 1, // binary folding, as in 0.3.0
+        commit_proof_of_work_bits: 0,
+        query_proof_of_work_bits: 1,
         mmcs: challenge_mmcs,
     };
     let pcs = HidingFriPcs::new(dft, val_mmcs, fri_params, 4, hiding_rng());
@@ -202,12 +205,17 @@ impl BaseAir<Val> for MerklePathAir {
     fn width(&self) -> usize {
         W
     }
+    // Plonky3 0.5.1 sizes the public-value vector from this (default 0) and the verifier
+    // rejects any other length.
+    fn num_public_values(&self) -> usize {
+        4 // leaf, sibling, direction, root
+    }
 }
 
 impl<AB> Air<AB> for MerklePathAir
 where
-    AB: AirBuilderWithPublicValues<F = Val>,
-    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, P2_WIDTH>,
+    AB: AirBuilder<F = Val>,
+    LinearLayers: GenericPoseidon2LinearLayers<P2_WIDTH>,
 {
     fn eval(&self, builder: &mut AB) {
         // 1. Poseidon2 round constraints — the audited gadget, applied to ALL rows.
@@ -227,7 +235,7 @@ where
         // 3. Read current row and extract owned lane expressions.
         let (inputs, out0) = {
             let main = builder.main();
-            let row = main.row_slice(0).expect("trace has no rows");
+            let row = main.current_slice();
             let cols: &P2Cols<AB::Var> = (*row).borrow();
             let inputs: Vec<AB::Expr> = cols.inputs.iter().map(|v| (*v).into()).collect();
             let out0: AB::Expr =
@@ -360,6 +368,7 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<Proof<MerkleConfig>, bincode::Er
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p3_matrix::Matrix;
     use p3_field::PrimeField32;
     use std::time::Instant;
 
