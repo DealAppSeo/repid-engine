@@ -1,0 +1,11 @@
+{
+  "_note": "SYNTHETIC. Not a production row. Shape = SettledEvent in src/memory/repid-snapshot.ts. Join to the settlement lane's fixture on contractId (service_contracts.id) + agentId (repid_agents.id); scoreAfter = current_repid after that settlement.",
+  "agentId": "00000000-0000-4000-8000-00000000a11c",
+  "epoch": 7,
+  "targetContractId": "synthetic-contract-0002",
+  "events": [
+    { "contractId": "synthetic-contract-0001", "agentId": "00000000-0000-4000-8000-00000000a11c", "scoreAfter": 1180, "settledAt": 1763424000000 },
+    { "contractId": "synthetic-contract-0002", "agentId": "00000000-0000-4000-8000-00000000a11c", "scoreAfter": 1205, "settledAt": 1763427600000 },
+    { "contractId": "synthetic-contract-0003", "agentId": "00000000-0000-4000-8000-00000000a11c", "scoreAfter": 1231, "settledAt": 1763431200000 }
+  ]
+}
