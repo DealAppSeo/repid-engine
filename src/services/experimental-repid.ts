@@ -16,7 +16,10 @@
  *   unknown_agent         subject not in repid_agents.
  *   self_dealing          the oracle is the subject (by uuid, agent_id or name).
  *   oracle_not_answer_key a known answer graded by anything but the answer key: a model quorum is not
- *                         ground truth (hal_test_cases.expected_decision is).
+ *                         ground truth (hal_test_cases.expected_decision is). This also refuses peer and
+ *                         circular endorsement (A grades B, B grades A): no agent is ever an oracle here.
+ *   ungrounded            a grade that does not point at its evidence: ref must name the source task, and
+ *                         the key it was graded against (hal_test_cases/<case_id>, or the commitment).
  *   already_consumed      the DB's unique (domain, dimension, evidence_id|evidence_hash, mode) refused it.
  * Eligibility is never an input: eligibilityFor decides it, and only a POSITIVE different-owner answer
  * from partyIndependence (#1484/#1489) can produce 'independent_counterparty'. A known answer has no
@@ -250,12 +253,24 @@ export type RefuseReason =
   /** A commit-reveal key whose answer and nonce do not recompute the commitment. */
   | 'reveal_mismatch'
   /** A commit-reveal key in active mode: not ratified, so shadow only. */
-  | 'shadow_only_oracle';
+  | 'shadow_only_oracle'
+  /** The grade names no evidence: no source task or no answer key in ref. */
+  | 'ungrounded';
 export type SettleResult =
   | { status: 'off' }
   | { status: 'not_scorable' }
   | { status: 'refused'; reason: RefuseReason; detail?: string }
   | { status: 'settled'; mode: 'shadow' | 'active'; dimension: Dimension; delta: number; score_after: number; eligibility: Eligibility; scoring_version: string };
+
+/** A grade is grounded when its ref names the source task AND the key it was graded against. */
+function isGrounded(e: ExperimentalEvidence): boolean {
+  const c = e.content;
+  // Exact segments, not substrings: 'trinity_tasks/43' must not ground task 4.
+  const parts = new Set(String(e.ref ?? '').split(';'));
+  if (!c.task_id || !parts.has(`trinity_tasks/${c.task_id}`)) return false;
+  if (e.oracleId === COMMIT_REVEAL_ORACLE) return !!c.commitment && parts.has(`answer_commitment_sha256/${c.commitment}`);
+  return !!c.case_id && parts.has(`hal_test_cases/${c.case_id}`);
+}
 
 export async function settleExperimental(
   input: { agentId: string; evidence: ExperimentalEvidence; version: string },
@@ -294,6 +309,8 @@ export async function settleExperimental(
       return refuse('oracle_not_answer_key');
     }
   }
+
+  if (!isGrounded(e)) return refuse('ungrounded');
 
   const delta = scorer.score(e.content);
   if (delta === null) return { status: 'not_scorable' };
