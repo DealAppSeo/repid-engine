@@ -1,5 +1,5 @@
 --- /e/dev/ops/loop/grok-review-loop.mjs.bak-2026-11-17	2026-11-17 10:35:14.890611700 -0800
-+++ /e/dev/ops/loop/grok-review-loop.mjs	2026-11-17 23:20:50.938487500 -0800
++++ /e/dev/ops/loop/grok-review-loop.mjs	2026-11-17 23:54:12.419273900 -0800
 @@ -3,6 +3,8 @@
  //   node grok-review-loop.mjs dry        print what it would do for each open PR; no Grok call, no post
  //   node grok-review-loop.mjs selftest   selection, classification and comment rules on fixtures; no network
@@ -85,7 +85,7 @@
    return redact(out.join("\n"));
  }
  
-@@ -134,15 +152,52 @@
+@@ -134,15 +152,69 @@
    return { ready: true, job };
  }
  
@@ -121,6 +121,23 @@
 +/** The reason Grok gave, from its own error text. (The state rows used to say "answer is not JSON" for a 402: that was the wrapper's follow-on, not the cause.) */
 +const grokWhy = (ev) => redact(String(ev.grok_stderr_tail || "").match(/"message":\s*"([^"]+)"/)?.[1] || (ev.reasons || [])[0] || ev.grok_stderr_tail || "no reason").slice(0, 200);
 +
++/** Why a Grok run that did not answer failed, as a named class (the chain pauses by class). A 402 is credit; "Not signed in" / 401 / 403 is auth (2026-11-18: the CLI
++ *  answered "Not signed in", which used to be filed as an unnamed "unusable" and retried every cycle); 429 is rate_limited. */
++export function grokFailure(ev) {
++  const e = String(ev.grok_stderr_tail || "");
++  const cls = /\b402\b/.test(e) ? "credit" : /not signed in|\b40[13]\b|unauthori[sz]ed|forbidden|permission[- ]denied/i.test(e) ? "auth" : /\b429\b|rate.?limit/i.test(e) ? "rate_limited" : "unusable";
++  return { cls, reason: grokWhy(ev) };
++}
++
++/** What one Grok wrapper run amounts to, as a chain outcome. ev = run-evidence.json, c = classify(ev, attempt), answer = the parsed challenge.json or null. */
++export function grokOutcome(ev, c, answer = null) {
++  if (c.kind === "stale") return { ok: false, cls: "stale", reason: (ev.reasons || [])[0], called: false };
++  if (c.kind === "verdict" || c.kind === "honest_nc") return { ok: true, kind: c.kind, ev, answer, called: true };
++  if (c.kind === "pool_exhausted") return { ok: false, cls: "credit", reason: grokWhy(ev), called: true };
++  const gf = grokFailure(ev);
++  return { ok: false, ...gf, called: gf.cls === "unusable" ? c.grok_called : Boolean(ev.grok_started_at) };
++}
++
 +/** `localLog`: `pr` mode only, for a repo whose CI has no `test` job (2026-11-17: HyperDAG-core and hyperdag-proof-verifier have none, so `cycle`
 + *  never saw them, and a session that reviewed them by hand called the Grok wrapper alone and lost the fallback chain on a 402). */
 +async function reviewOne(repo, pr, attempt, localLog = null) {
@@ -143,7 +160,7 @@
    const paths = [...files.filter((f) => !/test/i.test(f)), ...files.filter((f) => /test/i.test(f))].slice(0, CFG.maxPaths);
    const handoff = {
      kind: "a2a_handoff", from: "grok-review-loop", to: "grokcode", task_id: `${repo}#${pr.number}/auto`,
-@@ -155,49 +210,113 @@
+@@ -155,49 +227,110 @@
      "Automated review by grok-review-loop. There are no author notes beyond the PR description.",
      "", "Read these changed files at this commit (the code under review):", ...paths.map((p) => `- \`repo/${p}\``),
      ...(files.length > paths.length ? ["", "Changed but not listed above (see the diff only):", ...files.slice(paths.length).map((p) => `- \`${p}\``)] : []),
@@ -159,12 +176,6 @@
 -  const c = classify(ev, attempt);
 -  let posted = false;
 -  if (c.post) {
--    let answer = null;
--    try { answer = JSON.parse(fs.readFileSync(`${base}.challenge.json`, "utf8")); } catch { /* only PASS / CHANGES_REQUESTED write one */ }
--    const bodyFile = `${base}.comment.md`;
--    fs.writeFileSync(bodyFile, commentBody({ sha, ev, answer, kind: c.kind, attempt, record: `grok-review/runs/${name}` }));
--    sh("gh", ["api", "-X", "POST", `repos/${repo}/pulls/${pr.number}/reviews`, "-f", `commit_id=${sha}`, "-f", "event=COMMENT", "-F", `body=@${bodyFile}`]);
--    posted = true;
 +
 +  const reviewers = CH.chain();
 +  let staged = null, stale = null;
@@ -174,14 +185,16 @@
 +    let ev;
 +    try { ev = JSON.parse(fs.readFileSync(`${base}.run-evidence.json`, "utf8")); } catch { ev = { verdict: "NOT_CHECKED", reasons: ["the wrapper wrote no run-evidence.json"] }; }
 +    const c = classify(ev, attempt);
-+    if (c.kind === "stale") { stale = (ev.reasons || [])[0]; return { ok: false, cls: "stale", reason: stale, called: false }; }
-+    if (c.kind === "pool_exhausted") return { ok: false, cls: "credit", reason: grokWhy(ev), called: true };
-+    if (c.kind === "verdict" || c.kind === "honest_nc") {
-+      let answer = null;
-+      try { answer = JSON.parse(fs.readFileSync(`${base}.challenge.json`, "utf8")); } catch { /* only PASS / CHANGES_REQUESTED write one */ }
-+      return { ok: true, kind: c.kind, ev, answer, called: true };
-+    }
-+    return { ok: false, cls: "unusable", reason: grokWhy(ev), called: c.grok_called };
+     let answer = null;
+-    try { answer = JSON.parse(fs.readFileSync(`${base}.challenge.json`, "utf8")); } catch { /* only PASS / CHANGES_REQUESTED write one */ }
+-    const bodyFile = `${base}.comment.md`;
+-    fs.writeFileSync(bodyFile, commentBody({ sha, ev, answer, kind: c.kind, attempt, record: `grok-review/runs/${name}` }));
+-    sh("gh", ["api", "-X", "POST", `repos/${repo}/pulls/${pr.number}/reviews`, "-f", `commit_id=${sha}`, "-f", "event=COMMENT", "-F", `body=@${bodyFile}`]);
+-    posted = true;
++    if (c.kind === "verdict") { try { answer = JSON.parse(fs.readFileSync(`${base}.challenge.json`, "utf8")); } catch { /* only PASS / CHANGES_REQUESTED write one */ } }
++    const out = grokOutcome(ev, c, answer);
++    if (out.cls === "stale") stale = out.reason;
++    return out;
 +  };
 +  const runOther = async (r) => {
 +    log(`reviewing ${repo}#${pr.number} at ${short(sha)}, run ${attempt}: ${r.id}`);
@@ -210,9 +223,7 @@
 +    record({ repo, pr: pr.number, sha, attempt, kind: res.kind, reviewer: r.id, called: true, grok_called: r.id === "grok", verdict: res.out.ev.verdict, posted: true, reason: "", run: name });
 +    log(`${repo}#${pr.number} ${short(sha)}: ${res.kind} (${res.out.ev.verdict}) by ${r.id}, posted`);
 +    return;
-   }
--  record({ repo, pr: pr.number, sha, attempt, kind: c.kind, grok_called: c.grok_called, verdict: ev.verdict, posted, reason: redact((ev.reasons || [])[0] || ev.grok_stderr_tail || "").slice(0, 200), run: name });
--  log(`${repo}#${pr.number} ${short(sha)}: ${c.kind}${ev.verdict ? ` (${ev.verdict})` : ""}${posted ? ", posted" : ""}`);
++  }
 +  const why = res.tried.map((t) => `${t.reviewer}: ${t.cls}`).join(" | ");
 +  if (!res.tried.some((t) => t.called)) { log(`${repo}#${pr.number} ${short(sha)}: no reviewer could run (${why}); nothing recorded`); return; }
 +  const kind = attempt >= CFG.maxAttempts ? "gave_up" : "retry";
@@ -229,7 +240,9 @@
 +  const pr = ghJson(["pr", "view", String(n), "--repo", repo, "--json", "number,headRefOid,isDraft,labels,title,author"]);
 +  if (!fs.readFileSync(localLog, "utf8").split("\n")[0].includes(pr.headRefOid)) {
 +    log(`${repo}#${n}: the local log's first line does not name the PR head ${pr.headRefOid}; refusing (a log from another commit is not evidence for this one)`); return 1;
-+  }
+   }
+-  record({ repo, pr: pr.number, sha, attempt, kind: c.kind, grok_called: c.grok_called, verdict: ev.verdict, posted, reason: redact((ev.reasons || [])[0] || ev.grok_stderr_tail || "").slice(0, 200), run: name });
+-  log(`${repo}#${pr.number} ${short(sha)}: ${c.kind}${ev.verdict ? ` (${ev.verdict})` : ""}${posted ? ", posted" : ""}`);
 +  if (testJob(repo, pr.headRefOid).ready) { log(`${repo}#${n}: this commit has a passing CI test job; the normal cycle reviews it with the CI log`); return 1; }
 +  const state = readState(), why = skipReason(pr, repo, state);
 +  if (why) { log(`${repo}#${n}: skip, ${why}`); return 0; }
@@ -292,7 +305,7 @@
    let fails = 0;
    const eq = (name, got, want) => { const ok = JSON.stringify(got) === JSON.stringify(want); if (!ok) fails++; console.log(`${ok ? "ok  " : "FAIL"} ${name}${ok ? "" : `: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`); };
    const R = "o/r", S = "a".repeat(40), now = Date.parse("2026-11-16T20:00:00Z");
-@@ -249,6 +368,20 @@
+@@ -249,6 +382,35 @@
      filterTestLog(logText, ["src/a.ts", "tests/a.test.ts"]).split("\n"),
      ["2026-11-16T09:33:22Z PASS tests/a.test.ts", "2026-11-16T09:33:23Z FAIL tests/b.test.ts", "2026-11-16T09:33:23Z   ● b › breaks", "2026-11-16T09:40:00Z Tests:       12 passed, 12 total"]);
  
@@ -307,13 +320,28 @@
 +  const gu = commentBody({ sha: S, kind: "gave_up", attempt: 3, record: "r", ev: { verdict: "NOT_CHECKED", reasons: [] }, tried: [{ reviewer: "grok", ok: false, cls: "credit", reason: "402" }, { reviewer: "codex", ok: false, cls: "timeout", reason: "300s" }, { reviewer: "open:x", ok: false, cls: "paused", reason: "paused: 429" }] });
 +  eq("when every reviewer failed the comment lists each reason and gives no verdict", [gu.includes("`grok`: credit"), gu.includes("`codex`: timeout"), gu.includes("`open:x`: paused"), gu.includes("no review verdict"), /: PASS|: CHANGES_REQUESTED/.test(gu)], [true, true, true, true, false]);
 +  eq("a provider key in a failure reason is scrubbed from the comment", commentBody({ sha: S, kind: "gave_up", attempt: 3, record: "r", ev: { verdict: "NOT_CHECKED", reasons: [] }, tried: [{ reviewer: "a", ok: false, cls: "auth", reason: "bad " + fake }, { reviewer: "b", ok: false, cls: "auth", reason: "x" }] }).includes(fake), false);
++  eq("Grok 'Not signed in' is auth, not an unnamed failure", grokFailure({ grok_stderr_tail: "Error: Not signed in. To authenticate without a browser, run: grok login --device-code" }).cls, "auth");
++  eq("a Grok 403 is auth, a 429 is rate_limited, a 402 is credit", ["Error: API error (status 403 Forbidden)", "Error: API error (status 429)", "Error: API error (status 402 Payment Required)"].map((s) => grokFailure({ grok_stderr_tail: s }).cls), ["auth", "rate_limited", "credit"]);
++  eq("a Grok run that merely gave a bad answer stays unusable", grokFailure({ grok_stderr_tail: "", reasons: ["answer is not JSON"] }).cls, "unusable");
++  eq("auth pauses a reviewer for 6 hours", Boolean(CH?.blockedFor([row({ kind: "reviewer_failed", reviewer: "grok", cls: "auth" })], now, "grok", CFG)), true);
++  const sEv = (o) => ({ verdict: "NOT_CHECKED", reasons: [], ...o });
++  const oAuth = grokOutcome(sEv({ grok_started_at: "x", grok_exit: 1, grok_stderr_tail: "Error: Not signed in.", reasons: ["GrokCode announced no tool set"] }), classify(sEv({ grok_started_at: "x", grok_exit: 1, grok_stderr_tail: "Error: Not signed in.", reasons: ["GrokCode announced no tool set"] }), 1), null);
++  eq("grokOutcome: a signed-out Grok is a named auth failure that was called", [oAuth.ok, oAuth.cls, oAuth.called], [false, "auth", true]);
++  const e402 = sEv({ grok_started_at: "x", grok_exit: 1, grok_stderr_tail: "API error (status 402 Payment Required)" });
++  eq("grokOutcome: a 402 is credit", grokOutcome(e402, classify(e402, 1)).cls, "credit");
++  const eOk = sEv({ verdict: "PASS", grok_started_at: "x", grok_exit: 0, grok_stderr_tail: "warning: 403 cached" });
++  eq("grokOutcome: a PASS stays a PASS whatever stderr says", [grokOutcome(eOk, classify(eOk, 1)).ok, grokOutcome(eOk, classify(eOk, 1)).kind], [true, "verdict"]);
++  const eBad = sEv({ grok_started_at: "x", grok_exit: 0, reasons: ["answer is not JSON"] });
++  eq("grokOutcome: a bad answer is an unnamed failure that was called", [grokOutcome(eBad, classify(eBad, 1)).cls, grokOutcome(eBad, classify(eBad, 1)).called], ["unusable", true]);
++  const eSt = sEv({ reasons: ["stale handoff: PR head is x"] });
++  eq("grokOutcome: a stale handoff is stale and not called", [grokOutcome(eSt, classify(eSt, 1)).cls, grokOutcome(eSt, classify(eSt, 1)).called], ["stale", false]);
 +  if (!CH) { fails++; console.log(`FAIL the review chain did not load: ${CH_ERR}`); }
 +  else fails += await CH.selftest();
 +
    console.log(fails ? `${fails} FAILED` : "all passed");
    return fails ? 1 : 0;
  }
-@@ -256,8 +389,9 @@
+@@ -256,8 +418,9 @@
  if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
    const mode = process.argv[2];
    try {
