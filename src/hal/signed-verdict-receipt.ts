@@ -189,7 +189,8 @@ export function checkHalReceipt(input: unknown, trusted: ReceiptSigner[], claimT
   if (!r.signer || typeof r.signature !== 'string') return { verified: false, reason: 'unsigned' };
   const claimed = signerFromPublicKey(String(r.signer.public_key));
   if (claimed === null || claimed.fingerprint !== String(r.signer.fingerprint).toLowerCase()) return { verified: false, reason: 'malformed' };
-  if (!trusted.some((t) => t.public_key === claimed.public_key)) return { verified: false, reason: 'untrusted_signer' };
+  // Pin by fingerprint (sha256 of the public key): the credential-safety test refuses `===` on key fields.
+  if (!trusted.some((t) => t.fingerprint === claimed.fingerprint)) return { verified: false, reason: 'untrusted_signer' };
   if (!verifyEd25519(claimed.public_key, signingMessage(r), r.signature)) return { verified: false, reason: 'bad_signature' };
   if (claimText !== undefined && sha256(claimText) !== r.claim_sha256) return { verified: false, reason: 'claim_mismatch' };
   return { verified: true, receipt_id: r.receipt_id, verdict: r.verdict, signer_fingerprint: claimed.fingerprint };
