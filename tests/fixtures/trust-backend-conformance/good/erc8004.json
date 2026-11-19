@@ -1,0 +1,27 @@
+{
+ "status": 200,
+ "ms": 600,
+ "json": {
+  "erc8004_version": "1.0",
+  "agent_id": "848da285-93c5-4e99-a989-3d9e49ebed09",
+  "reputation_score": 2916,
+  "tier": "ESTABLISHED",
+  "created_at": "2026-04-15T07:11:52.261503+00:00",
+  "validation_status": "registered_onchain",
+  "identity": {
+   "registered_onchain": "MINTED",
+   "token_id": "6711",
+   "contract_address": null,
+   "contract_address_check": "NOT_CHECKED",
+   "contract_address_reason": "not_an_address",
+   "chain_id": 84532,
+   "network": "base-sepolia",
+   "mint_tx_hash": "0x6d8d4e5d63046d116cf55839259a292e3efc91b37c5d14a0e16c5916227720f6",
+   "mint_basescan_url": "https://sepolia.basescan.org/tx/0x6d8d4e5d63046d116cf55839259a292e3efc91b37c5d14a0e16c5916227720f6",
+   "minted_at": "2026-06-03T08:45:58.367+00:00",
+   "conservator_address": "0xdf6b8215D193b11B4903d223729c3CF7A6de271d",
+   "live_verification_endpoint": "/api/v1/agents/848da285-93c5-4e99-a989-3d9e49ebed09/onchain"
+  },
+  "passport_url": "/api/v1/passport/848da285-93c5-4e99-a989-3d9e49ebed09"
+ }
+}

@@ -1,0 +1,14 @@
+{
+ "status": 200,
+ "ms": 244,
+ "json": {
+  "agent_id": "848da285-93c5-4e99-a989-3d9e49ebed09",
+  "agent_name": "trinity-nexus",
+  "token_id": "6711",
+  "feedback_count": 2,
+  "latest_value": "1035",
+  "value_decimals": 0,
+  "operator_address": "0xb24268884472E7613aA58D38C8813f7Af1667382",
+  "contract": "0x8004B663056A597Dffe9eCcC1965A193B7388713"
+ }
+}

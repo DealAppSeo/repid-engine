@@ -1,0 +1,162 @@
+{
+ "status": 200,
+ "ms": 609,
+ "json": {
+  "contract_id": "6e55500d-18a0-4eed-9d92-21ab9e3a0d61",
+  "settled_at": "2026-11-19T12:01:48.873+00:00",
+  "price_usdc": "$1.00",
+  "price_raw": 1000000,
+  "buyer": "trinity-nexus",
+  "provider": "trinity-gcm",
+  "negotiated": false,
+  "competing_bids": null,
+  "won_on_price": null,
+  "uncontested": null,
+  "settlement_tx": "0x2234df79c1a95dd1f8900c560e28398a686d73dd59b2194782c7d60f427dab29",
+  "settlement_url": "https://sepolia.basescan.org/tx/0x2234df79c1a95dd1f8900c560e28398a686d73dd59b2194782c7d60f427dab29",
+  "is_simulated": false,
+  "payer_wallet": "0xdf6b8215D193b11B4903d223729c3CF7A6de271d",
+  "payee_wallet": "0x99b2f3A741923A58dA5fF10fB440351ed63178Cc",
+  "wallets_source": "settlement_record",
+  "paid_before_delivery": false,
+  "reputation_events": [
+   {
+    "agent": "trinity-gcm",
+    "event": "SERVICE_FULFILLED",
+    "delta": 10,
+    "from": 1235,
+    "to": 1245,
+    "decay": null
+   },
+   {
+    "agent": "trinity-nexus",
+    "event": "SERVICE_FULFILLED",
+    "delta": 5,
+    "from": 2916,
+    "to": 2921,
+    "decay": null
+   },
+   {
+    "agent": "trinity-gcm",
+    "event": "SERVICE_SATISFIED",
+    "delta": 30,
+    "from": 1245,
+    "to": 1275,
+    "decay": null
+   },
+   {
+    "agent": "trinity-nexus",
+    "event": "SERVICE_SATISFIED",
+    "delta": 15,
+    "from": 2921,
+    "to": 2936,
+    "decay": null
+   }
+  ],
+  "onchain_tx": "0x6474fc2270899daafffd71c331ea0624b109f8cd4c8e850ffe222c7b50379754",
+  "onchain_url": "https://sepolia.basescan.org/tx/0x6474fc2270899daafffd71c331ea0624b109f8cd4c8e850ffe222c7b50379754",
+  "onchain_repid": 1275,
+  "onchain_link_is_proven": true,
+  "zk_proofs": [
+   {
+    "job_id": "11caddab-4ec3-468f-badd-8b9c0c75cac9",
+    "agent": "trinity-gcm",
+    "scheme": "plonky3_range_check",
+    "is_real": true,
+    "statement": {
+     "tier": "ESTABLISHED",
+     "agent_id": "57a2f83a-e071-4901-bbfd-1ebe15ce0be5",
+     "threshold": 999,
+     "repid_score": 1275,
+     "commitment_scheme": "sha256-v1"
+    },
+    "eas_attestation_uid": "0xb749aa84928b2ca273d31bcd8890b1916466915fdccf8bb04b4102f6903067cb",
+    "work_statement_hash": "0x24346ee3e4c0880c4be171ba45ceae6b52e930175df96cdd75e14445a5dfea0b",
+    "proof_url": "/api/v1/receipt/6e55500d-18a0-4eed-9d92-21ab9e3a0d61/proof/11caddab-4ec3-468f-badd-8b9c0c75cac9"
+   },
+   {
+    "job_id": "456c3c29-086a-4fb2-b403-2e21df5d439c",
+    "agent": "trinity-nexus",
+    "scheme": "plonky3_range_check",
+    "is_real": true,
+    "statement": {
+     "tier": "ESTABLISHED",
+     "agent_id": "848da285-93c5-4e99-a989-3d9e49ebed09",
+     "threshold": 999,
+     "repid_score": 2936,
+     "commitment_scheme": "sha256-v1"
+    },
+    "eas_attestation_uid": "0xb749aa84928b2ca273d31bcd8890b1916466915fdccf8bb04b4102f6903067cb",
+    "work_statement_hash": "0x24346ee3e4c0880c4be171ba45ceae6b52e930175df96cdd75e14445a5dfea0b",
+    "proof_url": "/api/v1/receipt/6e55500d-18a0-4eed-9d92-21ab9e3a0d61/proof/456c3c29-086a-4fb2-b403-2e21df5d439c"
+   },
+   {
+    "job_id": "78f2dd11-d82a-4f94-8595-7545443285d5",
+    "agent": "trinity-gcm",
+    "scheme": "plonky3_range_check",
+    "is_real": true,
+    "statement": {
+     "tier": "ESTABLISHED",
+     "agent_id": "57a2f83a-e071-4901-bbfd-1ebe15ce0be5",
+     "threshold": 999,
+     "repid_score": 1275,
+     "commitment_scheme": "sha256-v1"
+    },
+    "eas_attestation_uid": "0xb749aa84928b2ca273d31bcd8890b1916466915fdccf8bb04b4102f6903067cb",
+    "work_statement_hash": "0x24346ee3e4c0880c4be171ba45ceae6b52e930175df96cdd75e14445a5dfea0b",
+    "proof_url": "/api/v1/receipt/6e55500d-18a0-4eed-9d92-21ab9e3a0d61/proof/78f2dd11-d82a-4f94-8595-7545443285d5"
+   },
+   {
+    "job_id": "129beba7-850d-4017-94c7-b80f1bfee82b",
+    "agent": "trinity-nexus",
+    "scheme": "plonky3_range_check",
+    "is_real": true,
+    "statement": {
+     "tier": "ESTABLISHED",
+     "agent_id": "848da285-93c5-4e99-a989-3d9e49ebed09",
+     "threshold": 999,
+     "repid_score": 2936,
+     "commitment_scheme": "sha256-v1"
+    },
+    "eas_attestation_uid": "0xb749aa84928b2ca273d31bcd8890b1916466915fdccf8bb04b4102f6903067cb",
+    "work_statement_hash": "0x24346ee3e4c0880c4be171ba45ceae6b52e930175df96cdd75e14445a5dfea0b",
+    "proof_url": "/api/v1/receipt/6e55500d-18a0-4eed-9d92-21ab9e3a0d61/proof/129beba7-850d-4017-94c7-b80f1bfee82b"
+   }
+  ],
+  "work_statement_hash": "0x24346ee3e4c0880c4be171ba45ceae6b52e930175df96cdd75e14445a5dfea0b",
+  "work_statement": {
+   "deadline": "2026-11-20T12:01:22.222Z",
+   "deliverable": "A cross-provider factual verification verdict on the claim: \"The Base Sepolia chain id is 84532.\"",
+   "agreed_price": {
+    "currency": "USDC",
+    "amount_usdc_raw": 1000000
+   },
+   "acceptance_criteria": [
+    {
+     "n": 1,
+     "text": "The verdict states explicitly whether the claim is true or false, without hedging."
+    },
+    {
+     "n": 2,
+     "text": "The verdict names the chain id it verified against, so the check is reproducible."
+    }
+   ]
+  },
+  "criterion_ratings": [
+   {
+    "n": 1,
+    "met": true
+   },
+   {
+    "n": 2,
+    "met": true
+   }
+  ],
+  "buyer_satisfaction_score": 1,
+  "validators": {
+   "families": [],
+   "includes_provider": false
+  },
+  "caveats": []
+ }
+}

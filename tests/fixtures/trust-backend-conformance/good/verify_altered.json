@@ -1,0 +1,11 @@
+{
+ "status": 200,
+ "ms": 40,
+ "json": {
+  "verified": false,
+  "error": "verify failed: plonky3: InvalidOpeningArgument(InvalidPowWitness)",
+  "proof_size_bytes": 10673,
+  "verifier_version": "0.2.0",
+  "scheme": "plonky3_range_check"
+ }
+}

@@ -1,0 +1,98 @@
+{
+ "status": 200,
+ "ms": 673,
+ "json": {
+  "passport_version": "1",
+  "as_of": "2026-11-19T21:21:57.195Z",
+  "agent": {
+   "agent_id": "848da285-93c5-4e99-a989-3d9e49ebed09",
+   "agent_name": "trinity-nexus",
+   "display_name": "trinity-nexus",
+   "created_at": "2026-04-15T07:11:52.261503+00:00"
+  },
+  "reputation": {
+   "repid_score": 2916,
+   "tier": "ESTABLISHED",
+   "activity_30d": 234,
+   "vesting": {
+    "state": "NONE",
+    "vested_repid": 0,
+    "cliff_ends_at": null,
+    "score_including_vested": 2916,
+    "note": "No RepID is being withheld. The score shown is the whole score."
+   },
+   "last_verified_action": "2026-06-03T08:45:58.367+00:00",
+   "idle_days": 169,
+   "bound": null,
+   "kind": null,
+   "display_tier": null
+  },
+  "identity_erc8004": {
+   "registered_onchain": "MINTED",
+   "token_id": "6711",
+   "contract_address": null,
+   "contract_address_check": "NOT_CHECKED",
+   "contract_address_reason": "not_an_address",
+   "chain_id": 84532,
+   "network": "base-sepolia",
+   "mint_tx_hash": "0x6d8d4e5d63046d116cf55839259a292e3efc91b37c5d14a0e16c5916227720f6",
+   "mint_basescan_url": "https://sepolia.basescan.org/tx/0x6d8d4e5d63046d116cf55839259a292e3efc91b37c5d14a0e16c5916227720f6",
+   "minted_at": "2026-06-03T08:45:58.367+00:00",
+   "conservator_address": "0xdf6b8215D193b11B4903d223729c3CF7A6de271d",
+   "live_verification_endpoint": "/api/v1/agents/848da285-93c5-4e99-a989-3d9e49ebed09/onchain"
+  },
+  "onchain": {
+   "state": "VERIFIED_ONCHAIN",
+   "verified": true,
+   "owner": "0xf6eE1768868c3266868edcA78bC41C50309cb22A",
+   "registry": "0x8004A818BFB912233c491871b3d84c89A494BD9e",
+   "chainId": 84532,
+   "block": 61005317,
+   "verified_at": "2026-11-19T21:15:32.179Z",
+   "check": "OWNER_FOUND"
+  },
+  "payments_x402": {
+   "real_settlements": 106,
+   "simulated_settlements": 2,
+   "last_real_settlement": {
+    "tx_hash": "0x2234df79c1a95dd1f8900c560e28398a686d73dd59b2194782c7d60f427dab29",
+    "basescan_url": "https://sepolia.basescan.org/tx/0x2234df79c1a95dd1f8900c560e28398a686d73dd59b2194782c7d60f427dab29",
+    "amount_base_units": 1000000,
+    "asset": "USDC",
+    "at": "2026-11-19T12:01:24.84215+00:00"
+   },
+   "policy": "RepID deltas only accrue on non-simulated settlements; mock money earns zero reputation."
+  },
+  "reputation_onchain": {
+   "registry_address": "0x8004B663056A597Dffe9eCcC1965A193B7388713",
+   "network": "base-sepolia",
+   "writes": 2,
+   "last_write": {
+    "tx_hash": "0x0ffc84580f4a81707ce97c29353c7ae2e9435f161f36a76412f361e699adc43f",
+    "at": "2026-07-08T23:39:08.118623+00:00",
+    "basescan_url": "https://sepolia.basescan.org/tx/0x0ffc84580f4a81707ce97c29353c7ae2e9435f161f36a76412f361e699adc43f"
+   }
+  },
+  "zkp": {
+   "latest_proof": {
+    "scheme": "plonky3_range_check",
+    "cryptographically_verifiable": true,
+    "eas_attestation_uid": "0xb749aa84928b2ca273d31bcd8890b1916466915fdccf8bb04b4102f6903067cb",
+    "anchor_status": "ANCHORED",
+    "anchor_note": "Anchored on chain. The attestation uid is the on-chain receipt.",
+    "claim": {
+     "threshold": 999,
+     "statement": "score >= 999",
+     "claim": "BINDING",
+     "note": "The proof asserts the score clears this threshold, and a lower score would fail verification. Verifying it establishes the claim."
+    },
+    "created_at": "2026-11-19T12:01:52.569181+00:00",
+    "freshness": "MEASURED",
+    "age_days": 0.38894243055555555
+   },
+   "disclosure": "Proofs are range proofs over the RepID score. agent_id, threshold AND the score itself are PUBLIC circuit inputs — altering any of the three breaks verification, but the score is disclosed, not hidden. They do not yet bind agent execution transcripts — that binding is roadmap.",
+   "proof_endpoint": "/api/v1/repid/848da285-93c5-4e99-a989-3d9e49ebed09/proof",
+   "verify_endpoint": "/api/v1/repid/verify"
+  }
+ }
+}
