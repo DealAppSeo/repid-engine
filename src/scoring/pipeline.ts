@@ -444,7 +444,20 @@ export async function runScoreEvent(
   // 'quorum_unavailable' — NEVER a single-provider/extractor drain. This stops the live over-flag
   // (2026-06-03: 35 deepinfra extractor-fallback drains/15m, identical hal_score 0.265, providers_used
   // null). Reversible via HAL_PENALTY_REQUIRES_QUORUM (default ON).
+  //
+  // PENALTY REQUIRES A QUORUM OF EXPLICIT FALSE VERDICTS (2026-11-19). R4 above was wrong in one
+  // word: it said the providers "agreed on the veto", but `quorumMet` only counts families that
+  // ANSWERED. An UNCERTAIN answer scores 0.5 risk, so three UNCERTAIN answers average exactly the
+  // veto threshold: decision 'vetoed', quorum "met", and a correct but unverifiable reply was
+  // recorded as a caught hallucination and penalised. Nobody had said FALSE. Now the same minimum
+  // (QUORUM_MIN, counted by family or by provider exactly as the answering quorum is) must have
+  // answered FALSE. The decision itself is not changed here (that is HAL_VERDICT_DRIVEN_VETO in
+  // fact-check.ts); only whether a hallucination is recorded and a penalty applied. A result that
+  // carries no FALSE count is treated as 0 (no penalty). When this withholds a penalty the row
+  // says suppressed_reason 'false_quorum_unmet'. Default ON, reversible: the exact string
+  // HAL_PENALTY_REQUIRES_FALSE_QUORUM=false restores the answered-quorum-only rule.
   const penaltyRequiresQuorum = halConfig.penaltyRequiresQuorum;
+  const penaltyRequiresFalseQuorum = process.env.HAL_PENALTY_REQUIRES_FALSE_QUORUM !== 'false';
   const QUORUM_MIN = 2;
   const halMode = signals.hal_mode as string | undefined; // 'fact-check' | 'extractor' | 'extractor-fallback'
   const providersUsed = Number((signals as Record<string, unknown>).providers_used ?? 0);
@@ -456,7 +469,12 @@ export async function runScoreEvent(
   const quorumMet = halMode === 'fact-check' && quorumCount >= QUORUM_MIN;
   const groundedVeto = !halError && halStrictness >= 2 && decision === 'vetoed';
   const quorumUnavailable = groundedVeto && penaltyRequiresQuorum && !quorumMet;
-  const hallucination_caught = groundedVeto && (penaltyRequiresQuorum ? quorumMet : true);
+  const falseQuorumCount = Number((signals as Record<string, unknown>)[familyAware ? 'false_families' : 'false_providers'] ?? 0);
+  const falseQuorumMet = falseQuorumCount >= QUORUM_MIN;
+  // 'quorum_unavailable' keeps precedence: with too few answers there is nothing to count FALSE in.
+  const falseQuorumUnmet = groundedVeto && penaltyRequiresFalseQuorum && !falseQuorumMet && !quorumUnavailable;
+  const hallucination_caught =
+    groundedVeto && (penaltyRequiresQuorum ? quorumMet : true) && (penaltyRequiresFalseQuorum ? falseQuorumMet : true);
 
   // HONEST-HAL (2026-06-04): the blind style-extractor (strictness 1; AUC ~0.375 < chance on the
   // 109-case labeled corpus [report CC 06-03]) must NOT drive the HAL decision OR the RepID delta —
@@ -715,7 +733,7 @@ export async function runScoreEvent(
       grounding_abstained: groundingAbstained,
       hal_error: halError,
       delta_reason: penaltySuppressed
-        ? `${delta.reason} (S-DRAIN: penalty suppressed — ${quorumUnavailable ? 'quorum_unavailable' : 'no_hallucination_caught'})`
+        ? `${delta.reason} (S-DRAIN: penalty suppressed — ${quorumUnavailable ? 'quorum_unavailable' : falseQuorumUnmet ? 'false_quorum_unmet' : 'no_hallucination_caught'})`
         : delta.reason,
       vesting_cliff_active: agent.vesting_cliff_active,
       block_threshold_used: HAL_CONSTITUTIONAL_BLOCK_THRESHOLD,
@@ -728,6 +746,9 @@ export async function runScoreEvent(
       quorum_providers_used: providersUsed,
       quorum_families_used: familiesUsed,
       quorum_families: (signals as Record<string, unknown>).families ?? null,
+      // Explicit FALSE verdicts behind the decision: every APPLIED penalty must show >= 2 here too.
+      false_quorum_met: falseQuorumMet,
+      false_quorum_count: falseQuorumCount,
       hal_mode: halMode ?? null,
       // HONEST-HAL — decision provenance. scoringDecision (the recorded hal_decision) is quorum-only;
       // extractor_decision is the blind style-extractor's raw call, kept for telemetry ONLY.
@@ -744,7 +765,7 @@ export async function runScoreEvent(
       extractor_decision: decision,
       ...(penaltySuppressed || purposeSuppressed
         ? {
-            suppressed_reason: purposeSuppressed ? ('wrong_task_purpose:' + purposeVerdict.purpose) : (quorumUnavailable ? 'quorum_unavailable' : 'no_hallucination_caught'),
+            suppressed_reason: purposeSuppressed ? ('wrong_task_purpose:' + purposeVerdict.purpose) : (quorumUnavailable ? 'quorum_unavailable' : falseQuorumUnmet ? 'false_quorum_unmet' : 'no_hallucination_caught'),
             original_delta: Math.round(delta.delta_applied),
           }
         : {}),
@@ -1244,7 +1265,12 @@ export function quorumWouldBeDelta(
     agent_tier: agent.tier,
     vesting_cliff_active: agent.vesting_cliff_active,
   }).delta_applied;
-  const caught = raw === 'vetoed' && (gates.penaltyRequiresQuorum ? quorumMet : true);
+  // Same FALSE-quorum rule as the live chain (HAL_PENALTY_REQUIRES_FALSE_QUORUM, default ON).
+  const falseCount = Number(q.signals[process.env.HAL_QUORUM_FAMILY_AWARE !== 'false' ? 'false_families' : 'false_providers'] ?? 0);
+  const caught =
+    raw === 'vetoed' &&
+    (gates.penaltyRequiresQuorum ? quorumMet : true) &&
+    (process.env.HAL_PENALTY_REQUIRES_FALSE_QUORUM !== 'false' ? falseCount >= 2 : true);
   if (process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION !== 'false' && d < 0 && !caught) d = 0;
   if (d !== 0 && gates.purposeWeight !== 1) d = d * gates.purposeWeight;
   return { raw_decision: raw, scoring_decision: scoring, quorum_met: quorumMet, hal_delta: Math.round(d) };

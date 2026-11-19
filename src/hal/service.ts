@@ -400,6 +400,10 @@ export class HalService {
               providers_used: fc.providers_used, agreement: fc.agreement, degraded: fc.degraded,
               // R5 — distinct independent families that voted (the quorum unit).
               families_used: fc.families_used, families: fc.families,
+              // Explicit FALSE verdicts, by family and by provider. The scoring pipeline requires a
+              // quorum of these before it records a caught hallucination; absent means 0 there.
+              ...(fc.false_families !== undefined ? { false_families: fc.false_families } : {}),
+              ...(fc.false_providers !== undefined ? { false_providers: fc.false_providers } : {}),
               // A FAMILY COUNT IS NOT AN INDEPENDENCE COUNT — N families behind ONE host is N
               // opinions that vanish in a single outage. It travels WITH families_used, always,
               // and this line is why: `signals` is rebuilt field by field here, so a value can be

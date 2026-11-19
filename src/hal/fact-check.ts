@@ -270,6 +270,15 @@ export interface FactCheckResult {
    */
   independent_hosts?: number;
   families?: string[];    // R5 — the distinct families that voted
+  /**
+   * How many distinct FAMILIES (false_families) and how many PROVIDERS (false_providers) answered
+   * with an explicit FALSE verdict. `hal_score` cannot stand in for this: an UNCERTAIN answer
+   * scores 0.5 risk, so three UNCERTAIN answers reach the veto threshold with nobody having
+   * said FALSE. The scoring pipeline needs this count to tell "vetoed by score" from "judged
+   * false by a quorum" before it records a caught hallucination.
+   */
+  false_families?: number;
+  false_providers?: number;
   // CROSS-FIX 2026-07-05 — models whose family came from the legacy familyOf() FALLBACK because they
   // are NOT in the hardened family registry. Registry-known models are absent here; a non-empty list
   // means at least one provider's family was regex-guessed (spoofable) and should be registered. Made
@@ -1741,6 +1750,7 @@ export async function factCheck(
 
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, independent_hosts, agreement, degraded: quorumCount < 2, latency_ms,
+    false_families: falseFams.length, false_providers: ok.filter((v) => v.verdict === 'FALSE').length,
     quorum, provider_health: { attempted: attemptedForSummary, succeeded: providers_used, failed, ...(late.length ? { late } : {}), ...skipped },
     ...(groundTruthField ? { ground_truth: groundTruthField } : {}),
     ...(decision_reason ? { decision_reason } : {}),

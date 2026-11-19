@@ -49,6 +49,7 @@ beforeEach(() => {
   evalMock.mockReset();
   process.env.HAL_STRICTNESS = '2';
   delete process.env.HAL_PENALTY_REQUIRES_QUORUM;
+  delete process.env.HAL_PENALTY_REQUIRES_FALSE_QUORUM;
   delete process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION;
   // This suite unit-tests the PENALTY-quorum gate (HAL_PENALTY_REQUIRES_QUORUM). The newer HONEST-HAL
   // gate (HAL_DECISION_REQUIRES_QUORUM, default ON) is a redundant UPSTREAM layer for these scenarios:
@@ -89,7 +90,7 @@ describe('S-R4 quorum-gated penalty', () => {
 
   test('real >=2-provider quorum veto → penalty APPLIES, evidence shows quorum', async () => {
     setAgent();
-    evalMock.mockResolvedValue({ hal_score: 0.9, decision: 'vetoed', mode: 'fact-check', strictness: 2, signals: { providers_used: 2, provider_health: { attempted: 3, succeeded: 2 } } });
+    evalMock.mockResolvedValue({ hal_score: 0.9, decision: 'vetoed', mode: 'fact-check', strictness: 2, signals: { providers_used: 2, false_families: 2, false_providers: 2, provider_health: { attempted: 3, succeeded: 2 } } });
     const r = await run();
     expect(r.repid_delta_applied).toBe(-10);
     expect(r.new_repid).toBe(990);
@@ -102,6 +103,9 @@ describe('S-R4 quorum-gated penalty', () => {
 
   test('flag OFF (HAL_PENALTY_REQUIRES_QUORUM=false) → legacy single-provider drain (regression control)', async () => {
     process.env.HAL_PENALTY_REQUIRES_QUORUM = 'false';
+    // Since 2026-11-19 a penalty also needs a quorum of FALSE verdicts (default ON), which an
+    // extractor-fallback veto never has. The legacy drain now needs both switches off.
+    process.env.HAL_PENALTY_REQUIRES_FALSE_QUORUM = 'false';
     setAgent();
     evalMock.mockResolvedValue({ hal_score: 0.265, decision: 'vetoed', mode: 'extractor-fallback', strictness: 2, signals: {} });
     const r = await run();
