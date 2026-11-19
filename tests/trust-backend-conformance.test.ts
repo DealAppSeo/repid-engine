@@ -79,6 +79,7 @@ describe('trust backend conformance (offline, synthetic answers)', () => {
     ['an on-chain record for a different token', (a) => { a.reputation_onchain.json.token_id = '2'; }, 'reputation on chain (as the API reports it)'],
     ['a receipt listing a proof that is not real', (a) => { a.receipt.json.zk_proofs[0].is_real = false; }, 'public receipt'],
     ['a receipt with an empty proof list', (a) => { a.receipt.json.zk_proofs = []; }, 'public receipt'],
+    ['a receipt whose settlement was simulated', (a) => { a.receipt.json.is_simulated = true; }, 'public receipt'],
     ['an engine that reports itself unhealthy', (a) => { a.health.json.status = 'degraded'; }, 'health'],
     ['a known-false claim that comes back clean', (a) => { a.hal_known.json.decision = 'clean'; }, 'HAL (known false claim)'],
   ])('planted: %s -> exit 1 on the leg that owns it', (_what, change, leg) => {

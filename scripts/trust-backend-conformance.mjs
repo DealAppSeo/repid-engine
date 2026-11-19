@@ -46,6 +46,7 @@ const ladder = (s) => (s >= 8000 ? 4 : s >= 5000 ? 3 : s >= 1000 ? 2 : s >= 500 
 // The registry a passport may name. A backend that names its own registry and a matching owner would otherwise
 // pass the chain readback against the wrong contract (review finding, 2026-11-19). Override for another network.
 const REGISTRY = (process.env.CONFORMANCE_REGISTRY ?? '0x8004A818BFB912233c491871b3d84c89A494BD9e').toLowerCase(); // ERC-8004 IdentityRegistry, Base Sepolia (84532)
+const CHAIN_ID = Number(process.env.CONFORMANCE_CHAIN_ID ?? 84532); // Base Sepolia
 const isHex = (v, n) => typeof v === 'string' && new RegExp(`^0x[0-9a-fA-F]{${n}}$`).test(v);
 
 /** One named response: from the fixture folder when offline, from the API otherwise. null = could not be read. */
@@ -146,11 +147,22 @@ judge('reputation on chain (as the API reports it)', rep, (j) => (tokenId && Str
   : !Number.isFinite(Number(j.feedback_count)) ? 'no feedback count' : !isHex(j.contract, 40) ? 'no contract address' : null),
   (j) => `token ${j.token_id}, ${j.feedback_count} feedback entries at ${j.contract}`);
 
+const rpc = async (method, params) => {
+  const r = await fetch(process.env.RPC_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: AbortSignal.timeout(30_000) });
+  return r.json();
+};
+let wrongChain = null; // a sentence when the RPC serves another chain; reads from it prove nothing about this one
+if (!OFFLINE && process.env.RPC_URL) {
+  try { const c = await rpc('eth_chainId', []); const id = parseInt(c.result, 16); if (id !== CHAIN_ID) wrongChain = `the RPC serves chain ${Number.isFinite(id) ? id : 'unknown'}, not ${CHAIN_ID}`; }
+  catch (e) { wrongChain = `the RPC did not say which chain it serves (${String(e.message).slice(0, 60)})`; }
+}
+
 // 8. chain readback: does the registry itself name the owner the passport names?
 const RPC = process.env.RPC_URL;
 const reg = passport.json?.onchain?.registry, owner = passport.json?.onchain?.owner;
 if (OFFLINE) leg('chain readback', 'NOT_CHECKED', 'offline run');
 else if (!RPC) leg('chain readback', 'NOT_CHECKED', 'set RPC_URL (for example https://sepolia.base.org) to read the registry directly');
+else if (wrongChain) leg('chain readback', 'NOT_CHECKED', wrongChain);
 else if (!isHex(reg, 40) || !isHex(owner, 40) || !tokenId) leg('chain readback', 'NOT_CHECKED', 'the passport names no registry, owner or token to compare');
 else if (reg.toLowerCase() !== REGISTRY) leg('chain readback', 'FAILED', `the passport names registry ${reg}, not the known one ${REGISTRY}`);
 else {
@@ -168,14 +180,16 @@ else {
 const receipt = await get('receipt', '/api/v1/receipt/latest.json');
 judge('public receipt', receipt, (j) => (!j.contract_id ? 'no contract id' : !isHex(j.settlement_tx, 64) ? 'no settlement transaction'
   : typeof j.is_simulated !== 'boolean' ? 'does not say whether it was simulated'
+  : j.is_simulated ? 'the settlement is marked simulated, so this is not a real exchange'
   : !Array.isArray(j.zk_proofs) || !Array.isArray(j.reputation_events) ? 'no proof or reputation list'
   : j.zk_proofs.length === 0 ? 'lists no proofs, so nothing about them was checked'
   : j.zk_proofs.some((p) => p.is_real !== true) ? 'lists a proof that is not marked real' : null),
-  (j) => `contract ${j.contract_id}: ${j.is_simulated ? 'SIMULATED' : 'real'} settlement, ${j.zk_proofs.length} proofs, ${j.reputation_events.length} reputation events (run verify-trust-receipt.mjs for the hashes)`);
+  (j) => `contract ${j.contract_id}: real settlement, ${j.zk_proofs.length} proofs, ${j.reputation_events.length} reputation events (run verify-trust-receipt.mjs for the hashes)`);
 
 // 9b. the receipt's settlement transaction is on chain and succeeded (needs RPC_URL)
 if (OFFLINE) leg('settlement on chain', 'NOT_CHECKED', 'offline run');
 else if (!RPC) leg('settlement on chain', 'NOT_CHECKED', 'set RPC_URL to look the settlement transaction up');
+else if (wrongChain) leg('settlement on chain', 'NOT_CHECKED', wrongChain);
 else if (!isHex(receipt.json?.settlement_tx, 64)) leg('settlement on chain', 'NOT_CHECKED', 'the receipt names no settlement transaction');
 else {
   try {
@@ -183,7 +197,18 @@ else {
     const j = await r.json();
     if (j.error) leg('settlement on chain', 'NOT_CHECKED', `the RPC answered an error (${j.error.message})`);
     else if (!j.result) leg('settlement on chain', 'FAILED', `no transaction ${receipt.json.settlement_tx} on the chain this RPC serves`);
-    else leg('settlement on chain', j.result.status === '0x1' ? 'VERIFIED' : 'FAILED', j.result.status === '0x1' ? `transaction found in block ${parseInt(j.result.blockNumber, 16)}, status success` : `transaction found but its status is ${j.result.status}`);
+    else if (j.result.status !== '0x1') leg('settlement on chain', 'FAILED', `transaction found but its status is ${j.result.status}`);
+    else {
+      // ERC-20 Transfer(from, to, value): topic 2 is the recipient. An unrelated successful transaction would not pay the payee.
+      const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+      const payee = String(receipt.json.payee_wallet ?? '').toLowerCase().replace(/^0x/, '');
+      const paid = (j.result.logs ?? []).filter((l) => l.topics?.[0] === TRANSFER && payee && String(l.topics[2] ?? '').toLowerCase().endsWith(payee));
+      const amount = paid.length ? BigInt(paid[0].data) : null;
+      if (!payee) leg('settlement on chain', 'NOT_CHECKED', 'the transaction succeeded, but the receipt names no payee wallet to match it to');
+      else if (!paid.length) leg('settlement on chain', 'FAILED', `the transaction succeeded but moved no tokens to the payee ${receipt.json.payee_wallet}`);
+      else if (Number.isFinite(receipt.json.price_raw) && amount !== BigInt(receipt.json.price_raw)) leg('settlement on chain', 'FAILED', `the transaction paid the payee ${amount}, but the receipt says ${receipt.json.price_raw}`);
+      else leg('settlement on chain', 'VERIFIED', `block ${parseInt(j.result.blockNumber, 16)}: a successful token transfer of ${amount} to the payee the receipt names`);
+    }
   } catch (e) { leg('settlement on chain', 'NOT_CHECKED', `RPC unreachable (${String(e.message).slice(0, 80)})`); }
 }
 
