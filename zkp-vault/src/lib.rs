@@ -175,6 +175,9 @@ pub mod non_membership_depth_d;
 /// Spec: living-docs/03_specs/ZK_PRIVATE_ELIGIBILITY_v0_2026-11-17.md. No caller outside its tests and bench.
 pub mod eligibility;
 
+/// Threshold tier (SHADOW ONLY): an eligibility proof at a RepID tier floor; the verifier derives the tier.
+pub mod tier;
+
 use poseidon2_hash2::h_p2_field;
 
 /// Public group size (number of registered commitments). Demo/gate value.

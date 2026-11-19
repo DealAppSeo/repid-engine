@@ -75,6 +75,15 @@ answers its challenge" without showing the score or which agent. Spec:
 a forgery test, and each test is proven to go red when its constraint is deleted (ZK ruler mutants E1–E15).
 Rust and TS share `kat/eligibility_v0_kat.json` (`scripts/zkp/eligibility-kat.ts`, `tests/eligibility-kat.test.ts`).
 
+## Threshold tier (`src/tier.rs`, shadow only)
+
+`prove_threshold_tier` is the eligibility proof at a RepID tier floor (0 / 500 / 1000 / 5000 / 8000); no new
+constraint. `VerifierState::present_tier` DERIVES the tier from the one floor the proof verifies under, checks
+the presented root against its own snapshot record, and refuses a presentation whose `claimed_tier` disagrees.
+It proves the score band only (a lower bound), not the database tier, which also demotes AUTONOMOUS and VETERAN
+on counterparty count. `TierCheck::displayable` is `Some` only for `Verdict::Eligible` (anchored root, Shadow
+FRI); nothing anchors a root today. Inert: no caller outside its tests and `examples/tier_proof_capture.rs`.
+
 ## API
 ```rust
 let group = [commitment(11,101), commitment(secret, agent_id), commitment(33,303), commitment(44,404)];

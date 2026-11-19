@@ -548,6 +548,9 @@ pub fn proof_from_bytes(b: &[u8]) -> Result<EligibilityProof, bincode::Error> {
 
 // ---- the verifier procedure (spec §5) ----------------------------------------------------------------
 
+/// The one refusal that leaves the verifier's state untouched: [`crate::tier`] tries the next floor on it.
+pub const PROOF_DOES_NOT_VERIFY: &str = "proof does not verify against this statement";
+
 #[derive(Debug, PartialEq)]
 pub enum Verdict {
     /// Every required check ran and passed.
@@ -641,7 +644,7 @@ impl VerifierState {
             challenge: *challenge,
         };
         if !verify_stark(self.fri, proof, &st) {
-            return Verdict::NotEligible("proof does not verify against this statement");
+            return Verdict::NotEligible(PROOF_DOES_NOT_VERIFY);
         }
         self.issued.remove(&key8(challenge));
         self.seen.insert(key8(claimed_nullifier));
