@@ -476,7 +476,11 @@ export async function runScoreEvent(
   // The execution floor is the other deterministic source: an authoritative execution failure forces the veto with
   // no model FALSE verdict, and that veto was penalised before this rule existed.
   const executionFloorOverride = (signals as Record<string, unknown>).execution_floor_override === true;
-  const falseQuorumMet = falseQuorumCount >= QUORUM_MIN || groundTruthContradicted || executionFloorOverride;
+  // And the retrieval grader: independent web sources contradicting the claim is evidence, not silence.
+  const retrievalContradicted = (signals as Record<string, unknown>).retrieval_contradicted === true;
+  // EVERY source that can force a veto now either carries a FALSE count or one of these three markers. A veto with
+  // none of them is one where nobody found the claim false, and that is the only kind that loses its penalty.
+  const falseQuorumMet = falseQuorumCount >= QUORUM_MIN || groundTruthContradicted || executionFloorOverride || retrievalContradicted;
   // 'quorum_unavailable' keeps precedence: with too few answers there is nothing to count FALSE in.
   const falseQuorumUnmet = groundedVeto && penaltyRequiresFalseQuorum && !falseQuorumMet && !quorumUnavailable;
   const hallucination_caught =
@@ -757,6 +761,7 @@ export async function runScoreEvent(
       false_quorum_count: falseQuorumCount,
       ...(groundTruthContradicted ? { ground_truth_contradicted: true } : {}),
       ...(executionFloorOverride ? { execution_floor_override: true } : {}),
+      ...(retrievalContradicted ? { retrieval_contradicted: true } : {}),
       hal_mode: halMode ?? null,
       // HONEST-HAL — decision provenance. scoringDecision (the recorded hal_decision) is quorum-only;
       // extractor_decision is the blind style-extractor's raw call, kept for telemetry ONLY.
@@ -1279,7 +1284,7 @@ export function quorumWouldBeDelta(
     raw === 'vetoed' &&
     (gates.penaltyRequiresQuorum ? quorumMet : true) &&
     // The ground-truth exception is the same as the live chain's, or shadow and live would disagree on it.
-    (process.env.HAL_PENALTY_REQUIRES_FALSE_QUORUM !== 'false' ? (falseCount >= 2 || q.signals['ground_truth_contradicted'] === true || q.signals['execution_floor_override'] === true) : true);
+    (process.env.HAL_PENALTY_REQUIRES_FALSE_QUORUM !== 'false' ? (falseCount >= 2 || q.signals['ground_truth_contradicted'] === true || q.signals['execution_floor_override'] === true || q.signals['retrieval_contradicted'] === true) : true);
   if (process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION !== 'false' && d < 0 && !caught) d = 0;
   if (d !== 0 && gates.purposeWeight !== 1) d = d * gates.purposeWeight;
   return { raw_decision: raw, scoring_decision: scoring, quorum_met: quorumMet, hal_delta: Math.round(d) };

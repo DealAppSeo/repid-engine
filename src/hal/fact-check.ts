@@ -285,6 +285,12 @@ export interface FactCheckResult {
    * quorum of FALSE model verdicts: the models may all say UNCERTAIN about an internal fact the corpus records.
    */
   ground_truth_contradicted?: boolean;
+  /**
+   * True when the retrieval slow path graded the claim Incorrect: at least two independent web sources contradict
+   * it. That is an explicit, evidenced finding of falsehood, so the penalty rule accepts it too. (An Ambiguous or
+   * absent grade is not.)
+   */
+  retrieval_contradicted?: boolean;
   // CROSS-FIX 2026-07-05 — models whose family came from the legacy familyOf() FALLBACK because they
   // are NOT in the hardened family registry. Registry-known models are absent here; a non-empty list
   // means at least one provider's family was regex-guessed (spoofable) and should be registered. Made
@@ -1605,6 +1611,7 @@ export async function factCheck(
   // the whole block is additionally try/guarded so the slow path can never break a live decision.
   // Also emits the RRL scoring-hook record at the CRAG decision point (log only — no RepID mutation). ---
   let retrievalField: FactCheckResult['retrieval'];
+  let retrievalContradicted = false;
   let rrlField: RrlHookRecord | undefined;
   if (process.env.HAL_RETRIEVAL_ENABLED === 'true') {
     const slowStart = Date.now();
@@ -1636,6 +1643,7 @@ export async function factCheck(
 
         if (evidence.length > 0) {
           crag = await gradeEvidence(deliverable, evidence);
+          retrievalContradicted = crag.grade === 'Incorrect';
           // REFINE: a confident CRAG grade (Correct/Incorrect, each already gated on ≥2 independent
           // domains) overrides the fast-path decision. Ambiguous never changes the decision (only sets
           // the disclosure flag). hal_score and the canonical comma-BFT lib (src/hal/lib/*) are untouched.
@@ -1758,6 +1766,8 @@ export async function factCheck(
     hal_score, decision, verdicts, providers_used, families_used, families, independent_hosts, agreement, degraded: quorumCount < 2, latency_ms,
     false_families: falseFams.length, false_providers: ok.filter((v) => v.verdict === 'FALSE').length,
     ...(groundTruthField && !groundTruthField.degraded && groundTruthField.verdict === 'contradicted' ? { ground_truth_contradicted: true } : {}),
+    // Only while the decision still stands as a veto: a later gate (ground truth corroborating) may have lifted it.
+    ...(retrievalContradicted && decision === 'vetoed' ? { retrieval_contradicted: true } : {}),
     quorum, provider_health: { attempted: attemptedForSummary, succeeded: providers_used, failed, ...(late.length ? { late } : {}), ...skipped },
     ...(groundTruthField ? { ground_truth: groundTruthField } : {}),
     ...(decision_reason ? { decision_reason } : {}),

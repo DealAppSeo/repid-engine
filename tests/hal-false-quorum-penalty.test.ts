@@ -70,6 +70,11 @@ jest.mock('../src/hal/execution-floor', () => ({
     : { decision: d, overridden: false, note: 'not applicable', floor: { enabled: false } },
 }));
 
+// The retrieval slow path fetches web pages and grades them. Off in every case but 14 and 15, where these stand in.
+G.__fqCrag = null;
+jest.mock('../src/hal/retrieval', () => ({ ...jest.requireActual('../src/hal/retrieval'), retrieveEvidence: async () => [{ url: 'https://example.invalid/a', domain: 'a.invalid', text: 'made-up page' }, { url: 'https://example.invalid/b', domain: 'b.invalid', text: 'made-up page' }] }));
+jest.mock('../src/hal/crag', () => ({ ...jest.requireActual('../src/hal/crag'), gradeEvidence: async () => (global as any).__fqCrag }));
+
 // Three providers on three different model families. The real builder reads API keys from env.
 jest.mock('../src/hal/fact-check', () => {
   const actual = jest.requireActual('../src/hal/fact-check');
@@ -120,6 +125,7 @@ beforeEach(() => {
   G.__fqUpdates = [];
   G.__fqGroundTruth = null;
   G.__fqFloor = null;
+  G.__fqCrag = null;
   byModel = {};
   providerCalls = 0;
   (global as any).fetch = jest.fn(async (url: string, init: any) => {
@@ -305,6 +311,27 @@ describe('a caught hallucination needs a quorum of FALSE verdicts', () => {
     expectPenalised(r);
     expect(row().metadata.false_quorum_count).toBe(0);
     expect(row().metadata.execution_floor_override).toBe(true);
+  });
+
+  const crag = (grade: string) => ({ grade, verdict: grade === 'Incorrect' ? 'FALSE' : 'UNCERTAIN', confidence: 90, grader: 'made-up', corroboration_count: 0, contradiction_count: grade === 'Incorrect' ? 2 : 0, disclosure_flag: false, sources: [] });
+
+  test('14. one FALSE, one TRUE, one UNCERTAIN, and retrieval finds independent sources that contradict: penalised', async () => {
+    process.env.HAL_RETRIEVAL_ENABLED = 'true';
+    G.__fqCrag = crag('Incorrect');
+    byModel = { [A]: F, [B]: T, [C]: U };
+    const r = await run();
+    expectPenalised(r);
+    expect(row().metadata.false_quorum_count).toBe(1);
+    expect(row().metadata.retrieval_contradicted).toBe(true);
+  });
+
+  test('15. the same answers with an Ambiguous retrieval grade: nobody found it false, so no penalty (control for 14)', async () => {
+    process.env.HAL_RETRIEVAL_ENABLED = 'true';
+    G.__fqCrag = crag('Ambiguous');
+    byModel = { [A]: F, [B]: T, [C]: U };
+    const r = await run();
+    expectNotPenalised(r);
+    expect(row().metadata.retrieval_contradicted).toBeUndefined();
   });
 
   test('11. a DEGRADED ground-truth lookup is not a contradiction: all UNCERTAIN stays unpenalised', async () => {
