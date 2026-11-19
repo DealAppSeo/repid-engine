@@ -62,6 +62,14 @@ jest.mock('../src/hal/ground-truth-gate', () => ({
   checkGroundTruth: async () => (global as any).__fqGroundTruth ?? { verdict: 'no_match', corroborating: [], contradicting: [], reason: 'no match', degraded: false },
 }));
 
+// The execution floor runs code. Off in every case but 13, where this canned result stands in for a failed execution.
+G.__fqFloor = null;
+jest.mock('../src/hal/execution-floor', () => ({
+  applyExecutionFloor: async (_text: string, d: any) => (global as any).__fqFloor
+    ? { decision: { decision: 'vetoed', decision_reason: 'execution failed' }, overridden: true, note: 'made-up execution failure', floor: { enabled: true } }
+    : { decision: d, overridden: false, note: 'not applicable', floor: { enabled: false } },
+}));
+
 // Three providers on three different model families. The real builder reads API keys from env.
 jest.mock('../src/hal/fact-check', () => {
   const actual = jest.requireActual('../src/hal/fact-check');
@@ -111,6 +119,7 @@ beforeEach(() => {
   G.__fqInserts = [];
   G.__fqUpdates = [];
   G.__fqGroundTruth = null;
+  G.__fqFloor = null;
   byModel = {};
   providerCalls = 0;
   (global as any).fetch = jest.fn(async (url: string, init: any) => {
@@ -286,6 +295,16 @@ describe('a caught hallucination needs a quorum of FALSE verdicts', () => {
     const r = await run();
     expectPenalised(r);
     expect(row().metadata.ground_truth_contradicted).toBe(true);
+  });
+
+  test('13. the execution floor forces the veto while every model is UNCERTAIN or TRUE: still penalised', async () => {
+    // A deterministic execution failure, not an opinion. Penalised before this rule, and still.
+    G.__fqFloor = true;
+    byModel = { [A]: T, [B]: T };
+    const r = await run();
+    expectPenalised(r);
+    expect(row().metadata.false_quorum_count).toBe(0);
+    expect(row().metadata.execution_floor_override).toBe(true);
   });
 
   test('11. a DEGRADED ground-truth lookup is not a contradiction: all UNCERTAIN stays unpenalised', async () => {

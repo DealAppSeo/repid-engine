@@ -341,6 +341,10 @@ export class HalService {
       if (out.decision !== 'clean') delete out.reward_suppressed;
       if (applied.overridden) {
         console.warn(`[hal/execution-floor] OVERRIDE — ${applied.note}`);
+        // The floor swaps only the decision word, so the signals still say "no model answered FALSE". Mark the
+        // override: the penalty rule accepts it, like a ground-truth contradiction, as an explicit finding of
+        // falsehood from a deterministic source.
+        if (out.decision === 'vetoed') out.signals = { ...(out.signals ?? {}), execution_floor_override: true };
       }
       return out;
     } catch (e: unknown) {
