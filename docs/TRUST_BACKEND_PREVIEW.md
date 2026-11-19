@@ -16,7 +16,13 @@ npm ci --legacy-peer-deps
 node scripts/trust-backend-conformance.mjs
 ```
 
-Expected: a list of legs and a last line like `10 verified, 0 failed, 6 not checked`, exit code 0. To also read Base Sepolia directly, set `RPC_URL=https://sepolia.base.org` first; the two chain legs then move from "not checked" to "verified".
+Expected: a list of lines and a last line like `10 verified, 0 failed, 6 not checked`, exit code 0.
+
+Six "not checked" is the normal result of this plain run: two chain lines (no `RPC_URL` set), two HAL lines (no `--hal`), and the two lines that are never verified today (agent binding, private disclosure). Each says why on its own line.
+
+To also read the Base Sepolia test network directly, set `RPC_URL=https://sepolia.base.org` first. The two chain lines then move to verified and the last line reads `12 verified, 0 failed, 4 not checked`.
+
+The counts come from live data, so a line's wording can change (for example when the agent's score has moved since its proof was made). What should not change is `0 failed`.
 
 **2. A rejection case.** The same run, with one answer changed in memory to what a broken backend would send:
 
@@ -24,7 +30,7 @@ Expected: a list of legs and a last line like `10 verified, 0 failed, 6 not chec
 node scripts/trust-backend-conformance.mjs --plant wrong-agent
 ```
 
-Expected: a `PLANTED DEFECT` line, `FAILED zk proof read`, exit code 1. Other rehearsals: `--plant altered-accepted`, `--plant simulated-receipt`.
+Expected: a `PLANTED DEFECT` line, exit code 1, and three FAILED lines: `zk proof read` (the proof names another agent) and both verify lines (the proof bytes do not verify for that other agent). The last line reads like `7 verified, 3 failed, 6 not checked`. Other rehearsals: `--plant altered-accepted`, `--plant simulated-receipt`.
 
 ## What each line proves
 
@@ -32,13 +38,15 @@ Expected: a `PLANTED DEFECT` line, `FAILED zk proof read`, exit code 1. Other re
 |---|---|---|
 | health, repid, passport, erc8004 validate | The API is up and its views of this agent agree on id, score and tier | That the score is correct; they all read one database |
 | zk proof read | A proof is published whose statement says "score >= threshold" and names this agent | Anything about the proof bytes |
-| zk verify (this API) | The API accepts its own proof and refuses a changed statement | An independent check |
-| zk verify (published verifier, run locally) | The proof bytes verify on your machine with `@hyperdag/proof-verifier`, with no network call, and a changed statement is refused | That the proof belongs to this agent (next line) |
-| zk agent binding | Never VERIFIED today. It reads "Agent binding not verified" | |
-| zk private disclosure | Never VERIFIED today. The score and threshold are public inputs: a validity proof, not zero-knowledge | |
+| zk verify (this API, real proof) | The API's verify route accepts the proof it serves | An independent check |
+| zk verify (this API, altered statement) | The same route refuses the proof when the stated score is changed by one | An independent check |
+| zk verify (published verifier, run locally) | The proof bytes verify on your machine with `@hyperdag/proof-verifier` (the open-source verifier package, already installed by `npm ci`), with no network call, and a changed statement is refused | That the proof belongs to this agent (next line) |
+| zk agent binding | Never VERIFIED today: it always prints NOT_CHECKED with "Agent binding not verified". Measured with that verifier, roughly 1 in 230 randomly chosen other agent ids are also accepted for the same proof, so the proof cannot show whose it is | |
+| zk private disclosure | Never VERIFIED today: it always prints NOT_CHECKED. The score and threshold are public inputs: a validity proof, not zero-knowledge | |
+| reputation on chain (as the API reports it) | The API's own account of the agent's on-chain reputation record names the same token as the passport | That the chain agrees; this line does not read the chain |
 | chain readback | The ERC-8004 registry on Base Sepolia names the same owner for the agent's token as the passport | Anything about the score |
 | public receipt | The latest receipt is a real (not simulated) settlement with proofs listed | |
-| settlement on chain | The receipt's transaction exists on Base Sepolia, succeeded, and paid the receipt's payee the receipt's amount (test USDC) | A mainnet payment |
+| settlement on chain | The receipt's transaction exists on the chain the RPC serves (the line prints the chain id; 84532 is Base Sepolia, a test network), succeeded, and transferred the receipt's amount, in the token's base units, to the receipt's payee | A mainnet payment, or which token: the line checks the transfer, not the token contract |
 | HAL (two lines, only with `--hal`) | A known-false claim is not returned clean; an unknowable claim is returned abstain or flagged | Accuracy in general: two claims are a smoke test |
 
 Three outcomes per line: VERIFIED, NOT_CHECKED (with the reason) and FAILED. NOT_CHECKED is never a pass. Exit code 0 only when nothing failed and at least one line verified.
