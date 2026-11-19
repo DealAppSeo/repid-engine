@@ -76,6 +76,7 @@ keys. Representative names (from INFRA_INVENTORY §11):
 | `HAL_STRICTNESS` | no | shared knob (decoupled from the dedicated one above). |
 | `HAL_ENRICHMENT_ENABLED` | no | gate; default OFF. |
 | `HAL_PENALTY_REQUIRES_QUORUM` | no | default ON (fail-safe; needs ≥2 providers). |
+| `HAL_PENALTY_REQUIRES_FALSE_QUORUM` | no | default ON, reversible. A caught hallucination (and its penalty) needs ≥2 families that answered FALSE, not just ≥2 that answered: before 2026-11-19 three UNCERTAIN answers scored exactly the veto threshold and were penalised as a hallucination. The exact string `false` restores that old rule. Read from env only. |
 | `HAL_S2_ENABLE_*` | no | per-provider strictness-2 enable flags (memory: prod HAL quorum gate). |
 | `ESCALATION_CONTRACT` | no | service-contract poll gate. **Keep OFF on standby until activation** (loop revival is Sean-only). |
 | `CASCADE_SETTLEMENT_ENABLED` | no | cascade settlement worker gate. |

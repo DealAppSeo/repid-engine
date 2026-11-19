@@ -341,6 +341,10 @@ export class HalService {
       if (out.decision !== 'clean') delete out.reward_suppressed;
       if (applied.overridden) {
         console.warn(`[hal/execution-floor] OVERRIDE — ${applied.note}`);
+        // The floor swaps only the decision word, so the signals still say "no model answered FALSE". Mark the
+        // override: the penalty rule accepts it, like a ground-truth contradiction, as an explicit finding of
+        // falsehood from a deterministic source.
+        if (out.decision === 'vetoed') out.signals = { ...(out.signals ?? {}), execution_floor_override: true };
       }
       return out;
     } catch (e: unknown) {
@@ -400,6 +404,12 @@ export class HalService {
               providers_used: fc.providers_used, agreement: fc.agreement, degraded: fc.degraded,
               // R5 — distinct independent families that voted (the quorum unit).
               families_used: fc.families_used, families: fc.families,
+              // Explicit FALSE verdicts, by family and by provider. The scoring pipeline requires a
+              // quorum of these before it records a caught hallucination; absent means 0 there.
+              ...(fc.false_families !== undefined ? { false_families: fc.false_families } : {}),
+              ...(fc.false_providers !== undefined ? { false_providers: fc.false_providers } : {}),
+              ...(fc.ground_truth_contradicted ? { ground_truth_contradicted: true } : {}),
+              ...(fc.retrieval_contradicted ? { retrieval_contradicted: true } : {}),
               // A FAMILY COUNT IS NOT AN INDEPENDENCE COUNT — N families behind ONE host is N
               // opinions that vanish in a single outage. It travels WITH families_used, always,
               // and this line is why: `signals` is rebuilt field by field here, so a value can be

@@ -46,7 +46,7 @@ describe('pipeline family-aware quorum-gate', () => {
     (global as any).__pipAgentRow = { id: AGENT, current_repid: 1000, tier: 'ESTABLISHED', vesting_cliff_ends_at: null };
     (global as any).__pipInsertCalls = []; (global as any).__pipUpdateCalls = [];
     evalMock.mockReset(); process.env.HAL_STRICTNESS = '2';
-    delete process.env.HAL_PENALTY_REQUIRES_QUORUM; delete process.env.HAL_QUORUM_FAMILY_AWARE; delete process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION;
+    delete process.env.HAL_PENALTY_REQUIRES_QUORUM; delete process.env.HAL_PENALTY_REQUIRES_FALSE_QUORUM; delete process.env.HAL_QUORUM_FAMILY_AWARE; delete process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION;
   });
   afterAll(() => { delete process.env.HAL_STRICTNESS; });
   const run = () => runScoreEvent({ agent_id: AGENT, prompt: 'p', answer: 'a', provider_used: 'deepinfra' });
@@ -62,7 +62,7 @@ describe('pipeline family-aware quorum-gate', () => {
   });
 
   test('2 distinct FAMILIES → penalty APPLIES with family evidence', async () => {
-    evalMock.mockResolvedValue({ hal_score: 0.9, decision: 'vetoed', mode: 'fact-check', strictness: 2, signals: { providers_used: 2, families_used: 2, families: ['llama', 'deepseek'] } });
+    evalMock.mockResolvedValue({ hal_score: 0.9, decision: 'vetoed', mode: 'fact-check', strictness: 2, signals: { providers_used: 2, families_used: 2, families: ['llama', 'deepseek'], false_families: 2, false_providers: 2 } });
     const r = await run();
     expect(r.repid_delta_applied).toBe(-10);
     const ins = (global as any).__pipInsertCalls[0];
@@ -73,7 +73,7 @@ describe('pipeline family-aware quorum-gate', () => {
 
   test('family-aware OFF → reverts to host count (2 hosts → drain)', async () => {
     process.env.HAL_QUORUM_FAMILY_AWARE = 'false';
-    evalMock.mockResolvedValue({ hal_score: 0.9, decision: 'vetoed', mode: 'fact-check', strictness: 2, signals: { providers_used: 2, families_used: 1, families: ['llama'] } });
+    evalMock.mockResolvedValue({ hal_score: 0.9, decision: 'vetoed', mode: 'fact-check', strictness: 2, signals: { providers_used: 2, families_used: 1, families: ['llama'], false_families: 1, false_providers: 2 } });
     const r = await run();
     expect(r.repid_delta_applied).toBe(-10); // host count = 2 → quorum met
   });
