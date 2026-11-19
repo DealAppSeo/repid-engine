@@ -38,7 +38,7 @@ describe('trust backend conformance (offline)', () => {
     expect(r.failed).toBe(0);
     expect(r.code).toBe(0);
     const verified = r.legs.filter((l) => l.outcome === 'VERIFIED').map((l) => l.name);
-    for (const name of ['health', 'repid', 'passport', 'zk proof read', 'zk verify (this API, real proof)', 'zk verify (this API, altered statement)', 'erc8004 validate', 'reputation on chain (as the API reports it)', 'public receipt'])
+    for (const name of ['health', 'repid', 'passport', 'zk proof read', 'zk verify (published verifier, run locally)', 'zk verify (this API, real proof)', 'zk verify (this API, altered statement)', 'erc8004 validate', 'reputation on chain (as the API reports it)', 'public receipt'])
       expect(verified).toContain(name);
     // the chain readback cannot run offline, and says so; it is never counted as a pass
     expect(r.legs.find((l) => l.name === 'chain readback')?.outcome).toBe('NOT_CHECKED');
@@ -55,6 +55,11 @@ describe('trust backend conformance (offline)', () => {
     ['an on-chain record for a different token', 'reputation_onchain', (j: any) => { j.token_id = '1'; }, 'reputation on chain (as the API reports it)'],
     ['a receipt listing a proof that is not real', 'receipt', (j: any) => { j.zk_proofs[0].is_real = false; }, 'public receipt'],
     ['an engine that reports itself unhealthy', 'health', (j: any) => { j.status = 'degraded'; }, 'health'],
+    // from the independent review, 2026-11-19
+    ['a passport that names its own registry', 'passport', (j: any) => { j.onchain.registry = '0x' + '1'.repeat(40); }, 'passport'],
+    ['a receipt with an empty proof list', 'receipt', (j: any) => { j.zk_proofs = []; }, 'public receipt'],
+    ['a proof whose claim the current score no longer meets', 'proof', (j: any) => { j.statement.threshold = 2930; }, 'zk proof read'],
+    ['served proof bytes the published verifier rejects', 'proof', (j: any) => { const b = Buffer.from(j.proof_bytes, 'base64'); b[100] ^= 1; j.proof_bytes = b.toString('base64'); }, 'zk verify (published verifier, run locally)'],
   ])('planted: %s -> exit 1 on the leg that owns it', (_what, file, change, leg) => {
     const r = failedLegs(planted(file as string, change as (b: any) => void));
     expect(r.code).toBe(1);
