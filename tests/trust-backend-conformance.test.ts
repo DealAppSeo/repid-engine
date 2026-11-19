@@ -81,6 +81,17 @@ describe('trust backend conformance (offline)', () => {
     expect(r.code).toBe(2);
   });
 
+  it('HAL: three checkers answering UNCERTAIN must not be a veto. The saved default-settings reply (vetoed at 0.5) is FAILED', () => {
+    // defect-uncertain-vetoed/hal_abstain.json is what the route returned on 2026-11-19 with code defaults.
+    // good/hal_abstain.json is the same claim with HAL_VERDICT_DRIVEN_VETO=true (flagged).
+    const dir = mkdtempSync(join(tmpdir(), 'conformance-'));
+    cpSync(GOOD, dir, { recursive: true });
+    cpSync(join(GOOD, '..', 'defect-uncertain-vetoed', 'hal_abstain.json'), join(dir, 'hal_abstain.json'));
+    const r = failedLegs(dir);
+    expect(r.code).toBe(1);
+    expect(r.names).toEqual(['HAL (unknowable claim)']);
+  });
+
   it('HAL: a known-false claim that comes back clean is FAILED (when HAL fixtures are present)', () => {
     if (!existsSync(join(GOOD, 'hal_known.json'))) return; // no HAL fixture saved yet: nothing to plant against
     const r = failedLegs(planted('hal_known', (j: any) => { for (const k of ['decision', 'hal_decision', 'verdict']) if (k in j) j[k] = 'clean'; }));

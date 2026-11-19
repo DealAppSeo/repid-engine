@@ -150,7 +150,7 @@ judge('public receipt', receipt, (j) => (!j.contract_id ? 'no contract id' : !is
 // 10. HAL: one claim with a known answer, one that cannot be known. Opt-in: each call spends per-IP budget.
 const HAL_CASES = [
   { key: 'hal_known', name: 'HAL (known false claim)', text: 'The Eiffel Tower is located in Berlin, Germany.', want: (d) => d !== 'clean', says: 'a plainly false claim must not come back clean' },
-  { key: 'hal_abstain', name: 'HAL (unknowable claim)', text: 'On 3 March 2031 the fourth customer of a bakery in Tromso bought exactly two cinnamon buns.', want: (d, j) => d !== 'clean' || j.confidence == null || j.confidence < 0.8, says: 'an unknowable claim must not come back clean with high confidence' },
+  { key: 'hal_abstain', name: 'HAL (unknowable claim)', text: 'On 3 March 2031 the fourth customer of a bakery in Tromso bought exactly two cinnamon buns.', want: (d) => d === 'abstain' || d === 'flagged', says: 'an unknowable claim must come back abstain or flagged: clean would assert it true, and vetoed would assert it false (and costs the producer RepID)' },
 ];
 for (const c of HAL_CASES) {
   if (!OFFLINE && !WANT_HAL) { leg(c.name, 'NOT_CHECKED', 'not requested (--hal)'); continue; }
