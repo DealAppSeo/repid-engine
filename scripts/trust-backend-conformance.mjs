@@ -25,8 +25,8 @@
 // Exit 0: nothing FAILED and at least one leg VERIFIED. Exit 1: something FAILED. Exit 2: nothing could be checked.
 //
 // WHAT A GREEN RUN DOES NOT SHOW: that the proof is zero-knowledge (the score is a public input), that the proof
-// could only have been made for this agent (measured 2026-11-19 with the standalone verifier: about 1 in 230
-// random other agent ids verify the same bytes, and so does shifting score and threshold together), that the
+// belongs to this agent or to these exact numbers (this proof format binds only the difference between score and
+// threshold; see the 'zk agent binding' line), that the
 // proof was checked by anything other than this API (use the published verifier for that), or that scores are
 // fresh. It shows the public surface is up, answers in the documented shapes, and is internally consistent.
 
@@ -150,7 +150,7 @@ if (proof.status === 200 && st && proof.json.proof_bytes) {
 // 5c. Two things a valid proof is often taken to mean, and this format does not establish. They are separate
 // lines so a green validity leg above is never read as either of them.
 if (proof.status === 200 && st) {
-  leg('zk agent binding', 'NOT_CHECKED', 'Agent binding not verified: this proof format ties the proof to its agent id only weakly (measured 2026-11-19 with the published verifier: about 1 in 230 random other agent ids verify the same bytes). The statement names the agent; the proof does not establish it.');
+  leg('zk agent binding', 'NOT_CHECKED', 'Agent binding not verified: this proof format does not tie a proof to its agent id, nor to the exact score and threshold, only to the difference between them. Treat the agent id as a label supplied with the proof. A format that binds the subject is planned as a new proof version.');
   leg('zk private disclosure', 'NOT_CHECKED', 'Not offered by this proof format: the score and the threshold are public inputs. This is a validity proof of "score above threshold", not a zero-knowledge proof.');
 } else { leg('zk agent binding', 'NOT_CHECKED', 'no proof to assess'); leg('zk private disclosure', 'NOT_CHECKED', 'no proof to assess'); }
 

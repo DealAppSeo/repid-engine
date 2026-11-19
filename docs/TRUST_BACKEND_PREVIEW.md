@@ -41,7 +41,7 @@ Expected: a `PLANTED DEFECT` line, exit code 1, and three FAILED lines: `zk proo
 | zk verify (this API, real proof) | The API's verify route accepts the proof it serves | An independent check |
 | zk verify (this API, altered statement) | The same route refuses the proof when the stated score is changed by one | An independent check |
 | zk verify (published verifier, run locally) | The proof bytes verify on your machine with `@hyperdag/proof-verifier` (the open-source verifier package, already installed by `npm ci`), with no network call, and a changed statement is refused | That the proof belongs to this agent (next line) |
-| zk agent binding | Never VERIFIED today: it always prints NOT_CHECKED with "Agent binding not verified". Measured with that verifier, roughly 1 in 230 randomly chosen other agent ids are also accepted for the same proof, so the proof cannot show whose it is | |
+| zk agent binding | Never VERIFIED today: it always prints NOT_CHECKED with "Agent binding not verified". This proof format does not tie a proof to an agent id or to the exact score and threshold, only to the difference between them, so a valid proof cannot show whose it is | |
 | zk private disclosure | Never VERIFIED today: it always prints NOT_CHECKED. The score and threshold are public inputs: a validity proof, not zero-knowledge | |
 | reputation on chain (as the API reports it) | The API's own account of the agent's on-chain reputation record names the same token as the passport | That the chain agrees; this line does not read the chain |
 | chain readback | The ERC-8004 registry on Base Sepolia names the same owner for the agent's token as the passport | Anything about the score |
@@ -72,7 +72,7 @@ A POST body containing `;`, `--` or an SQL keyword followed by a space is reject
 ## Known limits (read before you build on it)
 
 - **HAL and "uncertain".** With the engine's default settings, a claim every checker calls uncertain comes back `vetoed`, the word also used for a claim found false. Treat `vetoed` with `hal_score` 0.5 as "could not judge".
-- **The proof is not tied to the agent.** See the "zk agent binding" line.
+- **The proof is not tied to the agent.** A valid proof shows one thing: the stated score is above the stated threshold. The agent id, the two exact numbers, the tier and the time are labels supplied alongside it. A proof version that binds the subject is planned.
 - **Scores can be older than proofs.** The proof line says so when the proved score and the current score differ.
 - **This is a preview.** These calls are live and tested by this script; the published builder contract does not promise them yet.
 
