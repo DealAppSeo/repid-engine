@@ -10,12 +10,13 @@
 //   node scripts/trust-backend-conformance.mjs                         # live, default agent
 //   node scripts/trust-backend-conformance.mjs --agent trinity-nexus
 //   node scripts/trust-backend-conformance.mjs --save out/             # live, and keep every response
-//   node scripts/trust-backend-conformance.mjs --offline tests/fixtures/trust-backend-conformance/good
+//   node scripts/trust-backend-conformance.mjs --offline out/        # rerun against answers kept with --save
 //   node scripts/trust-backend-conformance.mjs --hal                   # also spend 2 of the per-IP HAL budget
 //   RPC_URL=https://sepolia.base.org node scripts/trust-backend-conformance.mjs   # enables the chain readback
 //   --json                                                             # machine-readable legs on stdout
 //
-// STANDALONE, like verify-trust-receipt.mjs beside it: no imports from this repo and no dependencies, so it is
+// STANDALONE, like verify-trust-receipt.mjs beside it: no imports from this repo. Its one optional dependency is the
+// published proof verifier, for the leg that checks the proof on this machine. Otherwise it is
 // what an outside front end would have to write, not the server agreeing with itself.
 //
 // THREE OUTCOMES PER LEG: VERIFIED / NOT_CHECKED / FAILED. A leg that could not run (endpoint unreachable, no
