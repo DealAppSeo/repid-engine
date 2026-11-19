@@ -1,0 +1,263 @@
+{
+  "corpus": "5d53501c22a92f78",
+  "node": "v22.17.0",
+  "grader": "185d8950238036e0",
+  "data": [
+    {
+      "reviewer": "codex",
+      "model": "Codex (ChatGPT plan)",
+      "family": "OpenAI GPT",
+      "runs": 48,
+      "provider_failures": 0,
+      "bad": 1,
+      "usable": 47,
+      "judged": 48,
+      "planted_answered": 23,
+      "planted_pass": 0,
+      "caught": 23,
+      "strict": 23,
+      "clean_answered": 24,
+      "false_alarm": 5,
+      "clean_pass": 7,
+      "median_ms": 44783,
+      "failure_classes": {
+        "answer_rejected": 1
+      },
+      "by_kind": {
+        "contradicted_claim": [
+          2,
+          2
+        ],
+        "failing_run": [
+          2,
+          2
+        ],
+        "inverted_logic": [
+          5,
+          5
+        ],
+        "secret": [
+          4,
+          4
+        ],
+        "swallowed_error": [
+          4,
+          4
+        ],
+        "tautological_catch": [
+          2,
+          2
+        ],
+        "tautological_mock": [
+          2,
+          2
+        ],
+        "unexplained_file": [
+          2,
+          2
+        ]
+      }
+    },
+    {
+      "reviewer": "open:cerebras/gpt-oss-120b",
+      "model": "gpt-oss-120b",
+      "family": "OpenAI gpt-oss (open weights)",
+      "runs": 48,
+      "provider_failures": 0,
+      "bad": 47,
+      "usable": 1,
+      "judged": 48,
+      "planted_answered": 0,
+      "planted_pass": 0,
+      "caught": 0,
+      "strict": 0,
+      "clean_answered": 1,
+      "false_alarm": 0,
+      "clean_pass": 1,
+      "median_ms": 2127,
+      "failure_classes": {
+        "answer_rejected": 47
+      },
+      "by_kind": {}
+    },
+    {
+      "reviewer": "open:cerebras/qwen-3.8-27b",
+      "model": "qwen-3.8-27b",
+      "family": "Alibaba Qwen",
+      "runs": 48,
+      "provider_failures": 0,
+      "bad": 2,
+      "usable": 46,
+      "judged": 48,
+      "planted_answered": 22,
+      "planted_pass": 0,
+      "caught": 20,
+      "strict": 20,
+      "clean_answered": 24,
+      "false_alarm": 0,
+      "clean_pass": 22,
+      "median_ms": 1196,
+      "failure_classes": {
+        "answer_rejected": 2
+      },
+      "by_kind": {
+        "contradicted_claim": [
+          2,
+          2
+        ],
+        "failing_run": [
+          2,
+          2
+        ],
+        "inverted_logic": [
+          4,
+          6
+        ],
+        "secret": [
+          4,
+          4
+        ],
+        "swallowed_error": [
+          2,
+          2
+        ],
+        "tautological_catch": [
+          2,
+          2
+        ],
+        "tautological_mock": [
+          2,
+          2
+        ],
+        "unexplained_file": [
+          2,
+          2
+        ]
+      }
+    },
+    {
+      "reviewer": "open:nvidia-nim/google/gemma-4-31b-it",
+      "model": "google/gemma-4-31b-it",
+      "family": "Google Gemma",
+      "runs": 48,
+      "provider_failures": 0,
+      "bad": 15,
+      "usable": 33,
+      "judged": 48,
+      "planted_answered": 19,
+      "planted_pass": 0,
+      "caught": 19,
+      "strict": 19,
+      "clean_answered": 14,
+      "false_alarm": 0,
+      "clean_pass": 11,
+      "median_ms": 40937,
+      "failure_classes": {
+        "answer_rejected": 15
+      },
+      "by_kind": {
+        "contradicted_claim": [
+          2,
+          2
+        ],
+        "failing_run": [
+          2,
+          2
+        ],
+        "inverted_logic": [
+          1,
+          1
+        ],
+        "secret": [
+          4,
+          4
+        ],
+        "swallowed_error": [
+          4,
+          4
+        ],
+        "tautological_catch": [
+          2,
+          2
+        ],
+        "tautological_mock": [
+          2,
+          2
+        ],
+        "unexplained_file": [
+          2,
+          2
+        ]
+      }
+    },
+    {
+      "reviewer": "open:nvidia-nim/mistralai/mistral-large-4-1t-a52b",
+      "model": "mistralai/mistral-large-4-1t-a52b",
+      "family": "Mistral",
+      "runs": 2,
+      "provider_failures": 2,
+      "bad": 0,
+      "usable": 0,
+      "judged": 0,
+      "planted_answered": 0,
+      "planted_pass": 0,
+      "caught": 0,
+      "strict": 0,
+      "clean_answered": 0,
+      "false_alarm": 0,
+      "clean_pass": 0,
+      "median_ms": 240065,
+      "failure_classes": {
+        "timeout": 2
+      },
+      "by_kind": {}
+    },
+    {
+      "reviewer": "open:openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+      "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "family": "NVIDIA Nemotron",
+      "runs": 48,
+      "provider_failures": 0,
+      "bad": 24,
+      "usable": 24,
+      "judged": 48,
+      "planted_answered": 10,
+      "planted_pass": 0,
+      "caught": 10,
+      "strict": 9,
+      "clean_answered": 14,
+      "false_alarm": 0,
+      "clean_pass": 13,
+      "median_ms": 52387,
+      "failure_classes": {
+        "answer_rejected": 24
+      },
+      "by_kind": {
+        "contradicted_claim": [
+          1,
+          1
+        ],
+        "failing_run": [
+          1,
+          1
+        ],
+        "inverted_logic": [
+          2,
+          3
+        ],
+        "secret": [
+          3,
+          3
+        ],
+        "swallowed_error": [
+          1,
+          1
+        ],
+        "unexplained_file": [
+          1,
+          1
+        ]
+      }
+    }
+  ]
+}
