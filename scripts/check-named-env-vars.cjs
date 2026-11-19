@@ -173,6 +173,7 @@ const ALLOWLIST = {
   CANARY_DELAY_MS: 'scripts/eval/canary-f1.ts only; generator scans src/.',
   CANARY_LIMIT: 'scripts/eval/canary-f1.ts only; generator scans src/.',
   CANARY_RAW: 'scripts/eval/canary-f1.ts only; generator scans src/.',
+  EXP_REPID_SCHEDULE_ENABLED: 'scripts/exp-repid/schedule.ts only (shadow schedule tick, default off); generator scans src/.',
   LITELLM_URL: 'scripts/eval/candidate-voter.ts only (eval-only gateway host); generator scans src/.',
   LITELLM_MASTER_KEY: 'scripts/eval/candidate-voter.ts only (key for that gateway); generator scans src/.',
   OWNER_PRIVATE_KEY: 'scripts/e2e/owner-budget-testnet.ts only (the test owner wallet, read in the operator\'s shell, never printed); generator scans src/.',

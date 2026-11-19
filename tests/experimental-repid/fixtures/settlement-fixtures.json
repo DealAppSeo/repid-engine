@@ -1,0 +1,30 @@
+{
+  "_note": "SYNTHETIC. No row here is copied from any database. Agent ids are reserved fixture uuids; task and case ids are fixture labels.",
+  "agents": [
+    { "id": "00000000-0000-4000-8000-0000000000a1", "agent_id": "fixture-agent-a", "agent_name": "fixture-agent-a" },
+    { "id": "00000000-0000-4000-8000-0000000000b2", "agent_id": "fixture-agent-b", "agent_name": "fixture-agent-b" }
+  ],
+  "graded": [
+    {
+      "fixture": "FX-POS", "kind": "positive_graded",
+      "row": { "task_id": "fx-task-pos-1", "claimed_by": "fixture-agent-a", "case_id": "fx-case-veto-1", "expected": "veto",
+               "result": "{\"decision\":\"veto\",\"confidence\":0.9,\"reason\":\"fixture: the claim contradicts the source\"}",
+               "subject_agent_id": "00000000-0000-4000-8000-0000000000a1" },
+      "expect": { "validator": "positive", "calibration": "positive" }
+    },
+    {
+      "fixture": "FX-NEG", "kind": "negative_graded",
+      "row": { "task_id": "fx-task-neg-1", "claimed_by": "fixture-agent-a", "case_id": "fx-case-pass-1", "expected": "pass",
+               "result": "{\"decision\":\"veto\",\"confidence\":0.8,\"reason\":\"fixture: wrong answer, said with confidence\"}",
+               "subject_agent_id": "00000000-0000-4000-8000-0000000000a1" },
+      "expect": { "validator": "negative", "calibration": "negative" }
+    },
+    {
+      "fixture": "FX-ABS", "kind": "abstention",
+      "row": { "task_id": "fx-task-abs-1", "claimed_by": "fixture-agent-a", "case_id": "fx-case-pass-2", "expected": "pass",
+               "result": "{\"decision\":\"abstain\",\"confidence\":0.4,\"reason\":\"fixture: not enough evidence\"}",
+               "subject_agent_id": "00000000-0000-4000-8000-0000000000a1" },
+      "expect": { "validator": "zero", "calibration": "not_scorable" }
+    }
+  ]
+}
