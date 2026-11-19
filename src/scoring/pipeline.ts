@@ -470,7 +470,10 @@ export async function runScoreEvent(
   const groundedVeto = !halError && halStrictness >= 2 && decision === 'vetoed';
   const quorumUnavailable = groundedVeto && penaltyRequiresQuorum && !quorumMet;
   const falseQuorumCount = Number((signals as Record<string, unknown>)[familyAware ? 'false_families' : 'false_providers'] ?? 0);
-  const falseQuorumMet = falseQuorumCount >= QUORUM_MIN;
+  // A contradiction by the ground-truth corpus is an explicit FALSE finding from a deterministic source. It forced
+  // this veto and was penalised before this rule existed; it still is. Only "nobody said false" loses its penalty.
+  const groundTruthContradicted = (signals as Record<string, unknown>).ground_truth_contradicted === true;
+  const falseQuorumMet = falseQuorumCount >= QUORUM_MIN || groundTruthContradicted;
   // 'quorum_unavailable' keeps precedence: with too few answers there is nothing to count FALSE in.
   const falseQuorumUnmet = groundedVeto && penaltyRequiresFalseQuorum && !falseQuorumMet && !quorumUnavailable;
   const hallucination_caught =
@@ -749,6 +752,7 @@ export async function runScoreEvent(
       // Explicit FALSE verdicts behind the decision: every APPLIED penalty must show >= 2 here too.
       false_quorum_met: falseQuorumMet,
       false_quorum_count: falseQuorumCount,
+      ...(groundTruthContradicted ? { ground_truth_contradicted: true } : {}),
       hal_mode: halMode ?? null,
       // HONEST-HAL — decision provenance. scoringDecision (the recorded hal_decision) is quorum-only;
       // extractor_decision is the blind style-extractor's raw call, kept for telemetry ONLY.

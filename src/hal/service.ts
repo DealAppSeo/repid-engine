@@ -404,6 +404,7 @@ export class HalService {
               // quorum of these before it records a caught hallucination; absent means 0 there.
               ...(fc.false_families !== undefined ? { false_families: fc.false_families } : {}),
               ...(fc.false_providers !== undefined ? { false_providers: fc.false_providers } : {}),
+              ...(fc.ground_truth_contradicted ? { ground_truth_contradicted: true } : {}),
               // A FAMILY COUNT IS NOT AN INDEPENDENCE COUNT — N families behind ONE host is N
               // opinions that vanish in a single outage. It travels WITH families_used, always,
               // and this line is why: `signals` is rebuilt field by field here, so a value can be

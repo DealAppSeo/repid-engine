@@ -56,6 +56,12 @@ jest.mock('../src/db', () => ({
   },
 }));
 
+// The ground-truth corpus is a table lookup. Off in every case but 10, where this canned answer stands in for it.
+G.__fqGroundTruth = null;
+jest.mock('../src/hal/ground-truth-gate', () => ({
+  checkGroundTruth: async () => (global as any).__fqGroundTruth ?? { verdict: 'no_match', corroborating: [], contradicting: [], reason: 'no match', degraded: false },
+}));
+
 // Three providers on three different model families. The real builder reads API keys from env.
 jest.mock('../src/hal/fact-check', () => {
   const actual = jest.requireActual('../src/hal/fact-check');
@@ -104,6 +110,7 @@ beforeEach(() => {
   G.__fqAgent = { id: AGENT, current_repid: START, tier: 'ESTABLISHED', vesting_cliff_ends_at: null };
   G.__fqInserts = [];
   G.__fqUpdates = [];
+  G.__fqGroundTruth = null;
   byModel = {};
   providerCalls = 0;
   (global as any).fetch = jest.fn(async (url: string, init: any) => {
@@ -254,5 +261,27 @@ describe('a caught hallucination needs a quorum of FALSE verdicts', () => {
     expect(r.repid_delta_calculated).toBe(0);
     expect(r.repid_delta_applied).toBe(0);
     expect(ins.metadata.hal_signals.quorum_note).toMatch(/no FALSE quorum/);
+  });
+
+  test('10. the ground-truth corpus contradicts the claim while every model is UNCERTAIN: still penalised', async () => {
+    // The models cannot know an internal fact; the corpus records it. That contradiction is an explicit FALSE
+    // finding from a deterministic source, penalised before this rule and still penalised.
+    delete process.env.HAL_GROUND_TRUTH_GATE;
+    G.__fqGroundTruth = { verdict: 'contradicted', corroborating: [], contradicting: [{ id: 'made-up-fact' }], reason: 'the corpus records a different value', degraded: false };
+    byModel = { [A]: U, [B]: U, [C]: U };
+    const r = await run();
+    expectPenalised(r);
+    expect(row().metadata.false_quorum_count).toBe(0);
+    expect(row().metadata.ground_truth_contradicted).toBe(true);
+  });
+
+  test('11. a DEGRADED ground-truth lookup is not a contradiction: all UNCERTAIN stays unpenalised', async () => {
+    delete process.env.HAL_GROUND_TRUTH_GATE;
+    G.__fqGroundTruth = { verdict: 'contradicted', corroborating: [], contradicting: [], reason: 'corpus unreachable', degraded: true };
+    byModel = { [A]: U, [B]: U, [C]: U };
+    const r = await run();
+    expect(r.hal_decision).toBe('vetoed');
+    expectNotPenalised(r);
+    expect(row().metadata.suppressed_reason).toBe('false_quorum_unmet');
   });
 });
