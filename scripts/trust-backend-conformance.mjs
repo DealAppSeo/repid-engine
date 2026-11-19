@@ -193,7 +193,7 @@ else {
     const j = await r.json();
     const onchain = typeof j.result === 'string' && j.result.length >= 66 ? '0x' + j.result.slice(-40) : null;
     if (!onchain) leg('chain readback', 'NOT_CHECKED', `the RPC gave no owner (${j.error?.message ?? 'empty result'})`);
-    else leg('chain readback', onchain.toLowerCase() === owner.toLowerCase() ? 'VERIFIED' : 'FAILED', onchain.toLowerCase() === owner.toLowerCase() ? `registry ${reg} says token ${tokenId} is owned by ${onchain}, as the passport says` : `registry says ${onchain}, passport says ${owner}`);
+    else leg('chain readback', onchain.toLowerCase() === owner.toLowerCase() ? 'VERIFIED' : 'FAILED', onchain.toLowerCase() === owner.toLowerCase() ? `chain ${CHAIN_ID}: registry ${reg} says token ${tokenId} is owned by ${onchain}, as the passport says` : `registry says ${onchain}, passport says ${owner}`);
   } catch (e) { leg('chain readback', 'NOT_CHECKED', `RPC unreachable (${String(e.message).slice(0, 80)})`); }
 }
 
@@ -229,7 +229,7 @@ else {
       else if (!paid.length) leg('settlement on chain', 'FAILED', `the transaction succeeded but moved no tokens to the payee ${receipt.json.payee_wallet}`);
       else if (Number.isFinite(receipt.json.price_raw) && amount !== BigInt(receipt.json.price_raw)) leg('settlement on chain', 'FAILED', `the transaction paid the payee ${amount}, but the receipt says ${receipt.json.price_raw}`);
       else if (!Number.isFinite(receipt.json.price_raw)) leg('settlement on chain', 'NOT_CHECKED', `the transaction paid the payee ${amount}, but the receipt states no price_raw to compare it with`);
-      else leg('settlement on chain', 'VERIFIED', `block ${parseInt(j.result.blockNumber, 16)}: a successful token transfer of ${amount} to the payee the receipt names`);
+      else leg('settlement on chain', 'VERIFIED', `chain ${CHAIN_ID}${CHAIN_ID === 84532 ? ' (Base Sepolia, a test network)' : ''}, block ${parseInt(j.result.blockNumber, 16)}: a successful token transfer of ${amount} base units${receipt.json.price_usdc ? ` (the receipt calls this ${receipt.json.price_usdc})` : ''} to the payee the receipt names`);
     }
   } catch (e) { leg('settlement on chain', 'NOT_CHECKED', `RPC unreachable (${String(e.message).slice(0, 80)})`); }
 }
