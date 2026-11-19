@@ -201,12 +201,13 @@ else {
     else {
       // ERC-20 Transfer(from, to, value): topic 2 is the recipient. An unrelated successful transaction would not pay the payee.
       const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-      const payee = String(receipt.json.payee_wallet ?? '').toLowerCase().replace(/^0x/, '');
-      const paid = (j.result.logs ?? []).filter((l) => l.topics?.[0] === TRANSFER && payee && String(l.topics[2] ?? '').toLowerCase().endsWith(payee));
+      const payee = isHex(receipt.json.payee_wallet, 40) ? receipt.json.payee_wallet.toLowerCase().slice(2) : ''; // a full address or nothing: a short suffix must not match
+      const paid = (j.result.logs ?? []).filter((l) => l.topics?.[0] === TRANSFER && payee && String(l.topics[2] ?? '').toLowerCase() === '0x' + payee.padStart(64, '0'));
       const amount = paid.length ? BigInt(paid[0].data) : null;
       if (!payee) leg('settlement on chain', 'NOT_CHECKED', 'the transaction succeeded, but the receipt names no payee wallet to match it to');
       else if (!paid.length) leg('settlement on chain', 'FAILED', `the transaction succeeded but moved no tokens to the payee ${receipt.json.payee_wallet}`);
       else if (Number.isFinite(receipt.json.price_raw) && amount !== BigInt(receipt.json.price_raw)) leg('settlement on chain', 'FAILED', `the transaction paid the payee ${amount}, but the receipt says ${receipt.json.price_raw}`);
+      else if (!Number.isFinite(receipt.json.price_raw)) leg('settlement on chain', 'NOT_CHECKED', `the transaction paid the payee ${amount}, but the receipt states no price_raw to compare it with`);
       else leg('settlement on chain', 'VERIFIED', `block ${parseInt(j.result.blockNumber, 16)}: a successful token transfer of ${amount} to the payee the receipt names`);
     }
   } catch (e) { leg('settlement on chain', 'NOT_CHECKED', `RPC unreachable (${String(e.message).slice(0, 80)})`); }
