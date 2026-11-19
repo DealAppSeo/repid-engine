@@ -275,6 +275,19 @@ describe('a caught hallucination needs a quorum of FALSE verdicts', () => {
     expect(row().metadata.ground_truth_contradicted).toBe(true);
   });
 
+  test('12. the ground-truth contradiction is what forces the veto: two TRUE answers alone would be clean', async () => {
+    // Control for case 10, where the models already produced a veto: here they would not.
+    byModel = { [A]: T, [B]: T };
+    const clean = await run();
+    expect(clean.hal_decision).toBe('clean');
+    delete process.env.HAL_GROUND_TRUTH_GATE;
+    G.__fqGroundTruth = { verdict: 'contradicted', corroborating: [], contradicting: [{ id: 'made-up-fact' }], reason: 'the corpus records a different value', degraded: false };
+    byModel = { [A]: T, [B]: T };
+    const r = await run();
+    expectPenalised(r);
+    expect(row().metadata.ground_truth_contradicted).toBe(true);
+  });
+
   test('11. a DEGRADED ground-truth lookup is not a contradiction: all UNCERTAIN stays unpenalised', async () => {
     delete process.env.HAL_GROUND_TRUTH_GATE;
     G.__fqGroundTruth = { verdict: 'contradicted', corroborating: [], contradicting: [], reason: 'corpus unreachable', degraded: true };

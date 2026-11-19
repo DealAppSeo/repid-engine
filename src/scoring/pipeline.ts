@@ -1274,7 +1274,8 @@ export function quorumWouldBeDelta(
   const caught =
     raw === 'vetoed' &&
     (gates.penaltyRequiresQuorum ? quorumMet : true) &&
-    (process.env.HAL_PENALTY_REQUIRES_FALSE_QUORUM !== 'false' ? falseCount >= 2 : true);
+    // The ground-truth exception is the same as the live chain's, or shadow and live would disagree on it.
+    (process.env.HAL_PENALTY_REQUIRES_FALSE_QUORUM !== 'false' ? (falseCount >= 2 || q.signals['ground_truth_contradicted'] === true) : true);
   if (process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION !== 'false' && d < 0 && !caught) d = 0;
   if (d !== 0 && gates.purposeWeight !== 1) d = d * gates.purposeWeight;
   return { raw_decision: raw, scoring_decision: scoring, quorum_met: quorumMet, hal_delta: Math.round(d) };
