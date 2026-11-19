@@ -22,7 +22,9 @@
 // RPC configured, HAL not requested) is NOT_CHECKED with the reason. It is never a pass.
 // Exit 0: nothing FAILED and at least one leg VERIFIED. Exit 1: something FAILED. Exit 2: nothing could be checked.
 //
-// WHAT A GREEN RUN DOES NOT SHOW: that the proof is zero-knowledge (the score is a public input), that the
+// WHAT A GREEN RUN DOES NOT SHOW: that the proof is zero-knowledge (the score is a public input), that the proof
+// could only have been made for this agent (measured 2026-11-19 with the standalone verifier: about 1 in 230
+// random other agent ids verify the same bytes, and so does shifting score and threshold together), that the
 // proof was checked by anything other than this API (use the published verifier for that), or that scores are
 // fresh. It shows the public surface is up, answers in the documented shapes, and is internally consistent.
 
@@ -94,7 +96,7 @@ judge('zk proof read', proof, (j) => (typeof j.proof_bytes !== 'string' || j.pro
   : j.statement.agent_id !== uuid ? `the proof is for agent ${j.statement.agent_id}, not ${uuid}`
   : !(j.statement.repid_score >= j.statement.threshold) ? `statement says score ${j.statement.repid_score} >= ${j.statement.threshold}, which is false`
   : null),
-  (j) => `${j.scheme}: score ${j.statement.repid_score} >= ${j.statement.threshold} for this agent (the score is a public input, so this is a validity proof, not a hidden one); ${j.proof_bytes.length} chars`);
+  (j) => `${j.scheme}: score ${j.statement.repid_score} >= ${j.statement.threshold} and the statement names this agent (a validity proof: the score is a public input, and the proof bytes are only weakly tied to the agent id); ${j.proof_bytes.length} chars`);
 
 // 5. the API's own verifier accepts the real proof and refuses an altered statement
 if (proof.status === 200 && st && proof.json.proof_bytes) {
