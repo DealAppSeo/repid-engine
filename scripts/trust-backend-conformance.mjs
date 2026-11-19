@@ -14,6 +14,7 @@
 //   node scripts/trust-backend-conformance.mjs --hal                   # also spend 2 of the per-IP HAL budget
 //   RPC_URL=https://sepolia.base.org node scripts/trust-backend-conformance.mjs   # enables the chain readback
 //   --json                                                             # machine-readable legs on stdout
+//   --plant wrong-agent | altered-accepted | simulated-receipt         # see it fail: changes ONE answer in memory
 //
 // STANDALONE, like verify-trust-receipt.mjs beside it: no imports from this repo. Its one optional dependency is the
 // published proof verifier, for the leg that checks the proof on this machine. Otherwise it is
@@ -39,6 +40,15 @@ const BASE = (process.env.CONFORMANCE_BASE ?? 'https://repid-engine-production.u
 const AGENT = flag('--agent') ?? 'trinity-nexus';
 const OFFLINE = flag('--offline'), SAVE = flag('--save'), WANT_HAL = argv.includes('--hal'), JSON_OUT = argv.includes('--json');
 
+// --plant: a rehearsal of a broken backend. One answer is changed after it is fetched, the run is labelled, and the
+// exit code is never 0. It exists so a newcomer can watch the check refuse something.
+const PLANT = flag('--plant');
+const PLANTS = {
+  'wrong-agent': ['proof', (j) => { j.statement.agent_id = '00000000-0000-4000-8000-0000000000bb'; }, 'the proof is served for a different agent'],
+  'altered-accepted': ['verify_altered', (j) => { j.verified = true; delete j.error; }, 'the verify route accepts an altered statement'],
+  'simulated-receipt': ['receipt', (j) => { j.is_simulated = true; }, 'the receipt is marked simulated'],
+};
+if (PLANT && !PLANTS[PLANT]) { console.error(`unknown --plant ${PLANT}; choose one of: ${Object.keys(PLANTS).join(', ')}`); process.exit(2); }
 const legs = [];
 const leg = (name, outcome, detail) => legs.push({ name, outcome, detail });
 const TIERS = ['PROBATIONARY', 'EARNING', 'ESTABLISHED', 'AUTONOMOUS', 'VETERAN'];
@@ -53,7 +63,10 @@ const isHex = (v, n) => typeof v === 'string' && new RegExp(`^0x[0-9a-fA-F]{${n}
 async function get(key, path, body) {
   if (OFFLINE) {
     const f = join(OFFLINE, `${key}.json`);
-    return existsSync(f) ? { ...JSON.parse(readFileSync(f, 'utf8')), _why: null } : { status: 0, json: null, _why: `no fixture ${key}.json` };
+    if (!existsSync(f)) return { status: 0, json: null, _why: `no fixture ${key}.json` };
+    const saved = JSON.parse(readFileSync(f, 'utf8'));
+    if (PLANT && PLANTS[PLANT][0] === key && saved.json) PLANTS[PLANT][1](saved.json);
+    return { ...saved, _why: null };
   }
   const t0 = Date.now();
   let out;
@@ -63,6 +76,7 @@ async function get(key, path, body) {
     out = { status: r.status, ms: Date.now() - t0, json };
   } catch (e) { out = { status: 0, ms: Date.now() - t0, json: null, error: String(e?.message ?? e).slice(0, 120) }; }
   if (SAVE) { mkdirSync(SAVE, { recursive: true }); writeFileSync(join(SAVE, `${key}.json`), JSON.stringify(out, null, 1)); }
+  if (PLANT && PLANTS[PLANT][0] === key && out.json) PLANTS[PLANT][1](out.json);
   return { ...out, _why: out.status === 0 ? `unreachable (${out.error})` : null };
 }
 /** Run one leg. `check` returns null when it holds, or a sentence saying what is wrong. */
@@ -104,7 +118,7 @@ judge('zk proof read', proof, (j) => (typeof j.proof_bytes !== 'string' || j.pro
   : !(j.statement.repid_score >= j.statement.threshold) ? `statement says score ${j.statement.repid_score} >= ${j.statement.threshold}, which is false`
   : Number.isFinite(score) && score < j.statement.threshold ? `the proof says score >= ${j.statement.threshold}, but the current score is ${score}: the claim no longer holds`
   : null),
-  (j) => `${j.scheme}: score ${j.statement.repid_score} >= ${j.statement.threshold}${Number.isFinite(score) && score !== j.statement.repid_score ? ` (proved at ${j.statement.repid_score}; the score is ${score} now, still above the threshold)` : ''} and the statement names this agent (a validity proof: the score is a public input, and the proof bytes are only weakly tied to the agent id); ${j.proof_bytes.length} chars`);
+  (j) => `${j.scheme}: the statement says score ${j.statement.repid_score} >= ${j.statement.threshold}${Number.isFinite(score) && score !== j.statement.repid_score ? ` (proved at ${j.statement.repid_score}; the score is ${score} now, still above the threshold)` : ''} and names this agent; ${j.proof_bytes.length} chars`);
 
 // 5. the API's own verifier accepts the real proof and refuses an altered statement
 if (proof.status === 200 && st && proof.json.proof_bytes) {
@@ -132,6 +146,13 @@ if (proof.status === 200 && st && proof.json.proof_bytes) {
     } catch (e) { leg('zk verify (published verifier, run locally)', 'FAILED', `the verifier threw: ${String(e.message).slice(0, 100)}`); }
   }
 }
+
+// 5c. Two things a valid proof is often taken to mean, and this format does not establish. They are separate
+// lines so a green validity leg above is never read as either of them.
+if (proof.status === 200 && st) {
+  leg('zk agent binding', 'NOT_CHECKED', 'Agent binding not verified: this proof format ties the proof to its agent id only weakly (measured 2026-11-19 with the published verifier: about 1 in 230 random other agent ids verify the same bytes). The statement names the agent; the proof does not establish it.');
+  leg('zk private disclosure', 'NOT_CHECKED', 'Not offered by this proof format: the score and the threshold are public inputs. This is a validity proof of "score above threshold", not a zero-knowledge proof.');
+} else { leg('zk agent binding', 'NOT_CHECKED', 'no proof to assess'); leg('zk private disclosure', 'NOT_CHECKED', 'no proof to assess'); }
 
 // 6. ERC-8004 view agrees
 const erc = await get('erc8004', `/api/v1/erc8004/validate/${encodeURIComponent(AGENT)}`);
@@ -227,10 +248,11 @@ for (const c of HAL_CASES) {
 }
 
 const failed = legs.filter((l) => l.outcome === 'FAILED').length, verified = legs.filter((l) => l.outcome === 'VERIFIED').length;
-const code = failed ? 1 : verified ? 0 : 2;
-if (JSON_OUT) console.log(JSON.stringify({ base: OFFLINE ? `offline:${OFFLINE}` : BASE, agent: AGENT, at: new Date().toISOString(), verified, failed, not_checked: legs.length - verified - failed, exit: code, legs }, null, 1));
+const code = failed ? 1 : PLANT ? 3 : verified ? 0 : 2; // a planted run never exits 0: it is a rehearsal
+if (JSON_OUT) console.log(JSON.stringify({ planted: PLANT ?? null, base: OFFLINE ? `offline:${OFFLINE}` : BASE, agent: AGENT, at: new Date().toISOString(), verified, failed, not_checked: legs.length - verified - failed, exit: code, legs }, null, 1));
 else {
   console.log(`trust backend conformance · ${OFFLINE ? `offline fixtures ${OFFLINE}` : BASE} · agent ${AGENT}`);
+  if (PLANT) console.log(`  PLANTED DEFECT (--plant ${PLANT}): ${PLANTS[PLANT][2]}. This run is a rehearsal; a correct check must show FAILED below.`);
   for (const l of legs) console.log(`  ${l.outcome.padEnd(11)} ${l.name}: ${l.detail}`);
   console.log(`${verified} verified, ${failed} failed, ${legs.length - verified - failed} not checked`);
 }

@@ -66,6 +66,34 @@ describe('trust backend conformance (offline, synthetic answers)', () => {
     expect(r.legs.find((l) => l.name === 'settlement on chain')?.outcome).toBe('NOT_CHECKED');
   });
 
+  it('validity, agent binding and private disclosure are three separate lines, and only validity can be VERIFIED', () => {
+    const r = run(answers());
+    expect(r.legs.find((l) => l.name === 'zk verify (published verifier, run locally)')?.outcome).toBe('VERIFIED');
+    const binding = r.legs.find((l) => l.name === 'zk agent binding');
+    expect(binding?.outcome).toBe('NOT_CHECKED');
+    expect(binding?.detail).toMatch(/^Agent binding not verified/);
+    const disclosure = r.legs.find((l) => l.name === 'zk private disclosure');
+    expect(disclosure?.outcome).toBe('NOT_CHECKED');
+    expect(disclosure?.detail).toMatch(/public inputs/);
+  });
+
+  it.each(['wrong-agent', 'altered-accepted', 'simulated-receipt'])('--plant %s: a consistent backend with that one defect is refused, and the run says it was planted', (plant) => {
+    const dir = mkdtempSync(join(tmpdir(), 'conformance-'));
+    for (const [k, v] of Object.entries(answers())) writeFileSync(join(dir, `${k}.json`), JSON.stringify(v));
+    const r = spawnSync(process.execPath, [SCRIPT, '--offline', dir, '--plant', plant, '--json'], { encoding: 'utf8' });
+    rmSync(dir, { recursive: true, force: true });
+    const out = JSON.parse(r.stdout);
+    expect(out.planted).toBe(plant);
+    expect(out.failed).toBeGreaterThan(0);
+    expect(r.status).toBe(1);
+  });
+
+  it('an unknown --plant is refused before anything runs', () => {
+    const r = spawnSync(process.execPath, [SCRIPT, '--offline', tmpdir(), '--plant', 'nope'], { encoding: 'utf8' });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/unknown --plant/);
+  });
+
   it.each<[string, (a: Answers) => void, string]>([
     ['a proof that belongs to another agent', (a) => { a.proof.json.statement.agent_id = '00000000-0000-4000-8000-0000000000bb'; }, 'zk proof read'],
     ['a proof whose statement is false', (a) => { a.proof.json.statement.threshold = ST.repid_score + 1; }, 'zk proof read'],
