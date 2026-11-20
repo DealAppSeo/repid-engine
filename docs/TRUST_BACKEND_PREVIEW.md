@@ -35,7 +35,7 @@ $env:RPC_URL = 'https://sepolia.base.org'
 node scripts/trust-backend-conformance.mjs
 ```
 
-In bash, `RPC_URL=...` on a line of its own does nothing for the next command; the chain lines stay not checked and nothing warns you.
+In bash, `RPC_URL=...` on a line of its own does nothing for the next command; the chain lines stay not checked and nothing warns you. In PowerShell the variable stays set for the rest of that window, so later runs there also read the chain and their counts differ from the ones in this guide; `Remove-Item Env:RPC_URL` clears it.
 
 The counts come from live data, so a line's wording can change (for example when the agent's score has moved since its proof was made). `0 failed` is what a healthy backend gives; a FAILED line is a finding to read, not noise. This guide records what was seen on the date above, not a promise about every later run or every agent.
 
@@ -65,6 +65,8 @@ This does not show that a proof is tied to its agent. The check fails for this o
 | public receipt | The latest receipt is not marked simulated and lists proofs. The line prints "real settlement"; it means "not simulated" | Real money, or which network: this line does not read the chain. The settlement evidence is on Base Sepolia, a test network (next line, with `RPC_URL`) |
 | settlement on chain | The receipt's transaction exists on the chain the RPC serves (the line prints the chain id; 84532 is Base Sepolia, a test network), succeeded, and transferred the receipt's amount, in the token's base units, to the receipt's payee | A mainnet payment, or which token: the line checks the transfer, not the token contract |
 | HAL (two lines, only with `--hal`) | A known-false claim is not returned clean; an unknowable claim is returned abstain or flagged | Accuracy in general: two claims are a smoke test |
+
+The `public receipt` line ends with "run verify-trust-receipt.mjs for the hashes". That is `scripts/verify-trust-receipt.mjs`, a separate check that this guide does not cover.
 
 Three outcomes per line: VERIFIED, NOT_CHECKED (with the reason) and FAILED. NOT_CHECKED is never a pass. Exit code 0 only when nothing failed and at least one line verified. Exit code 1: something failed. Exit code 2: nothing could be checked, or an unknown `--plant` name. Exit code 3: a `--plant` run in which nothing failed (a planted run never exits 0).
 
@@ -103,7 +105,7 @@ A separate, smaller example, using the published Inspect command against one pub
 
 Source run: https://github.com/DealAppSeo/trustshell/actions/runs/44544121933
 
-Supported case. Put exactly this one line in `claims.txt`:
+Supported case. Put exactly this one line in a plain-text file named `claims.txt` (in PowerShell, `Set-Content -Encoding ascii claims.txt '...'`; PowerShell's `>` writes another encoding, which was not tested):
 
 ```
 The check workflow succeeded on commit d9911681e9a2, run 44544121933.
@@ -113,7 +115,7 @@ The check workflow succeeded on commit d9911681e9a2, run 44544121933.
 npx @hyperdag/trustshell@1.9.3 check https://github.com/DealAppSeo/trustshell/actions/runs/44544121933 --claims-file claims.txt
 ```
 
-Expected, as observed on 2026-11-20: exit code 0, `Claims: 3 supported · 0 contradicted · 0 not checked`, and `SUPPORTED` for `commit d9911681e9a2`.
+`npx` may first ask to confirm the download. Expected, as observed on 2026-11-20: exit code 0, `Claims: 3 supported · 0 contradicted · 0 not checked`, and `SUPPORTED` for `commit d9911681e9a2`.
 
 Rejection case. Change the commit in `claims.txt` to `bc549681bf05` and run the same command. Expected: exit code 1, `Claims: 1 supported · 1 contradicted · 1 not checked`, and `CONTRADICTED` for `commit bc549681bf05` ("the inspected run is on d9911681e9a2").
 
