@@ -88,6 +88,20 @@ describe('trust backend conformance (offline, synthetic answers)', () => {
     expect(r.status).toBe(1);
   });
 
+  it('--plant wrong-agent: the verify lines failing for another agent id is never reported as agent binding', () => {
+    // A newcomer reads "the proof fails for a different agent" as "the proof is tied to its agent". It is not:
+    // the binding line must still say so in the same run.
+    const dir = mkdtempSync(join(tmpdir(), 'conformance-'));
+    for (const [k, v] of Object.entries(answers())) writeFileSync(join(dir, `${k}.json`), JSON.stringify(v));
+    const r = spawnSync(process.execPath, [SCRIPT, '--offline', dir, '--plant', 'wrong-agent', '--json'], { encoding: 'utf8' });
+    rmSync(dir, { recursive: true, force: true });
+    const legs: Leg[] = JSON.parse(r.stdout).legs;
+    expect(legs.find((l) => l.name === 'zk proof read')?.outcome).toBe('FAILED');
+    const binding = legs.find((l) => l.name === 'zk agent binding');
+    expect(binding?.outcome).toBe('NOT_CHECKED');
+    expect(binding?.detail).toMatch(/^Agent binding not verified/);
+  });
+
   it('an unknown --plant is refused before anything runs', () => {
     const r = spawnSync(process.execPath, [SCRIPT, '--offline', tmpdir(), '--plant', 'nope'], { encoding: 'utf8' });
     expect(r.status).toBe(2);
