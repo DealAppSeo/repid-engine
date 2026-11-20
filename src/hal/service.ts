@@ -408,6 +408,12 @@ export class HalService {
               // quorum of these before it records a caught hallucination; absent means 0 there.
               ...(fc.false_families !== undefined ? { false_families: fc.false_families } : {}),
               ...(fc.false_providers !== undefined ? { false_providers: fc.false_providers } : {}),
+              // Explicit TRUE verdicts, same two units, and the corpus confirmation. Counts and a boolean,
+              // record-only: the pipeline writes them beside a reward and nothing scores on them.
+              ...(fc.true_families !== undefined ? { true_families: fc.true_families } : {}),
+              ...(fc.true_providers !== undefined ? { true_providers: fc.true_providers } : {}),
+              ...(fc.ground_truth_corroborated ? { ground_truth_corroborated: true } : {}),
+              ...(fc.retrieval_corroborated ? { retrieval_corroborated: true } : {}),
               ...(fc.ground_truth_contradicted ? { ground_truth_contradicted: true } : {}),
               // What the ground-truth gate did to the decision word (verdict, before, after). Record only.
               ...(fc.ground_truth_gate ? { ground_truth_gate: fc.ground_truth_gate } : {}),

@@ -280,6 +280,24 @@ export interface FactCheckResult {
   false_families?: number;
   false_providers?: number;
   /**
+   * The mirror counts: distinct FAMILIES (true_families) and PROVIDERS (true_providers) that answered
+   * with an explicit TRUE verdict. A 'clean' decision can be reached with nobody having said TRUE
+   * (low score, or the corpus lifting a veto), so the scoring pipeline records these beside every
+   * reward. Counts only. RECORD-KEEPING: nothing reads them to score (see pipeline.ts, TRUE-quorum shadow).
+   */
+  true_families?: number;
+  true_providers?: number;
+  /**
+   * True when Trinity's own ground-truth corpus CORROBORATED the claim (lookup not degraded). The one
+   * deterministic confirmation the TRUE-quorum shadow record accepts in place of TRUE model verdicts.
+   */
+  ground_truth_corroborated?: boolean;
+  /**
+   * True when the retrieval slow path graded the claim Correct (at least two independent web sources
+   * corroborate it) and the decision ended 'clean'. The mirror of retrieval_contradicted. Record-only.
+   */
+  retrieval_corroborated?: boolean;
+  /**
    * True when Trinity's own ground-truth corpus CONTRADICTED the claim (and the lookup was not degraded). That is
    * an explicit finding of falsehood from a deterministic source, so the penalty rule accepts it in place of a
    * quorum of FALSE model verdicts: the models may all say UNCERTAIN about an internal fact the corpus records.
@@ -1619,6 +1637,7 @@ export async function factCheck(
   // Also emits the RRL scoring-hook record at the CRAG decision point (log only — no RepID mutation). ---
   let retrievalField: FactCheckResult['retrieval'];
   let retrievalContradicted = false;
+  let retrievalCorroborated = false;
   let rrlField: RrlHookRecord | undefined;
   if (process.env.HAL_RETRIEVAL_ENABLED === 'true') {
     const slowStart = Date.now();
@@ -1651,6 +1670,7 @@ export async function factCheck(
         if (evidence.length > 0) {
           crag = await gradeEvidence(deliverable, evidence);
           retrievalContradicted = crag.grade === 'Incorrect';
+          retrievalCorroborated = crag.grade === 'Correct';
           // REFINE: a confident CRAG grade (Correct/Incorrect, each already gated on ≥2 independent
           // domains) overrides the fast-path decision. Ambiguous never changes the decision (only sets
           // the disclosure flag). hal_score and the canonical comma-BFT lib (src/hal/lib/*) are untouched.
@@ -1777,9 +1797,13 @@ export async function factCheck(
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, independent_hosts, agreement, degraded: quorumCount < 2, latency_ms,
     false_families: falseFams.length, false_providers: ok.filter((v) => v.verdict === 'FALSE').length,
+    true_families: trueFams.length, true_providers: ok.filter((v) => v.verdict === 'TRUE').length,
+    ...(groundTruthField && !groundTruthField.degraded && groundTruthField.verdict === 'corroborated' ? { ground_truth_corroborated: true } : {}),
     ...(groundTruthField && !groundTruthField.degraded && groundTruthField.verdict === 'contradicted' ? { ground_truth_contradicted: true } : {}),
     // Only while the decision still stands as a veto: a later gate (ground truth corroborating) may have lifted it.
     ...(retrievalContradicted && decision === 'vetoed' ? { retrieval_contradicted: true } : {}),
+    // Only while the decision still stands as clean: a later gate (ground truth contradicting) may have vetoed it.
+    ...(retrievalCorroborated && decision === 'clean' ? { retrieval_corroborated: true } : {}),
     quorum, provider_health: { attempted: attemptedForSummary, succeeded: providers_used, failed, ...(late.length ? { late } : {}), ...skipped },
     ...(groundTruthField ? { ground_truth: groundTruthField } : {}),
     ...(groundTruthGate ? { ground_truth_gate: groundTruthGate } : {}),

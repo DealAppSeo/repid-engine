@@ -77,6 +77,7 @@ keys. Representative names (from INFRA_INVENTORY §11):
 | `HAL_ENRICHMENT_ENABLED` | no | gate; default OFF. |
 | `HAL_PENALTY_REQUIRES_QUORUM` | no | default ON (fail-safe; needs ≥2 providers). |
 | `HAL_PENALTY_REQUIRES_FALSE_QUORUM` | no | default ON, reversible. A caught hallucination (and its penalty) needs ≥2 families that answered FALSE, not just ≥2 that answered: before 2026-11-19 three UNCERTAIN answers scored exactly the veto threshold and were penalised as a hallucination. The exact string `false` restores that old rule. Read from env only. |
+| `HAL_TRUE_QUORUM_SHADOW_RECORD` | no | default ON, record-only. On each scored row, writes whether ≥2 families answered TRUE (or the ground-truth corpus corroborated), and on a paid row what the delta would be if a reward needed that. It changes no decision, delta or balance and has no enforce mode. The exact string `false` stops the recording. |
 | `HAL_S2_ENABLE_*` | no | per-provider strictness-2 enable flags (memory: prod HAL quorum gate). |
 | `ESCALATION_CONTRACT` | no | service-contract poll gate. **Keep OFF on standby until activation** (loop revival is Sean-only). |
 | `CASCADE_SETTLEMENT_ENABLED` | no | cascade settlement worker gate. |
