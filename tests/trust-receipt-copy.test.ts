@@ -183,7 +183,8 @@ describe('the validators record is derived from the contract, families only', ()
       settled_at: null, settlement_tx: null, settlement_url: null,
       paid_before_delivery: null, payment_status: 'authorized_not_settled',
     }));
-    expect(html).toContain('The money was promised, not paid');
+    expect(html).toContain('Payment authorised, not confirmed');
+    expect(html).not.toMatch(/Nothing moved|promised, not paid/); // an in-flight release may have moved it: say only what is recorded
     expect(html).toContain('Payment not confirmed');
     expect(html).not.toMatch(/moved up front|Payment settled|settlement was recorded|The settlement record/);
   });

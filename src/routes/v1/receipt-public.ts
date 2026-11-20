@@ -50,10 +50,10 @@ function payFlow(r: TrustReceipt): string {
        <p class="muted">Delivery-gated settlement landed on 2026-08-01. This exchange predates it, so the buyer carried the risk. Shown rather than smoothed over.</p>`);
   }
   if (r.payment_status === 'authorized_not_settled' || r.payment_status === 'voided' || r.payment_status === 'none') {
-    return step(2, r.payment_status === 'none' ? 'No payment on record' : 'The money was promised, not paid',
+    return step(2, r.payment_status === 'none' ? 'No payment on record' : 'Payment authorised, not confirmed',
       r.payment_status === 'none'
         ? '<p class="muted">No payment record exists for this exchange.</p>'
-        : `<p>The buyer signed a payment authorisation. Nothing moved.</p>
+        : `<p>The buyer signed a payment authorisation. No transfer is on record.</p>
        <p class="muted">An EIP-3009 authorisation is a signature, not a transfer. ${r.payment_status === 'voided' ? 'This one was voided.' : 'No transfer is on record for it.'}</p>`);
   }
   if (r.paid_before_delivery === null) {
