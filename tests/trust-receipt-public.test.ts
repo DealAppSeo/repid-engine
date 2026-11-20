@@ -110,6 +110,12 @@ describe('public trust receipt', () => {
       // among them. Read from result->validators alone; the names and the rest of
       // the result are not published.
       'validators',
+
+      // ── ADDED 2026-11-20: is a payment on record at all ─────────────────────
+      // 'settled' | 'authorized_not_settled' | 'voided' | 'simulated' | 'none', from the settlement
+      // row's own status. Nothing new is disclosed: it says in one word what settlement_tx,
+      // is_simulated and the caveats already say.
+      'payment_status',
     ]);
     // A new field is not automatically safe to publish — this fails until
     // someone decides it is, which is the point.
@@ -192,6 +198,76 @@ describe('public trust receipt', () => {
       const r = await buildTrustReceipt('c1');
       expect(r!.paid_before_delivery).toBe(true);
       expect(r!.caveats.join(' ')).toMatch(/moved BEFORE delivery.*52s/);
+    });
+  });
+
+  /**
+   * `paid_before_delivery` is an ORDERING of a payment against a delivery. With no payment on record
+   * there is nothing to order, and the receipt must not say money moved. A held authorisation whose
+   * release failed has delivered_at null and created_at = when the signature was taken; falling back
+   * to created_at reported such an exchange as "paid before delivery".
+   */
+  describe('the payment label comes from the settlement record, never from a held authorisation', () => {
+    const set = (contract: object, settlement: object | null) => Object.assign(dbMock.__rows, {
+      service_contracts: { ...(rows.service_contracts as object), ...contract },
+      x402_settlements: settlement,
+    });
+    afterEach(() => Object.assign(dbMock.__rows, rows));
+    const ESCROW = '2026-11-20T07:23:05.254Z';
+    const FULFILLED = '2026-11-20T07:23:07.643Z';
+
+    it('(a) fulfilled, authorised, NOT settled: not reported as paid', async () => {
+      set({ status: 'fulfilled', settled_at: null, fulfilled_at: FULFILLED },
+        { tx_hash: null, is_simulated: false, status: 'authorized', created_at: ESCROW, delivered_at: null });
+      const r = await buildTrustReceipt('c1');
+      expect(r!.paid_before_delivery).toBeNull();
+      expect(r!.payment_status).toBe('authorized_not_settled');
+      expect(r!.settlement_tx).toBeNull();
+      expect(r!.caveats.join(' ')).toMatch(/Payment is NOT confirmed/);
+      expect(r!.caveats.join(' ')).not.toMatch(/money moved BEFORE delivery|Payment settled/);
+    });
+
+    it('(b) settled with a transaction after delivery: paid on delivery', async () => {
+      set({ fulfilled_at: FULFILLED },
+        { tx_hash: '0xsettle', is_simulated: false, status: 'settled', created_at: ESCROW, delivered_at: '2026-11-20T07:23:40.000Z' });
+      const r = await buildTrustReceipt('c1');
+      expect(r!.payment_status).toBe('settled');
+      expect(r!.paid_before_delivery).toBe(false);
+    });
+
+    it('(c) settled at escrow, before delivery: still reported as paid before delivery', async () => {
+      set({ fulfilled_at: '2026-07-23T04:33:23.538Z' },
+        { tx_hash: '0xsettle', is_simulated: false, status: 'settled', created_at: '2026-07-23T04:32:31.723Z', delivered_at: null });
+      const r = await buildTrustReceipt('c1');
+      expect(r!.payment_status).toBe('settled');
+      expect(r!.paid_before_delivery).toBe(true);
+      expect(r!.caveats.join(' ')).toMatch(/moved BEFORE delivery.*52s/);
+    });
+
+    it('(d) simulated: the ordering is derived as before, and it is labelled simulated', async () => {
+      set({ fulfilled_at: '2026-06-01T00:01:00.000Z' },
+        { tx_hash: '0xsim', is_simulated: true, status: 'settled', created_at: '2026-06-01T00:00:00.000Z', delivered_at: null });
+      const r = await buildTrustReceipt('c1');
+      expect(r!.payment_status).toBe('simulated');
+      expect(r!.is_simulated).toBe(true);
+      expect(r!.paid_before_delivery).toBe(true);
+      expect(r!.caveats.join(' ')).toMatch(/SIMULATED/);
+    });
+
+    it('(e) no payment record at all: none, and no ordering', async () => {
+      set({ status: 'fulfilled', settled_at: null, fulfilled_at: FULFILLED }, null);
+      const r = await buildTrustReceipt('c1');
+      expect(r!.payment_status).toBe('none');
+      expect(r!.paid_before_delivery).toBeNull();
+      expect(r!.caveats.join(' ')).toMatch(/No x402 settlement is on record/);
+    });
+
+    it('a voided authorisation is not a payment', async () => {
+      set({ status: 'disputed', settled_at: null, fulfilled_at: FULFILLED },
+        { tx_hash: null, is_simulated: false, status: 'voided', created_at: ESCROW, delivered_at: null });
+      const r = await buildTrustReceipt('c1');
+      expect(r!.payment_status).toBe('voided');
+      expect(r!.paid_before_delivery).toBeNull();
     });
   });
 

@@ -71,6 +71,17 @@ export interface TrustReceipt {
    */
   paid_before_delivery: boolean | null;
   /**
+   * What the settlement record says about the payment itself. `paid_before_delivery` is an ordering
+   * and only means something once a payment is on record, so it is null unless this is 'settled' or
+   * 'simulated'.
+   *
+   * 'authorized_not_settled' = the buyer's signed authorisation is held and no transfer is recorded
+   * (also a release that failed). Until 2026-11-20 such a row was reported as
+   * `paid_before_delivery: true`: with no broadcast time the ordering fell back to the row's creation
+   * time, which is when the authorisation was taken.
+   */
+  payment_status: 'settled' | 'authorized_not_settled' | 'voided' | 'simulated' | 'none';
+  /**
    * The reputation movement this exchange caused, decomposed far enough to be
    * checked from outside.
    *
@@ -242,9 +253,25 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
   //
   // Fall back to created_at when delivered_at is null: rows written before the
   // deferred path existed settled on creation, so for those the two coincide.
-  const paidAtRaw = settlement?.delivered_at ?? settlement?.created_at ?? null;
+  //
+  // That fallback is only sound for a row that records a payment. A held authorisation (status
+  // 'authorized', or 'settling' after a failed release) has no delivered_at either, and its
+  // created_at is the moment NOTHING moved; reading it as the payment time made an unpaid exchange
+  // say "paid before delivery". So the ordering is derived only when the row says settled.
+  const payment_status: TrustReceipt['payment_status'] =
+    !settlement ? 'none'
+    : settlement.is_simulated === true || settlement.status === 'simulated' ? 'simulated'
+    : settlement.status === 'settled' ? 'settled'
+    : settlement.status === 'voided' ? 'voided'
+    : 'authorized_not_settled';
+  const hasPayment = payment_status === 'settled' || payment_status === 'simulated';
+  const paidAtRaw = hasPayment ? settlement?.delivered_at ?? settlement?.created_at ?? null : null;
   let paid_before_delivery: boolean | null = null;
-  if (paidAtRaw && c.fulfilled_at) {
+  if (settlement && !hasPayment) {
+    caveats.push(payment_status === 'voided'
+      ? 'The payment authorisation was voided. No payment was made on this exchange.'
+      : 'Payment is NOT confirmed on this exchange: the buyer signed an authorisation, and no settlement transaction is on record. This receipt does not say the provider was paid.');
+  } else if (paidAtRaw && c.fulfilled_at) {
     const paidAt = new Date(paidAtRaw);
     const deliveredAt = new Date(c.fulfilled_at);
     paid_before_delivery = paidAt < deliveredAt;
@@ -310,6 +337,7 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
     payee_wallet: paid ? getAddress(paid.toAddress.toLowerCase()) : null,
     wallets_source: paid ? 'settlement_record' : null,
     paid_before_delivery,
+    payment_status,
     // SHADOW ROWS ARE NOT REPUTATION. `is_shadow` rows record what a would-be policy WOULD have
     // paid; the applier forces their applied delta to 0, so they moved nothing. Published here
     // they read as real gains ("+15 1371 -> 1371") and the receipt's own verifier could not
