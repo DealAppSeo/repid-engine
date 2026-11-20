@@ -2,7 +2,7 @@
 
 Three made-up cases, one command. It shows the difference between a model panel's **opinion** of an AI's reply and an **independent check** of the AI's decision against an answer key.
 
-Fixture replay. No model is called. No key, no network, no database. Nothing is written, so no reputation score moves. Benchmark-style result: experimental.
+Fixture replay. No model is called. No key, no network, no database. Nothing is written, so no reputation score moves. "RepID" in the output is this project's reputation score for an agent; the demo never changes one. "Benchmark-style result: experimental" means the key check is the kind of grading used on test questions with a known answer; in the engine it is kept in a separate experimental record and is not how reputation is earned today.
 
 ## Run it
 
@@ -22,7 +22,7 @@ Then, the same line in bash and in Windows PowerShell 5.1:
 npx ts-node --transpile-only scripts/demo/checked-answer-demo.ts
 ```
 
-It takes about 6 to 12 seconds (run in both shells on 2026-11-20). Add `--json` for the same data as JSON, or `--verbose` to also see the lines the panel code logged.
+It takes about 5 to 12 seconds (run in both shells on 2026-11-20). Add `--json` for the same data as JSON, or `--verbose` to also see the lines the panel code logged.
 
 In Windows PowerShell 5.1 a successful run also shows one block of red text that begins `node.exe : [family-registry] EXCLUDED 1 ambiguous seed entry`. It is not a failure. The engine code prints one notice on the error stream when it loads, and PowerShell 5.1 colours anything on that stream red and wraps it as an error record. The three cases, the table and `RESULT:` are on the normal output, and the exit code is still 0 (check with `$LASTEXITCODE`). To hide the notice, add `2>$null` to the end of the line. In bash the same notice is a single plain line.
 
@@ -49,6 +49,10 @@ Case C is the other half. With no key, the panel's opinion is the only signal, a
 ## Expected output
 
 ```
+Fixture replay. No model was called. Benchmark-style result: experimental.
+Privacy: everything stays on this machine. In a live run a model provider would receive the reply text only.
+This output keeps only the lines shown below.
+
 --- Case A ---
 Task: Is this statement true? Answer pass (true) or veto (false): "Water boils at 100 degrees Celsius at sea-level pressure."
 AI answered: pass (confidence 0.9). Reason: "At standard sea-level pressure the boiling point of water is 100 degrees Celsius."
@@ -112,4 +116,5 @@ Everything stays on this machine. In a live run, a model provider would receive 
 ## Where to go next
 
 - `docs/TRUST_BACKEND_PREVIEW.md`: the keyless conformance run against the public endpoints.
-- The published Inspect command, in the same guide under "For a maintainer: one check you can repeat".
+- The published Inspect command, in `docs/TRUST_BACKEND_PREVIEW.md` under "For a maintainer: one check you can repeat".
+- There is no live-panel version of this demo to run. A live panel call costs money and is not part of this page.
