@@ -105,7 +105,7 @@ A separate, smaller example, using the published Inspect command against one pub
 
 Source run: https://github.com/DealAppSeo/trustshell/actions/runs/44544121933
 
-Supported case. Put exactly this one line in a plain-text file named `claims.txt` (in PowerShell, `Set-Content -Encoding ascii claims.txt '...'`; PowerShell's `>` writes another encoding, which was not tested):
+Supported case. Put exactly this one line in a plain-text file named `claims.txt` (in PowerShell, `Set-Content -Encoding ascii claims.txt '...'`; in bash, `printf '%s\n' '...' > claims.txt`; a final line break is fine; PowerShell's `>` writes another encoding, which was not tested):
 
 ```
 The check workflow succeeded on commit d9911681e9a2, run 44544121933.
@@ -115,9 +115,9 @@ The check workflow succeeded on commit d9911681e9a2, run 44544121933.
 npx @hyperdag/trustshell@1.9.3 check https://github.com/DealAppSeo/trustshell/actions/runs/44544121933 --claims-file claims.txt
 ```
 
-`npx` may first ask to confirm the download. Expected, as observed on 2026-11-20: exit code 0, `Claims: 3 supported · 0 contradicted · 0 not checked`, and `SUPPORTED` for `commit d9911681e9a2`.
+`npx` may first ask to confirm the download; answer `y`, or write `npx --yes` in place of `npx` to skip the question. Expected, as observed on 2026-11-20: exit code 0, `Claims: 3 supported · 0 contradicted · 0 not checked`, and `SUPPORTED` for `commit d9911681e9a2`.
 
-Rejection case. Change the commit in `claims.txt` to `bc549681bf05` and run the same command. Expected: exit code 1, `Claims: 1 supported · 1 contradicted · 1 not checked`, and `CONTRADICTED` for `commit bc549681bf05` ("the inspected run is on d9911681e9a2").
+Rejection case. Change the commit in `claims.txt` to `bc549681bf05` and run the same command. Expected: exit code 1, `Claims: 1 supported · 1 contradicted · 1 not checked`, and `CONTRADICTED` for `commit bc549681bf05` ("the inspected run is on d9911681e9a2"). The one "not checked" claim is `The check workflow succeeded`: once the sentence cites a commit that is not the run's, its outcome is not compared with this run. Not checked is not a pass.
 
 What it shows: GitHub's own record of that run matches, or does not match, the commit the sentence cites. The output says so itself: it is a platform record, not signed, and not a judgement that the code is correct.
 
