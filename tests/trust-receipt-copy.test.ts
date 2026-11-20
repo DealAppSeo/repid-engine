@@ -47,7 +47,7 @@ function receipt(over: Partial<TrustReceipt> = {}): TrustReceipt {
     contract_id: C, settled_at: '2026-10-15T12:00:10Z', price_usdc: '$0.10', price_raw: 100000,
     buyer: 'trinity-nexus', provider: 'trinity-apm', negotiated: false, competing_bids: null,
     won_on_price: null, uncontested: null, settlement_tx: '0xsettle', settlement_url: 'https://sepolia.basescan.org/tx/0xsettle',
-    is_simulated: false, payer_wallet: null, payee_wallet: null, wallets_source: null, paid_before_delivery: false,
+    is_simulated: false, payer_wallet: null, payee_wallet: null, wallets_source: null, paid_before_delivery: false, payment_status: 'settled',
     reputation_events: [{ agent: 'trinity-apm', event: 'SERVICE_FULFILLED', delta: 15, from: 1356, to: 1371, decay: null }],
     onchain_tx: '0xrep', onchain_url: 'https://sepolia.basescan.org/tx/0xrep', onchain_repid: 1371, onchain_link_is_proven: true,
     zk_proofs: [], work_statement_hash: WSH, work_statement: null, criterion_ratings: null, buyer_satisfaction_score: null,
@@ -175,5 +175,16 @@ describe('the validators record is derived from the contract, families only', ()
   it('no validators key on the result: null, not an empty "checked" record', async () => {
     seed(null, []);
     expect((await realBuild(C))!.validators).toBeNull();
+  });
+
+  // A fulfilled exchange whose payment was authorised and never released. The page must not narrate a payment.
+  it('an unsettled exchange is not narrated as paid, before or after delivery', async () => {
+    const html = await page(receipt({
+      settled_at: null, settlement_tx: null, settlement_url: null,
+      paid_before_delivery: null, payment_status: 'authorized_not_settled',
+    }));
+    expect(html).toContain('The money was promised, not paid');
+    expect(html).toContain('Payment not confirmed');
+    expect(html).not.toMatch(/moved up front|Payment settled|settlement was recorded|The settlement record/);
   });
 });

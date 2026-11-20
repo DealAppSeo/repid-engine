@@ -49,6 +49,13 @@ function payFlow(r: TrustReceipt): string {
       `<p>Payment settled when the contract was escrowed, <strong>before</strong> the work was delivered.</p>
        <p class="muted">Delivery-gated settlement landed on 2026-08-01. This exchange predates it, so the buyer carried the risk. Shown rather than smoothed over.</p>`);
   }
+  if (r.payment_status === 'authorized_not_settled' || r.payment_status === 'voided' || r.payment_status === 'none') {
+    return step(2, r.payment_status === 'none' ? 'No payment on record' : 'The money was promised, not paid',
+      r.payment_status === 'none'
+        ? '<p class="muted">No payment record exists for this exchange.</p>'
+        : `<p>The buyer signed a payment authorisation. Nothing moved.</p>
+       <p class="muted">An EIP-3009 authorisation is a signature, not a transfer. ${r.payment_status === 'voided' ? 'This one was voided.' : 'No transfer is on record for it.'}</p>`);
+  }
   if (r.paid_before_delivery === null) {
     return step(2, 'Payment timing could not be established',
       `<p class="muted">One of the two timestamps needed to say whether payment preceded delivery is missing, so this receipt does not claim either way.</p>`);
@@ -70,6 +77,10 @@ function paidStep(r: TrustReceipt): string {
       '<p class="muted">As the settlement record names them. This page does not re-read the transfer on chain: check the transaction below.</p>'
     : '';
   // As recorded: this page does not re-read the transfer, and a simulated row moved nothing.
+  if (r.payment_status === 'authorized_not_settled' || r.payment_status === 'voided' || r.payment_status === 'none') {
+    return step(4, 'Payment not confirmed',
+      `<p><strong>${esc(r.price_usdc)} USDC</strong> was the agreed price. No settlement transaction is on record, so this receipt does not say the provider was paid.</p>`);
+  }
   const title = r.is_simulated !== false ? 'The payment (simulated: nothing moved)'
     : r.paid_before_delivery === false ? 'Then the settlement was recorded' : 'The settlement record';
   return step(4, title, `<p><strong>${esc(r.price_usdc)} USDC</strong> on Base Sepolia.</p>${wallets}${tx}${sim}`);
