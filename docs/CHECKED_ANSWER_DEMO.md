@@ -22,7 +22,9 @@ Then, the same line in bash and in Windows PowerShell 5.1:
 npx ts-node --transpile-only scripts/demo/checked-answer-demo.ts
 ```
 
-It takes about 12 seconds. Add `--json` for the same data as JSON, or `--verbose` to also see the lines the panel code logged.
+It takes about 6 to 12 seconds (run in both shells on 2026-11-20). Add `--json` for the same data as JSON, or `--verbose` to also see the lines the panel code logged.
+
+In Windows PowerShell 5.1 a successful run also shows one block of red text that begins `node.exe : [family-registry] EXCLUDED 1 ambiguous seed entry`. It is not a failure. The engine code prints one notice on the error stream when it loads, and PowerShell 5.1 colours anything on that stream red and wraps it as an error record. The three cases, the table and `RESULT:` are on the normal output, and the exit code is still 0 (check with `$LASTEXITCODE`). To hide the notice, add `2>$null` to the end of the line. In bash the same notice is a single plain line.
 
 Exit code 0 means all three cases gave the expected outcome, the database stand-in was never called and no network call was attempted. Anything else is non-zero.
 
