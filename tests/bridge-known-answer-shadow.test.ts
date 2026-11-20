@@ -4,7 +4,10 @@
  * Known-answer (T12) tasks carry metadata.case_id. In `shadow` mode the bridge still runs HAL and
  * still writes the HAL_SCORE_EVENT row (provider-health telemetry continues), but the row is
  * is_shadow: it moves no RepID, never touches repid_agents directly, queues no proof, and queues no
- * peer verification. Unset / 'canonical' is today's behaviour byte for byte (D-124).
+ * peer verification. The switch FAILS CLOSED: only 'canonical' moves RepID for these rows; unset,
+ * empty and unrecognised values are all shadow. (Until 2026-11-20 unset meant canonical, and this
+ * file asserted it; those assertions were changed with the default.) A task with no case_id never
+ * consults the switch.
  *
  * Ruler: the REAL bridge and the REAL runScoreEvent, with only src/db mocked. The assertions are on
  * the exact payload handed to repid_score_events.insert and on which other tables were touched.
@@ -177,13 +180,21 @@ afterEach(() => {
 });
 
 describe('resolveKnownAnswerMode', () => {
-  test.each([undefined, '', '  ', 'canonical', 'CANONICAL', ' Canonical '])('%p → canonical, recognised', (raw) => {
+  // Case and surrounding whitespace are ignored, as they always were; nothing else spells canonical.
+  test.each(['canonical', 'CANONICAL', ' Canonical '])('%p → canonical, recognised', (raw) => {
     expect(resolveKnownAnswerMode(raw)).toEqual({ mode: 'canonical', recognised: true });
+  });
+  test.each([undefined, '', '  ', '\t\n'])('%p (unset / empty / whitespace) → shadow, NOT recognised', (raw) => {
+    expect(resolveKnownAnswerMode(raw)).toEqual({ mode: 'shadow', recognised: false });
+  });
+  test('with no argument it reads the environment, and an absent variable is shadow', () => {
+    delete process.env[ENV];
+    expect(resolveKnownAnswerMode()).toEqual({ mode: 'shadow', recognised: false });
   });
   test.each(['shadow', 'SHADOW', ' shadow '])('%p → shadow, recognised', (raw) => {
     expect(resolveKnownAnswerMode(raw)).toEqual({ mode: 'shadow', recognised: true });
   });
-  test.each(['enfroce', 'off', 'true', '1'])('%p → shadow, NOT recognised (fail toward not moving RepID)', (raw) => {
+  test.each(['enfroce', 'off', 'true', '1', 'canonical!', 'canon', 'live'])('%p → shadow, NOT recognised (fail toward not moving RepID)', (raw) => {
     expect(resolveKnownAnswerMode(raw)).toEqual({ mode: 'shadow', recognised: false });
   });
 });
@@ -198,8 +209,12 @@ describe('isKnownAnswerTask', () => {
   });
 });
 
-describe('bridge: canonical is today, exactly (witness for every shadow absence below)', () => {
-  test('unset: row is a live event, repid_agents is updated, proof and peer-verify are queued', async () => {
+describe("bridge: 'canonical' is the live path (witness for every shadow absence below)", () => {
+  beforeEach(() => {
+    process.env[ENV] = 'canonical';
+  });
+
+  test("'canonical': row is a live event, repid_agents is updated, proof and peer-verify are queued", async () => {
     const r = await tick({ case_id: 'ka-001' });
     expect(r.inserts).toHaveLength(1);
     expect('is_shadow' in r.inserts[0]).toBe(false);
@@ -224,21 +239,63 @@ describe('bridge: canonical is today, exactly (witness for every shadow absence 
     expect(r.inserts).toHaveLength(1);
   });
 
-  test("'canonical' and unset and a no-case_id task in shadow mode all write the identical row", async () => {
-    const unset = await tick({ case_id: 'ka-001' });
-    process.env[ENV] = 'canonical';
-    const explicit = await tick({ case_id: 'ka-001' });
-    process.env[ENV] = 'shadow';
-    const noCase = await tick({ topic: 'ordinary swarm task' });
-    // zk_proof_id is a fresh random uuid per event; everything else must match exactly.
-    const norm = (row: any) => ({ ...row, zk_proof_id: expect.any(String) });
-    expect(explicit.inserts[0]).toEqual(norm(unset.inserts[0]));
-    expect(noCase.inserts[0]).toEqual(norm(unset.inserts[0]));
-    // ...and the side effects are the live ones in all three.
-    for (const r of [unset, explicit, noCase]) {
-      expect(r.agentUpdates).toHaveLength(1);
-      expect(r.proofQueue).toHaveLength(1);
-      expect(r.peerEnqueues).toBe(1);
+  test.each([['unset', undefined], ['empty', ''], ['whitespace', '  '], ['unrecognised', 'enfroce'], ['shadow', 'shadow'], ['canonical', 'canonical'], ['CANONICAL', 'CANONICAL']])(
+    'a task WITHOUT a case_id is scored live and identically when the switch is %s',
+    async (_label, value) => {
+      const witness = await tick({ case_id: 'ka-001' }); // canonical known-answer row, from beforeEach
+      if (value === undefined) delete process.env[ENV];
+      else process.env[ENV] = value;
+      const noCase = await tick({ topic: 'ordinary swarm task' });
+      // zk_proof_id is a fresh random uuid per event; everything else must match exactly.
+      expect(noCase.inserts[0]).toEqual({ ...witness.inserts[0], zk_proof_id: expect.any(String) });
+      expect('is_shadow' in noCase.inserts[0]).toBe(false);
+      expect(noCase.agentUpdates).toHaveLength(1);
+      expect(noCase.proofQueue).toHaveLength(1);
+      expect(noCase.peerEnqueues).toBe(1);
+      // The switch is not consulted for such a row, so there is nothing to warn about.
+      expect(errSpy.mock.calls.filter((c) => String(c[0]).includes(ENV))).toHaveLength(0);
+    },
+  );
+});
+
+describe('bridge: the switch fails closed', () => {
+  test.each([['unset', undefined], ['empty', ''], ['whitespace', '   ']])(
+    '%s: a known-answer task is a shadow row, nothing is applied, and the log says so',
+    async (_label, value) => {
+      if (value === undefined) delete process.env[ENV];
+      else process.env[ENV] = value;
+      const r = await tick({ case_id: 'ka-001' });
+      expect(r.inserts).toHaveLength(1);
+      expect(r.inserts[0].is_shadow).toBe(true);
+      expect(r.inserts[0].delta).toBe(0);
+      expect(r.inserts[0].repid_delta_applied).toBe(0);
+      expect(r.inserts[0].repid_after).toBe(r.inserts[0].repid_before);
+      expect(r.agentUpdates).toHaveLength(0);
+      expect(r.proofQueue).toHaveLength(0);
+      expect(r.peerEnqueues).toBe(0);
+      const said = (console.log as unknown as jest.Mock).mock.calls.map((c) => String(c[0]));
+      expect(said.some((l) => l.includes('known-answer: SHADOW, no RepID movement'))).toBe(true);
+    },
+  );
+
+  test('unset: the bridge start line names the mode and the unset-or-unrecognised warning is printed once', async () => {
+    delete process.env[ENV];
+    jest.useFakeTimers();
+    (global as any).__ka = { tasks: [], inserts: [], agentUpdates: [], proofQueue: [], taskUpdates: [] };
+    try {
+      // The warning is printed once per process per value, so load a fresh copy of the module.
+      await jest.isolateModulesAsync(async () => {
+        const fresh = require('../src/services/trinity-task-bridge');
+        await fresh.startTrinityTaskBridge();
+        await fresh.startTrinityTaskBridge();
+      });
+      const lines = (console.log as unknown as jest.Mock).mock.calls.map((c) => String(c[0]));
+      expect(lines.some((l) => l.includes(`known-answer mode: shadow (${ENV})`))).toBe(true);
+      const warned = errSpy.mock.calls.filter((c) => String(c[0]).includes(ENV) && String(c[0]).includes('unset or not recognised'));
+      expect(warned).toHaveLength(1);
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
     }
   });
 });
@@ -282,7 +339,7 @@ describe("bridge: TRINITY_BRIDGE_KNOWN_ANSWER_MODE='shadow'", () => {
   test('the counterfactual delta survives in repid_delta_calculated, not in anything that applies', async () => {
     process.env[ENV] = 'shadow';
     const shadow = await tick({ case_id: 'ka-001' });
-    delete process.env[ENV];
+    process.env[ENV] = 'canonical';
     const live = await tick({ case_id: 'ka-001' });
     expect(shadow.inserts[0].repid_delta_calculated).toBe(live.inserts[0].repid_delta_calculated);
     expect(shadow.inserts[0].metadata.shadow.counterfactual_delta).toBe(live.inserts[0].delta);

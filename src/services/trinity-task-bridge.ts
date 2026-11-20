@@ -13,16 +13,22 @@ const ENABLED = () => process.env.TRINITY_BRIDGE_ENABLED !== 'false';
 export type KnownAnswerMode = 'canonical' | 'shadow';
 
 /**
- * TRINITY_BRIDGE_KNOWN_ANSWER_MODE. Unset, empty or `canonical` is today's behaviour (D-124).
- * `shadow` scores known-answer tasks (metadata.case_id) as is_shadow rows: HAL runs and the
- * HAL_SCORE_EVENT row is written, but nothing is applied. Anything else is `shadow` with
- * recognised=false: a typo fails toward NOT moving RepID, and the caller says so loudly.
+ * TRINITY_BRIDGE_KNOWN_ANSWER_MODE. FAILS CLOSED: only the word `canonical` (trimmed, any case)
+ * lets a known-answer task (metadata.case_id) move RepID. `shadow` scores it as an is_shadow row:
+ * HAL runs and the HAL_SCORE_EVENT row is written, but nothing is applied. Unset, empty or anything
+ * else is ALSO `shadow`, with recognised=false, and the caller says so loudly.
+ *
+ * Corrected 2026-11-20. This comment said "Unset, empty or `canonical` is today's behaviour"
+ * and the code agreed, so the safe state depended on one variable staying set on the host: an
+ * absent or blank value was read as `canonical`. A typo already failed toward shadow; absence
+ * did not. Now both do. Tasks WITHOUT a case_id never consult this switch and are scored as
+ * before in every mode.
  */
 export function resolveKnownAnswerMode(
   raw = process.env.TRINITY_BRIDGE_KNOWN_ANSWER_MODE,
 ): { mode: KnownAnswerMode; recognised: boolean } {
   const v = String(raw ?? '').trim().toLowerCase();
-  if (v === '' || v === 'canonical') return { mode: 'canonical', recognised: true };
+  if (v === 'canonical') return { mode: 'canonical', recognised: true };
   if (v === 'shadow') return { mode: 'shadow', recognised: true };
   return { mode: 'shadow', recognised: false };
 }
@@ -40,7 +46,7 @@ function knownAnswerMode(): KnownAnswerMode {
   if (!recognised && !warnedBadModes.has(String(raw))) {
     warnedBadModes.add(String(raw));
     console.error(
-      `[TrinityTaskBridge] TRINITY_BRIDGE_KNOWN_ANSWER_MODE='${raw}' is not recognised ` +
+      `[TrinityTaskBridge] TRINITY_BRIDGE_KNOWN_ANSWER_MODE='${raw ?? ''}' is unset or not recognised ` +
         `(expected 'canonical' or 'shadow') - behaving as 'shadow': known-answer tasks will NOT move RepID`
     );
   }
