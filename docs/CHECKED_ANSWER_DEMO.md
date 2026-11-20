@@ -42,7 +42,7 @@ npx jest --config jest.config.js tests/checked-answer-demo.test.ts
 
 Case B is the point. The panel is handed the reply text only, and asked whether that text is factually true. "The Great Wall of China is thousands of kilometres long" is true, so the panel says clean. The decision it supports is wrong, and only the comparison with the key shows it.
 
-Case C is the other half. With no key, the panel's opinion is the only signal, and the demo says NOT CHECKED. That is not a pass. An AI that abstains is reported the same way.
+Case C is the other half. With no key, the panel's opinion is the only signal, and the demo says NOT CHECKED. That is not a pass. This demo also prints NOT CHECKED when the AI abstains; that is the demo's wording. The engine's grader scores an abstain against a key as 0 and records it.
 
 ## Expected output
 
@@ -104,6 +104,7 @@ Everything stays on this machine. In a live run, a model provider would receive 
 - No live model. The member answers are typed, so this says nothing about how often a real panel is right.
 - No reputation write. The key grader used here writes, in the engine, only to a separate table labelled experimental; in this demo it writes nowhere.
 - No on-chain step, no proof, no payment. Testnet or mainnet is not relevant here.
+- Not the deployed configuration. The demo switches off the panel's extra steps (the ground-truth lookup, the shadow second opinion, retrieval, escalation) so the decision comes from the three typed answers alone. A deployed run may have some of them on.
 - Not a measurement. Three hand-written cases illustrate a mechanism; they are not a benchmark.
 
 ## Where to go next
