@@ -409,6 +409,8 @@ export class HalService {
               ...(fc.false_families !== undefined ? { false_families: fc.false_families } : {}),
               ...(fc.false_providers !== undefined ? { false_providers: fc.false_providers } : {}),
               ...(fc.ground_truth_contradicted ? { ground_truth_contradicted: true } : {}),
+              // What the ground-truth gate did to the decision word (verdict, before, after). Record only.
+              ...(fc.ground_truth_gate ? { ground_truth_gate: fc.ground_truth_gate } : {}),
               ...(fc.retrieval_contradicted ? { retrieval_contradicted: true } : {}),
               // A FAMILY COUNT IS NOT AN INDEPENDENCE COUNT — N families behind ONE host is N
               // opinions that vanish in a single outage. It travels WITH families_used, always,
