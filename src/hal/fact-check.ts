@@ -286,6 +286,13 @@ export interface FactCheckResult {
    */
   ground_truth_contradicted?: boolean;
   /**
+   * What the ground-truth gate did to the decision word, when the corpus matched the claim (not degraded, not
+   * no_match). Words only: no claim text, no fact key, no corpus value. It travels in `signals` onto the stored row,
+   * because a veto lifted to 'clean' at score 0.5 is recorded 'flagged' and was otherwise indistinguishable from an
+   * unlifted one. Record-keeping only; nothing reads it to score.
+   */
+  ground_truth_gate?: { verdict: 'corroborated' | 'contradicted'; decision_before: HalDecision; decision_after: HalDecision };
+  /**
    * True when the retrieval slow path graded the claim Incorrect: at least two independent web sources contradict
    * it. That is an explicit, evidenced finding of falsehood, so the penalty rule accepts it too. (An Ambiguous or
    * absent grade is not.)
@@ -1740,10 +1747,12 @@ export async function factCheck(
   //
   // Kill switch: HAL_GROUND_TRUTH_GATE=false. A degraded lookup changes nothing.
   let groundTruthField: GroundTruthResult | undefined;
+  let groundTruthGate: FactCheckResult['ground_truth_gate'];
   if (process.env.HAL_GROUND_TRUTH_GATE !== 'false') {
     try {
       const gt = await checkGroundTruth(deliverable);
       groundTruthField = gt;
+      const decisionBeforeGate = decision;
 
       if (gt.degraded) {
         console.warn(`[ground-truth-gate] degraded (decision '${decision}' unchanged): ${gt.reason}`);
@@ -1755,6 +1764,9 @@ export async function factCheck(
         console.log(`[ground-truth-gate] '${decision}' -> 'clean': ${gt.reason}`);
         decision = 'clean';
         decision_reason = gt.reason;
+      }
+      if (!gt.degraded && (gt.verdict === 'corroborated' || gt.verdict === 'contradicted')) {
+        groundTruthGate = { verdict: gt.verdict, decision_before: decisionBeforeGate, decision_after: decision };
       }
     } catch (e: any) {
       // Belt and braces: checkGroundTruth already never throws.
@@ -1770,6 +1782,7 @@ export async function factCheck(
     ...(retrievalContradicted && decision === 'vetoed' ? { retrieval_contradicted: true } : {}),
     quorum, provider_health: { attempted: attemptedForSummary, succeeded: providers_used, failed, ...(late.length ? { late } : {}), ...skipped },
     ...(groundTruthField ? { ground_truth: groundTruthField } : {}),
+    ...(groundTruthGate ? { ground_truth_gate: groundTruthGate } : {}),
     ...(decision_reason ? { decision_reason } : {}),
     ...(quorum_note ? { quorum_note } : {}),
     ...(sbfaField ? { sbfa: sbfaField } : {}),
