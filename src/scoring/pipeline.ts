@@ -591,6 +591,38 @@ export async function runScoreEvent(
     groundingAbstained = true;
   }
 
+  // A REWARD NEEDS A QUORUM OF TRUE VERDICTS: SHADOW RECORD ONLY (2026-11-20).
+  // The mirror of the FALSE-quorum penalty rule above. A 'clean' decision pays even when no checker
+  // said TRUE (a low score, or the corpus lifting a veto). This block only WRITES DOWN, on a row that
+  // is being paid, whether the same minimum (QUORUM_MIN, by family or by provider exactly as the
+  // answering quorum is counted) answered TRUE, or one of the two evidence paths that can already lift
+  // a decision to 'clean' did so: the ground-truth corpus corroborating the claim, or the retrieval
+  // grader finding it Correct (two independent sources). Each is recorded under its own name, so a
+  // reader can recount without it. The execution floor can only force a veto; it confirms nothing.
+  // It reads effectiveDeltaApplied and never assigns it. THERE IS NO ENFORCE PATH, on purpose: making
+  // this rule withhold a reward is a later, separate owner decision and needs its own change.
+  // HAL_TRUE_QUORUM_SHADOW_RECORD (default ON, record-only); the exact string 'false' stops the recording.
+  const trueQuorumRecord = process.env.HAL_TRUE_QUORUM_SHADOW_RECORD !== 'false';
+  const trueQuorumCount = Number((signals as Record<string, unknown>)[familyAware ? 'true_families' : 'true_providers'] ?? 0);
+  const groundTruthCorroborated = (signals as Record<string, unknown>).ground_truth_corroborated === true;
+  const retrievalCorroborated = (signals as Record<string, unknown>).retrieval_corroborated === true;
+  const trueQuorumMet = trueQuorumCount >= QUORUM_MIN || groundTruthCorroborated || retrievalCorroborated;
+  const trueQuorumShadow = !trueQuorumRecord
+    ? {}
+    : {
+        true_quorum_met: trueQuorumMet,
+        true_quorum_count: trueQuorumCount,
+        ...(groundTruthCorroborated ? { ground_truth_corroborated: true } : {}),
+        ...(retrievalCorroborated ? { retrieval_corroborated: true } : {}),
+        // Only on a row that is paid: what the HAL delta would be under the rule (0 when unmet), and why.
+        ...(effectiveDeltaApplied > 0
+          ? {
+              true_quorum_shadow_delta: trueQuorumMet ? Math.round(effectiveDeltaApplied) : 0, // whole points, as the ledger stores them
+              ...(trueQuorumMet ? {} : { true_quorum_shadow_reason: 'true_quorum_unmet' }),
+            }
+          : {}),
+      };
+
   const old_repid = agent.current_repid;
   // DECAY (Option C step 1). In shadow this computes the counterfactual and
   // changes nothing; only 'enforce' moves the score. The base is the decayed
@@ -759,6 +791,8 @@ export async function runScoreEvent(
       // Explicit FALSE verdicts behind the decision: every APPLIED penalty must show >= 2 here too.
       false_quorum_met: falseQuorumMet,
       false_quorum_count: falseQuorumCount,
+      // TRUE-quorum shadow record (never read to score; see the block above new_repid).
+      ...trueQuorumShadow,
       ...(groundTruthContradicted ? { ground_truth_contradicted: true } : {}),
       ...(executionFloorOverride ? { execution_floor_override: true } : {}),
       ...(retrievalContradicted ? { retrieval_contradicted: true } : {}),

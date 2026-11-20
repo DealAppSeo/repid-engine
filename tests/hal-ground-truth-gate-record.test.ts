@@ -172,6 +172,11 @@ describe('SCORING IS UNCHANGED: word, caught flag, deltas and balance', () => {
     await run();
     const matched = JSON.parse(JSON.stringify(row()));
     delete matched.metadata.hal_signals.ground_truth_gate;
+    // The TRUE-quorum shadow record names the corpus confirmation too (record-only, like the gate field).
+    expect(matched.metadata.ground_truth_corroborated).toBe(true);
+    expect(matched.metadata.hal_signals.ground_truth_corroborated).toBe(true);
+    delete matched.metadata.ground_truth_corroborated;
+    delete matched.metadata.hal_signals.ground_truth_corroborated;
     for (const x of [plain, matched]) { delete x.id; delete x.metadata.hal_signals.latency_ms; delete x.metadata.hal_signals.provider_health; }
     expect(matched).toEqual(plain);
   });
