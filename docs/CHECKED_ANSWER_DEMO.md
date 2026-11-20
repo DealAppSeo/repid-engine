@@ -14,7 +14,7 @@ It needs the repository's dependencies once (`ts-node` runs the TypeScript direc
 npm ci --legacy-peer-deps
 ```
 
-That installs the whole engine's dependency tree, not one package. Two clean installs by other readers took 24 and 40 minutes; yours may be much faster. There is no route that skips the install: the jest test below needs the same one. If you would rather not install, the full output is printed further down this page.
+That installs the whole engine's dependency tree, not one package. Clean installs by other readers took 24 to 40 minutes [reported]; yours may be much faster. There is no route that skips the install: the jest test below needs the same one. If you would rather not install, the full output is printed further down this page.
 
 Then, the same line in bash and in Windows PowerShell 5.1:
 
