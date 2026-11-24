@@ -165,7 +165,7 @@ describePg('the forward file, applied by a login that is not a superuser, as pro
     await root.query(`CREATE DATABASE ${DB} OWNER ${APPLIER}`);
     applier = new Pool({ connectionString: urlFor(APPLIER), max: 2 });
     await applier.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
-  });
+  }, 60_000);
   afterAll(async () => {
     await applier.end();
     await root.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`);
@@ -262,7 +262,9 @@ describePg('the restricted database role, attacked', () => {
     checker = new Pool({ connectionString: as('t12_lane_checker'), max: 4 });
     integrator = new Pool({ connectionString: as('t12_lane_integrator'), max: 4 });
     await admin.query(`INSERT INTO trinity_tasks (description, status, assigned_to) VALUES ('someone else''s task', 'pending', 'trinity-orch')`);
-  });
+    // Creating a database right after the block above dropped one has passed jest's default 5 seconds
+    // on a slow machine (seen once locally, 2026-11-24). This is setup, not something being timed.
+  }, 60_000);
   afterAll(async () => { await worker.end(); await checker.end(); await integrator.end(); await admin.end(); });
 
   it('the instrument can tell the difference: owner is privileged, no lane role is', async () => {
