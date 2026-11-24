@@ -64,6 +64,8 @@ export interface RunLanesOptions {
   log?: (line: string) => void;
   heartbeatMs?: number;
   dailyCap?: number;
+  /** Work lanes (topics, from a spec's `meta:work_lane`) that get no work this run. */
+  frozenWorkLanes?: readonly string[];
   maxSteps?: number;
 }
 
@@ -218,7 +220,7 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
       return 'worked';
     }
     if (report.paused || !mayMake) return 'idle';
-    const claim = await claimMake(o.db, lane, { dailyCap: o.dailyCap, origin: originFor(lane), repos: o.repos });
+    const claim = await claimMake(o.db, lane, { dailyCap: o.dailyCap, origin: originFor(lane), repos: o.repos, frozenWorkLanes: o.frozenWorkLanes });
     if (claim.kind === 'paused') {
       report.paused = claim.reason;
       return 'idle';
@@ -266,7 +268,7 @@ export async function runLanes(o: RunLanesOptions): Promise<RunReport> {
         }
         if (!report.paused && mayMake) {
           // Automatic continuation: nothing to do, so refill from vetted specs and go again.
-          const r = await replenish(o.db, o.specs(), o.readyTarget);
+          const r = await replenish(o.db, o.specs(), o.readyTarget, { frozenWorkLanes: o.frozenWorkLanes });
           report.replenish = r;
           if (r.underflow) log(r.underflow);
           if (r.inserted.length > 0) {

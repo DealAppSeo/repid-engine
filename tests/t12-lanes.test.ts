@@ -729,6 +729,50 @@ describePg('durable lanes on real Postgres', () => {
     expect((await pool.query('SELECT count(*)::int AS n FROM trinity_tasks')).rows[0].n).toBe(2);
   });
 
+  it('a rejected task is claimed again before a newer task with a higher priority', async () => {
+    await seed(spec('fix-me', { priority: 10 }));
+    const first = await claimOne(L1);
+    expect((await releaseMake(db, first, 'the test did not compile', false)).ok).toBe(true);
+    await seed(spec('fix-me', { priority: 10 }), spec('urgent-new', { priority: 100 }));
+    const again = await claimOne(L2);
+    expect(again.spec.id).toBe('fix-me');
+    expect(again.lastRejection).toBe('the test did not compile');
+    expect((await claimOne(L1)).spec.id).toBe('urgent-new');
+  });
+
+  it('a task given back through no fault of its own is not a fix and keeps its place', async () => {
+    await seed(spec('blameless', { priority: 10 }));
+    expect((await releaseMake(db, await claimOne(L1), 'rate limited', true)).ok).toBe(true);
+    await seed(spec('blameless', { priority: 10 }), spec('urgent-new', { priority: 100 }));
+    expect((await claimOne(L2)).spec.id).toBe('urgent-new');
+  });
+
+  it('a frozen work lane is neither queued nor claimed, and says so', async () => {
+    const out = spec('post-variants', { context: ['meta:work_lane=outreach'] });
+    const held = await replenish(db, [out, spec('audit-1')], 5, { frozenWorkLanes: ['outreach'] });
+    expect(held.inserted).toEqual(['audit-1']);
+    expect(held.frozen).toEqual(['post-variants']);
+
+    // Queued before the freeze: it stays in the table and is not offered while the freeze holds.
+    await pool.query('TRUNCATE trinity_tasks RESTART IDENTITY');
+    expect((await replenish(db, [out], 5)).frozen).toEqual([]);
+    const refused = await claimMake(db, L1, { frozenWorkLanes: ['outreach'] });
+    expect(refused).toEqual({ kind: 'none', reason: 'every ready task is held back: work lane outreach is frozen' });
+    expect((await claimOne(L1)).spec.id).toBe('post-variants');
+  });
+
+  it('replenish queues immediate work before near and long, whatever the file order', async () => {
+    const specs = [spec('h-long', { context: ['meta:horizon=long'] }), spec('h-plain'), spec('h-now', { context: ['meta:horizon=immediate'] })];
+    expect((await replenish(db, specs, 1)).inserted).toEqual(['h-now']);
+    expect((await replenish(db, specs, 2)).inserted).toEqual(['h-plain']);
+    expect((await replenish(db, specs, 3)).inserted).toEqual(['h-long']);
+  });
+
+  it('an immediate task is claimed before a near one of higher priority', async () => {
+    await seed(spec('near-high', { priority: 100 }), spec('now-low', { priority: 1, context: ['meta:horizon=immediate'] }));
+    expect((await claimOne(L1)).spec.id).toBe('now-low');
+  });
+
   it('replenish stops at the target', async () => {
     const r = await replenish(db, [spec('a1'), spec('a2'), spec('a3')], 2);
     expect(r.inserted).toEqual(['a1', 'a2']);

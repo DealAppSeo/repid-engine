@@ -1,0 +1,88 @@
+{
+  "note": "Conductor trial CT-2 snapshot (2026-11-24). Events are deliberately out of time order. Key: the Z7 fix, the Z9 fix, then A2.",
+  "cards": [
+    {
+      "id": "A1",
+      "horizon": "immediate",
+      "owner": "Sean",
+      "state": "open",
+      "lane": "review"
+    },
+    {
+      "id": "A2",
+      "horizon": "immediate",
+      "owner": "T12",
+      "state": "open",
+      "lane": "labelling"
+    },
+    {
+      "id": "A3",
+      "horizon": "immediate",
+      "owner": "T12",
+      "state": "blocked",
+      "lane": "audit",
+      "blocked_on": "text not fetched"
+    },
+    {
+      "id": "A4",
+      "horizon": "immediate",
+      "owner": "T12",
+      "state": "open",
+      "lane": "outreach"
+    },
+    {
+      "id": "B1",
+      "horizon": "near",
+      "owner": "T12",
+      "state": "in_progress",
+      "lane": "calibration"
+    },
+    {
+      "id": "B2",
+      "horizon": "near",
+      "owner": "T12",
+      "state": "open",
+      "lane": "checks"
+    },
+    {
+      "id": "B3",
+      "horizon": "near",
+      "owner": "Sean",
+      "state": "open",
+      "lane": "posting"
+    },
+    {
+      "id": "C1",
+      "horizon": "long",
+      "owner": "T12",
+      "state": "open",
+      "lane": "design"
+    }
+  ],
+  "events": [
+    {
+      "card": "Z9",
+      "at": "2026-11-24T09:25:00Z",
+      "result": "failed"
+    },
+    {
+      "card": "B2",
+      "at": "2026-11-24T09:29:00Z",
+      "result": "dispatched"
+    },
+    {
+      "card": "Z8",
+      "at": "2026-11-24T09:15:00Z",
+      "result": "passed"
+    },
+    {
+      "card": "Z7",
+      "at": "2026-11-24T09:10:00Z",
+      "result": "failed"
+    }
+  ],
+  "frozen_lanes": [
+    "outreach"
+  ],
+  "limit": 3
+}

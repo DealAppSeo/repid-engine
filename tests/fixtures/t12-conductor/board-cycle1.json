@@ -1,0 +1,148 @@
+{
+  "note": "Conductor board. Order is decided by ../next-cards.mjs, never by hand. Events are appended, never edited.",
+  "frozen_lanes": [
+    "outreach"
+  ],
+  "limit": 3,
+  "cards": [
+    {
+      "id": "S1",
+      "horizon": "immediate",
+      "owner": "Sean",
+      "state": "open",
+      "lane": "founder",
+      "title": "Send the x402 reply"
+    },
+    {
+      "id": "K3",
+      "horizon": "immediate",
+      "owner": "T12",
+      "state": "open",
+      "lane": "pre-post-audit",
+      "title": "Claim audit of the LinkedIn post before it goes out"
+    },
+    {
+      "id": "K1",
+      "horizon": "immediate",
+      "owner": "T12",
+      "state": "open",
+      "lane": "peer-audit",
+      "title": "PA-3: 12 overall-versus-part claims against a pipeline record"
+    },
+    {
+      "id": "K2",
+      "horizon": "immediate",
+      "owner": "T12",
+      "state": "open",
+      "lane": "delivery",
+      "title": "Acceptance cases for the delivery gate (PR 130)"
+    },
+    {
+      "id": "O1",
+      "horizon": "near",
+      "owner": "T12",
+      "state": "open",
+      "lane": "outreach",
+      "title": "Slack post variants"
+    },
+    {
+      "id": "E4",
+      "horizon": "near",
+      "owner": "T12",
+      "state": "blocked",
+      "lane": "research",
+      "blocked_on": "today's scout candidates file with fetched text",
+      "title": "Check scout items against supplied sources"
+    },
+    {
+      "id": "S2",
+      "horizon": "near",
+      "owner": "Sean",
+      "state": "open",
+      "lane": "founder",
+      "title": "Record the TikTok master"
+    },
+    {
+      "id": "E6",
+      "horizon": "long",
+      "owner": "T12",
+      "state": "open",
+      "lane": "evidence",
+      "title": "Draft a schema for the daily evidence manifest"
+    }
+  ],
+  "events": [
+    {
+      "card": "K3",
+      "at": "2026-11-24T10:20:00Z",
+      "result": "dispatched",
+      "rows": [
+        439484
+      ]
+    },
+    {
+      "card": "K1",
+      "at": "2026-11-24T10:20:00Z",
+      "result": "dispatched",
+      "rows": [
+        439485
+      ]
+    },
+    {
+      "card": "K2",
+      "at": "2026-11-24T10:20:00Z",
+      "result": "dispatched",
+      "rows": [
+        439486
+      ]
+    },
+    {
+      "card": "K1",
+      "at": "2026-11-24T10:35:00Z",
+      "result": "passed",
+      "note": "maker w3c 12 of 12; breaker shofet caught the planted line 2, no false alarm",
+      "rows": [
+        439485,
+        439488
+      ]
+    },
+    {
+      "card": "K2",
+      "at": "2026-11-24T10:35:00Z",
+      "result": "passed",
+      "note": "maker sophia + breaker nexus raised 3 of 4 target cases; breaker marked cases 4,5,6 wrong",
+      "rows": [
+        439486,
+        439489
+      ]
+    },
+    {
+      "card": "K3",
+      "at": "2026-11-24T10:36:00Z",
+      "result": "failed",
+      "note": "maker gcm reply had line 3 wrong (its own artifact had it right); breaker chesed caught it in the reply",
+      "rows": [
+        439484,
+        439487
+      ]
+    },
+    {
+      "card": "K3",
+      "at": "2026-11-24T10:42:00Z",
+      "result": "dispatched",
+      "note": "fix attempt to w3c",
+      "rows": [
+        439490
+      ]
+    },
+    {
+      "card": "K3",
+      "at": "2026-11-24T10:45:00Z",
+      "result": "passed",
+      "note": "fix by w3c 9 of 9, reply and artifact identical",
+      "rows": [
+        439490
+      ]
+    }
+  ]
+}
