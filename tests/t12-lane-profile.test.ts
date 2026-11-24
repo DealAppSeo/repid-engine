@@ -94,6 +94,41 @@ describe('the real CLI refuses a privileged environment', () => {
   }, 120_000);
 });
 
+// The production check is run by hand before the owner applies the forward file, so nothing executes
+// it here. These hold it to two things a reader would otherwise have to take on trust.
+describe('the read-only production check for the role file', () => {
+  const audit = readFileSync(join(ROOT, 'ops/t12/audit/role-migration-prod-compat.sql'), 'utf8');
+  const sql = audit.replace(/--[^\n]*/g, '');
+  const forward = readFileSync(MIGRATION, 'utf8');
+
+  it('writes nothing: one READ ONLY transaction, rolled back, and no statement that changes anything', () => {
+    const statements = sql.split(';').map((s) => s.trim()).filter(Boolean);
+    expect(statements[0]).toBe('BEGIN READ ONLY');
+    expect(statements[statements.length - 1]).toBe('ROLLBACK');
+    const middle = statements.slice(1, -1);
+    expect(middle.length).toBeGreaterThan(10);
+    for (const s of middle) expect(s).toMatch(/^SELECT\b/);
+    expect(sql).not.toMatch(/\b(INSERT|UPDATE|DELETE|TRUNCATE|CREATE|ALTER|DROP|GRANT|REVOKE|COPY|DO|CALL|SET|COMMIT|nextval|setval|pg_terminate_backend|dblink)\b/i);
+  });
+
+  it('asks about every column the forward file grants or reads, so a missing one cannot go unseen', () => {
+    const lists = [...forward.matchAll(/GRANT (?:INSERT|UPDATE) \(([^)]+)\)\s+ON public\.trinity_tasks/g)].map((m) => m[1]!.split(',').map((c) => c.trim()));
+    expect(lists).toHaveLength(2);
+    const granted = [...new Set(lists.flat())];
+    expect(granted.length).toBeGreaterThan(20);
+    expect(granted).toEqual(expect.arrayContaining(['verifier_verdict', 'verifier_evidence', 'final_verdict', 'verification_method', 'stuck_reason', 'verified_at', 'verify_count', 'completed_at']));
+    const grantsInsert = /INSERT INTO public\.principal_grants \(([^)]+)\)/.exec(forward)![1]!.split(',').map((c) => c.trim());
+    const logInsert = /INSERT INTO public\.trinity_agent_logs \(([^)]+)\)/.exec(forward)![1]!.split(',').map((c) => c.trim());
+    for (const c of [...granted, 'assigned_to', ...grantsInsert, 'id', 'revoked_at', 'not_before', ...logInsert, 'created_at']) expect([c, sql.includes(`'${c}'`)]).toEqual([c, true]);
+  });
+
+  it('asks whether the applying login is a superuser, and fingerprints each trigger function', () => {
+    expect(sql).toMatch(/rolsuper/);
+    expect(sql).toMatch(/md5\(p\.prosrc\)/);
+    expect(sql).toMatch(/indisunique/);
+  });
+});
+
 const PG = process.env.T12_LANES_PG_URL;
 const describePg = PG ? describe : describe.skip;
 if (!PG) {
