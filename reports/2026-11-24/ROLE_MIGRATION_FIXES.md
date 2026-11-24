@@ -20,7 +20,7 @@ This is a change to the permission model. It needs the owner and two reviewers f
 | 5 | A role can end a claim it does not hold | **Partly fixed. One part left open on purpose** | See "Finding 5" below. Read this one before approving |
 | 6 | Checkout reports success for a grant the submission check will refuse | **Fixed** | See "Finding 6" below |
 | 7 | Does anything compare the files a commit really changes with the task's allowed paths? | **Answered: yes. Not a defect. One narrower note** | See "Finding 7" below |
-| 8 | The eight trigger bodies | **Not mine** | Settled by the conductor session in the review file |
+| 8 | The eight trigger bodies | **Settled by the conductor session; two tests added here to keep it settled** | The file itself needed no change. (1) Static test: the forward file grants no lane the parent column or the spawn counters (`parent_task_id`, `generation`, `spawned_count`, `last_spawned_at`), and makes no whole-table insert or update grant; the lineage trigger updates the parent row, which a lane cannot do. (2) Database test: after the forward file runs, the maker inserts a pool row through the name trigger, and `normalize_agent_name(text)` is still not an owner-rights function and still open to everyone. Its control closes the helper and the same insert fails at the trigger, so the pass means something. The non-superuser block does the same insert. Both facts re-read from production today, read-only. These pin behaviour the file already had, so there is no red run against the old file; the control is what shows the test can fail |
 | 9 | Supabase's own guard on grants to platform roles | **Not verified** | Needs a Supabase branch, which is the owner's call. What plain PostgreSQL 17 shows is under "Finding 1" |
 
 ## Finding 1: verified by running it, then fixed
@@ -123,6 +123,8 @@ What CI gates on, read from `.github/workflows/ci.yml` (job `test`: fixture guar
 | `npx ts-node --transpile-only scripts/preflight.ts --dir . --files …` | **exit 1 (FAIL)**. `fresh_base` PASS (starts from the current tip `3cf26f74`); `duplicate_work` PASS (no other open PR touches these files, 3 checked); `claim`, `lease`, `fencing`, `scope` FAIL with "no task claimed: name the trinity_tasks row this work belongs to"; `permission` WARN "owner decision needed before merge (r31 MAJOR)". This work was started by the conductor session and has no row in the task queue, so those four rows cannot pass. I did not invent a row to make them pass |
 
 **One failure on the way, and what it was.** The first full run of the test file failed 67 tests. Cause: the older block's setup hook passed jest's default 5-second limit once, right after the new block dropped its database, and every test after it failed for want of setup. The same file passed in full on the next two runs with no change (132 of 132 alone, 135 of 135 with the rollback suite). Both setup hooks now carry an explicit 60-second limit; the final run above is after that change. I classed this as timing in the test setup, not a defect in the migration, because the failure was the hook's timeout and the identical code passed twice.
+
+After the two finding 8 tests were added: `tests/t12-lane-profile.test.ts tests/t12-lane-rollback.test.ts`, same command, exit 0, `Test Suites: 2 passed` · `Tests: 137 passed, 137 total`; `npx tsc --noEmit` exit 0.
 
 CI results are in the pull request, read from GitHub after pushing; see the PR's checks for the current state.
 

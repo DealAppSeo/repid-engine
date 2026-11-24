@@ -122,6 +122,19 @@ describe('the read-only production check for the role file', () => {
     for (const c of [...granted, 'assigned_to', ...grantsInsert, 'id', 'revoked_at', 'not_before', ...logInsert, 'created_at']) expect([c, sql.includes(`'${c}'`)]).toEqual([c, true]);
   });
 
+  // Review finding 8, settled 2026-11-24 from the production trigger bodies. trg_auto_lineage runs
+  // before every insert and, for a row with a parent, updates the PARENT row's spawn counters. A lane
+  // cannot write those, so a lane row that named a parent would fail to insert. The only thing keeping
+  // lane inserts working is that no lane can set a parent, or the counters, in the first place.
+  it('grants no lane the parent column or the spawn counters', () => {
+    const lists = [...forward.matchAll(/GRANT (?:INSERT|UPDATE) \(([^)]+)\)\s+ON public\.trinity_tasks/g)].map((m) => m[1]!.split(',').map((c) => c.trim()));
+    expect(lists).toHaveLength(2);
+    for (const c of ['parent_task_id', 'generation', 'spawned_count', 'last_spawned_at']) expect([c, lists.flat().includes(c)]).toEqual([c, false]);
+    // A grant on the whole table would hand out every column, these four included.
+    expect(forward).not.toMatch(/GRANT\s+(?:ALL|[A-Z, ]*\b(?:INSERT|UPDATE)\b)(?!\s*\()[A-Z, ]*\s+ON\s+(?:TABLE\s+)?public\.trinity_tasks/);
+    expect('GRANT INSERT, UPDATE ON public.trinity_tasks TO x').toMatch(/GRANT\s+(?:ALL|[A-Z, ]*\b(?:INSERT|UPDATE)\b)(?!\s*\()[A-Z, ]*\s+ON\s+(?:TABLE\s+)?public\.trinity_tasks/);
+  });
+
   it('asks whether the applying login is a superuser, and fingerprints each trigger function', () => {
     expect(sql).toMatch(/rolsuper/);
     expect(sql).toMatch(/md5\(p\.prosrc\)/);
@@ -194,6 +207,8 @@ describePg('the forward file, applied by a login that is not a superuser, as pro
     try {
       expect(await dbPrivilege(maker)).toEqual({ name: 't12_lane_maker', privileged: false });
       await expect(maker.query('SELECT * FROM repid_agents')).rejects.toThrow(/permission denied/);
+      // And it can do its first job: put a row in the pool, through the name trigger.
+      expect((await maker.query(`INSERT INTO trinity_tasks (description, status, assigned_to) VALUES ('applied as production would', 'pending', $1)`, [LANE_POOL])).rowCount).toBe(1);
     } finally {
       await maker.end();
     }
@@ -290,6 +305,30 @@ describePg('the restricted database role, attacked', () => {
     expect(['submitted', 'check_approved', 'integrated'].map((e) => done.receipts.find((r) => r.event === e)!.actor)).toEqual(['trinity-lane-1', 'trinity-lane-2', 'trinity-lane-3']);
     await coolProvider(worker, 'groq', 60, 'rate_limited');
     expect((await coolingProviders(worker)).has('groq')).toBe(true);
+  });
+
+  // Review finding 8, settled 2026-11-24. trg_normalize_agent_names runs on every lane write and calls
+  // normalize_agent_name. That helper does not run with its owner's rights and everyone may call it,
+  // so the block that closes definer functions to PUBLIC must go on leaving it alone. If it ever
+  // closed it, every lane write would fail at the trigger.
+  it('the maker can still insert a pool row, because the forward file leaves the name helper open', async () => {
+    const helper = (await admin.query(
+      `SELECT p.prosecdef, has_function_privilege('t12_lane_maker', p.oid, 'EXECUTE') AS maker_may,
+              (p.proacl IS NULL OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')) AS open_to_public
+         FROM pg_proc p WHERE p.oid = 'public.normalize_agent_name(text)'::regprocedure`,
+    )).rows[0];
+    expect(helper).toEqual({ prosecdef: false, maker_may: true, open_to_public: true });
+    const insert = () => worker.query(`INSERT INTO trinity_tasks (description, status, assigned_to) VALUES ('a pool row', 'pending', $1) RETURNING id, assigned_to`, [LANE_POOL]);
+    const made = await insert();
+    expect(made.rows[0].assigned_to).toBe(LANE_POOL);
+    // Control: with the helper closed, the same insert fails at the trigger, so the pass above means something.
+    await admin.query('REVOKE EXECUTE ON FUNCTION public.normalize_agent_name(text) FROM PUBLIC');
+    try {
+      await expect(insert()).rejects.toThrow(/permission denied for function normalize_agent_name/);
+    } finally {
+      await admin.query('GRANT EXECUTE ON FUNCTION public.normalize_agent_name(text) TO PUBLIC');
+    }
+    await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [made.rows[0].id]);
   });
 
   it('cannot see or touch a task outside the lane pool', async () => {
