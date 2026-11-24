@@ -14,7 +14,8 @@ import { T12_ROUTES } from '../src/orchestration/t12-attempt';
 import { dbPrivilege, privilegedEnvPresent, reachableDefiners } from '../src/orchestration/t12-lane-profile';
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
 import {
-  LANE_POOL, checkoutBelt, claimMake, claimStage, coolProvider, coolingProviders, pgHaltClient, poolDb, readLaneState, recordIntegration, recordVerdict, recoverStages, releaseMake, replenish, submit,
+  LANE_POOL, checkoutBelt, claimMake, claimStage, coolProvider, coolingProviders, pgHaltClient, poolDb, readLaneState, recordIntegration, recordVerdict, recoverStages, refuseIntegration, releaseMake, replenish, submit,
+  waitForCapacity,
   type Handle, type LaneSpec,
 } from '../src/orchestration/t12-lane-store';
 
@@ -361,6 +362,32 @@ describePg('the restricted database role, attacked', () => {
       await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
     });
 
+    // Review finding 6, 2026-11-24. Checkout used to look only at revocation and expiry when it found a
+    // grant already there, so it answered ok for a grant the submission check then refused. It failed
+    // closed, but the refusal came later and without a reason.
+    it('checkout does not report success for an existing grant that names another lane or another belt', async () => {
+      const h = await claimed();
+      const first = await checkoutBelt(db(), h);
+      // Control: asking again for an untouched grant is still a success, and the same grant.
+      expect(await checkoutBelt(db(), h)).toEqual(first);
+      expect(first).toMatchObject({ ok: true, belt: 'engineering' });
+
+      await admin.query(`UPDATE principal_grants SET grantee_agent_id = 'trinity-lane-2' WHERE idempotency_key = $1`, [key(h)]);
+      expect(await checkoutBelt(db(), h)).toEqual({ ok: false, reason: 'the belt for this claim names another lane' });
+      await admin.query(`UPDATE principal_grants SET grantee_agent_id = 'trinity-lane-1', role = 'research' WHERE idempotency_key = $1`, [key(h)]);
+      expect(await checkoutBelt(db(), h)).toEqual({ ok: false, reason: 'the belt for this claim is a research belt, and the task needs engineering' });
+      await admin.query(`UPDATE principal_grants SET role = 'engineering', grantor_agent_id = 'someone-else' WHERE idempotency_key = $1`, [key(h)]);
+      expect(await checkoutBelt(db(), h)).toEqual({ ok: false, reason: 'the belt for this claim was not issued by the belt issuer' });
+      await admin.query(`UPDATE principal_grants SET grantor_agent_id = 't12-belt-issuer', not_before = now() + interval '10 minutes' WHERE idempotency_key = $1`, [key(h)]);
+      expect(await checkoutBelt(db(), h)).toEqual({ ok: false, reason: 'the belt for this claim is not valid yet' });
+      expect(await denials(h)).toEqual(expect.arrayContaining(['the belt for this claim names another lane', 'the belt for this claim is a research belt, and the task needs engineering']));
+
+      // Restored, it is a success again, and the submission it covers lands.
+      await admin.query(`UPDATE principal_grants SET not_before = now() - interval '1 minute' WHERE idempotency_key = $1`, [key(h)]);
+      expect(await checkoutBelt(db(), h)).toMatchObject({ ok: true, belt: 'engineering' });
+      expect(await submit(db(), h, work(h))).toEqual({ ok: true });
+    });
+
     it('a belt from an earlier claim does not carry over to a later one', async () => {
       const h = await claimed();
       await checkoutBelt(db(), h);
@@ -432,7 +459,7 @@ describePg('the restricted database role, attacked', () => {
       }
     };
 
-    it('cannot call a definer function that was open to PUBLIC, and no other role loses or gains', async () => {
+    it('cannot call a definer function that was open to PUBLIC, and no role that existed then loses or gains', async () => {
       await expect(worker.query('SELECT public.t12_probe_open()')).rejects.toThrow(/permission denied/);
       await expect(worker.query('SELECT public.t12_probe_closed()')).rejects.toThrow(/permission denied/);
       expect((await asRole('anon', 'SELECT public.t12_probe_open() AS x')).rows[0].x).toBe(1);
@@ -440,6 +467,22 @@ describePg('the restricted database role, attacked', () => {
       expect((await asRole('t12_public_only', 'SELECT public.t12_probe_open() AS x')).rows[0].x).toBe(1);
       await expect(asRole('t12_public_only', 'SELECT public.t12_probe_closed()')).rejects.toThrow(/permission denied/);
       expect(await reachableDefiners(worker)).toEqual([]);
+    });
+
+    // Review finding 2: this is the cost the file's comment used to deny. PUBLIC covered every future
+    // role; the list of names the file writes cannot. The title above used to say "no other role".
+    it('a role created after the file ran cannot call a function it closed, until someone grants it', async () => {
+      await admin.query('DROP ROLE IF EXISTS t12_later_probe');
+      await admin.query('CREATE ROLE t12_later_probe NOLOGIN');
+      try {
+        await admin.query('GRANT USAGE ON SCHEMA public TO t12_later_probe');
+        await expect(asRole('t12_later_probe', 'SELECT public.t12_probe_open()')).rejects.toThrow(/permission denied/);
+        await admin.query('GRANT EXECUTE ON FUNCTION public.t12_probe_open() TO t12_later_probe');
+        expect((await asRole('t12_later_probe', 'SELECT public.t12_probe_open() AS x')).rows[0].x).toBe(1);
+      } finally {
+        await admin.query('DROP OWNED BY t12_later_probe');
+        await admin.query('DROP ROLE t12_later_probe');
+      }
     });
 
     it('a definer function added later is seen, and the real CLI refuses to start', async () => {
@@ -845,6 +888,113 @@ describePg('the restricted database role, attacked', () => {
       expect(await recoverStages(asIntegrator(), 0, ['integrating'])).toBe(1);
       expect((await stateOf(h.taskId)).stage).toBe('approved');
       await retire(h.taskId);
+    });
+
+    // Review finding 5, 2026-11-24. Before this, a role could end a claim it did not hold: a maker
+    // could release or reject a row another lane was making, and a checker or integrator could finish
+    // a row another lane had taken. Now the row's current holder must be the lane the new row names.
+    // A row that ends a claim has no holder left to name, so the lane it names is the actor of its
+    // newest receipt, which is what every store call writes.
+    //
+    // WHAT THIS DOES NOT DO. That name is text the caller writes, and all lanes of a stage share one
+    // database login (finding 4). The control in each test below lands by writing the holder's name.
+    // So this stops code acting on a claim it does not hold, by a wrong or stale handle; it does not
+    // stop someone who holds the login and copies the holder's name.
+    describe('ending a claim needs the lane that holds it', () => {
+      /** The write a store call makes to end a claim, with the status, stage and receipt lane chosen by the caller. */
+      const endClaim = (p: Pool, id: number, status: string, stage: string, actor: string, extra = '') => p.query(
+        `UPDATE trinity_tasks SET status = $2, claimed_by = NULL, claimed_at = NULL${extra},
+                metadata = jsonb_set(jsonb_set(metadata, '{t12,stage}', to_jsonb($3::text)), '{t12,receipts}',
+                                     (metadata #> '{t12,receipts}') || jsonb_build_object('actor', $4::text, 'event', 'probe'))
+          WHERE id = $1`, [id, status, stage, actor],
+      );
+      const holderOf = async (id: number) => (await readLaneState(admin, id)).claimed_by;
+
+      it('a maker cannot release, reject, take over or re-stage a task another lane is making', async () => {
+        const h = await claimedBy('trinity-lane-1');
+        expect(await code(endClaim(worker, h.taskId, 'pending', 'ready', 'trinity-lane-2'))).toBe('42501');
+        expect(await code(endClaim(worker, h.taskId, 'cancelled', 'rejected', 'trinity-lane-2'))).toBe('42501');
+        expect(await code(endClaim(worker, h.taskId, 'not_checked', 'not_checked', 'trinity-lane-2'))).toBe('42501');
+        expect(await code(worker.query(`UPDATE trinity_tasks SET claimed_by = 'trinity-lane-2' WHERE id = $1`, [h.taskId]))).toBe('42501');
+        // Leaving the stage while keeping the claim on the row is not a release either.
+        expect(await code(worker.query(`UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12,stage}', '"ready"') WHERE id = $1`, [h.taskId]))).toBe('42501');
+        expect([(await stateOf(h.taskId)).stage, await holderOf(h.taskId)]).toEqual(['making', 'trinity-lane-1']);
+        // Control: the same write naming the holder lands, so the refusals above are this rule and nothing else.
+        expect(await code(endClaim(worker, h.taskId, 'pending', 'ready', 'trinity-lane-1'))).toBe('written');
+        await retire(h.taskId);
+      });
+
+      it('a checker cannot finish a check another lane holds', async () => {
+        const h = await submitted();
+        expect((await claimStage(asChecker(), 'awaiting_check', 'trinity-lane-2'))?.taskId).toBe(h.taskId);
+        expect(await code(endClaim(checker, h.taskId, 'pending_validation', 'approved', 'trinity-lane-4', `, verifier_verdict = 'approved', final_verdict = 'unverified'`))).toBe('42501');
+        expect(await code(endClaim(checker, h.taskId, 'cancelled', 'rejected', 'trinity-lane-4', `, verifier_verdict = 'rejected'`))).toBe('42501');
+        expect(await code(endClaim(checker, h.taskId, 'pending', 'ready', 'trinity-lane-4'))).toBe('42501');
+        expect(await code(endClaim(checker, h.taskId, 'not_checked', 'not_checked', 'trinity-lane-4'))).toBe('42501');
+        expect([(await stateOf(h.taskId)).stage, await holderOf(h.taskId)]).toEqual(['checking', 'trinity-lane-2']);
+        expect(await code(endClaim(checker, h.taskId, 'pending_validation', 'approved', 'trinity-lane-2', `, verifier_verdict = 'approved', final_verdict = 'unverified'`))).toBe('written');
+        await retire(h.taskId);
+      });
+
+      it('an integrator cannot publish or refuse work another lane took to publish', async () => {
+        const h = await approvedBy('trinity-lane-2');
+        expect((await claimStage(asIntegrator(), 'approved', 'trinity-lane-3'))?.taskId).toBe(h.taskId);
+        expect(await code(endClaim(integrator, h.taskId, 'pending_validation', 'integrated', 'trinity-lane-5', ', completed_at = now()'))).toBe('42501');
+        expect(await code(endClaim(integrator, h.taskId, 'cancelled', 'rejected', 'trinity-lane-5', `, final_verdict = 'rejected'`))).toBe('42501');
+        expect([(await stateOf(h.taskId)).stage, await holderOf(h.taskId)]).toEqual(['integrating', 'trinity-lane-3']);
+        expect(await code(endClaim(integrator, h.taskId, 'pending_validation', 'integrated', 'trinity-lane-3', ', completed_at = now()'))).toBe('written');
+        await retire(h.taskId);
+      });
+
+      it('the honest path still passes: every way the store ends a claim it holds', async () => {
+        const released = await claimedBy('trinity-lane-1');
+        expect(await releaseMake(asMaker(), released, 'host down', true)).toEqual({ ok: true });
+        expect((await stateOf(released.taskId)).stage).toBe('ready');
+        await retire(released.taskId);
+
+        const failed = await claimedBy('trinity-lane-1');
+        expect(await releaseMake(asMaker(), failed, 'the model wrote nothing usable', false)).toEqual({ ok: true });
+        expect((await stateOf(failed.taskId)).stage).toBe('ready');
+        await retire(failed.taskId);
+
+        const waiting = await claimedBy('trinity-lane-1');
+        expect(await waitForCapacity(asMaker(), waiting, new Date(Date.now() + 60_000).toISOString(), 'every free route is cooling')).toEqual({ ok: true });
+        expect((await stateOf(waiting.taskId)).stage).toBe('waiting_for_capacity');
+        await retire(waiting.taskId);
+
+        const rejected = await submitted();
+        const r = (await claimStage(asChecker(), 'awaiting_check', 'trinity-lane-2'))!;
+        expect(r.taskId).toBe(rejected.taskId);
+        expect(await recordVerdict(asChecker(), r, { outcome: 'rejected', reason: 'the control did not fail' })).toEqual({ ok: true });
+        expect((await stateOf(rejected.taskId)).stage).toBe('ready');
+        await retire(rejected.taskId);
+
+        const unclear = await submitted();
+        const u = (await claimStage(asChecker(), 'awaiting_check', 'trinity-lane-2'))!;
+        expect(u.taskId).toBe(unclear.taskId);
+        expect(await recordVerdict(asChecker(), u, { outcome: 'not_checked', reason: 'no local clone' })).toEqual({ ok: true });
+        expect((await stateOf(unclear.taskId)).stage).toBe('awaiting_check');
+        await retire(unclear.taskId);
+
+        const refused = await approvedBy('trinity-lane-2');
+        const i = (await claimStage(asIntegrator(), 'approved', 'trinity-lane-3'))!;
+        expect(i.taskId).toBe(refused.taskId);
+        expect(await refuseIntegration(asIntegrator(), i, 'the branch no longer exists')).toEqual({ ok: true });
+        expect((await stateOf(refused.taskId)).stage).toBe('rejected');
+      });
+
+      // OPEN, and deliberately left as it was. recoverStages hands a claim back when its holder has
+      // gone silent, so the lane doing it is never the holder, and honest code cannot meet the rule
+      // above. Postgres therefore still accepts a hand-back (checking to awaiting_check, integrating
+      // to approved) from any lane of that role, with no check on the holder or on how old the claim
+      // is. Closing this is a design decision (for example an age test on claimed_at), not made here.
+      it('OPEN: a hand-back by a lane that does not hold the claim is still accepted, because recovery relies on it', async () => {
+        const h = await submitted();
+        expect((await claimStage(asChecker(), 'awaiting_check', 'trinity-lane-2'))?.taskId).toBe(h.taskId);
+        expect(await code(endClaim(checker, h.taskId, 'pending_validation', 'awaiting_check', 'trinity-lane-4'))).toBe('written');
+        expect([(await stateOf(h.taskId)).stage, await holderOf(h.taskId)]).toEqual(['awaiting_check', null]);
+        await retire(h.taskId);
+      });
     });
 
     it('the retired shared role cannot log in and holds nothing on the pool', async () => {

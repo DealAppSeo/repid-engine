@@ -274,6 +274,9 @@ DECLARE
   os text;
   ns text := p_new.metadata #>> '{t12,stage}';
   producer text;
+  -- The lane the new row names. A write that ends a claim clears claimed_by, so the lane is the actor
+  -- of the newest receipt, which every store call appends. It is text the caller writes (see below).
+  actor text := p_new.metadata #>> '{t12,receipts,-1,actor}';
   same_work boolean;
   same_verdict boolean;
   same_finish boolean;
@@ -309,7 +312,24 @@ BEGIN
     RETURN false;
   END IF;
 
+  -- ENDING A CLAIM (review finding 5, 2026-11-24). Before this, a maker could release or reject a row
+  -- another lane was making, and a checker or integrator could finish a row another lane had taken.
+  -- Now the row's current holder must be the lane the new row names, in the maker branch and wherever
+  -- a checker or integrator finishes.
+  --   WHAT IT STOPS: code ending a claim it does not hold, through a wrong or stale handle.
+  --   WHAT IT DOES NOT: the name is caller-written text and every lane of a stage shares one login, so
+  --   a caller holding that login can copy the holder's name. The boundary is still the database role.
+  --   LEFT OPEN ON PURPOSE: handing a claim back (checking to awaiting_check, integrating to approved).
+  --   recoverStages does that for a holder that went silent, so the lane doing it is never the holder
+  --   and honest code cannot meet this rule there. Those two moves are as they were.
   IF p_role = 'maker' THEN
+    -- A row some lane holds: that lane may keep it as it is, or end the claim under its own name.
+    -- Nobody takes it over, and nobody moves it out of its stage while leaving the claim in place.
+    IF o.claimed_by IS NOT NULL
+       AND NOT (p_new.claimed_by IS NOT DISTINCT FROM o.claimed_by AND ns IS NOT DISTINCT FROM os)
+       AND NOT (p_new.claimed_by IS NULL AND actor IS NOT DISTINCT FROM o.claimed_by) THEN
+      RETURN false;
+    END IF;
     -- Claim, heartbeat, release, wait, give up, or submit under a belt. Nothing past awaiting_check.
     RETURN same_verdict AND same_finish AND os IN ('ready', 'making', 'waiting_for_capacity') AND (
       (same_work AND ns IN ('ready', 'making', 'waiting_for_capacity', 'rejected', 'not_checked'))
@@ -328,9 +348,13 @@ BEGIN
     END IF;
     IF os = 'checking' THEN
       -- Record a verdict, or hand the check back. The lane holding the check is never the producer.
-      RETURN o.claimed_by IS NOT NULL AND o.claimed_by IS DISTINCT FROM producer AND p_new.claimed_by IS NULL AND (
-        ns = 'approved'
-        OR (ns IN ('ready', 'rejected', 'awaiting_check', 'not_checked') AND p_new.verifier_verdict IS DISTINCT FROM 'approved'));
+      -- A verdict is recorded by the lane that holds the check; the hand-back to awaiting_check is the
+      -- move left open above.
+      RETURN o.claimed_by IS NOT NULL AND o.claimed_by IS DISTINCT FROM producer AND p_new.claimed_by IS NULL
+        AND (ns = 'awaiting_check' OR actor IS NOT DISTINCT FROM o.claimed_by)
+        AND (
+          ns = 'approved'
+          OR (ns IN ('ready', 'rejected', 'awaiting_check', 'not_checked') AND p_new.verifier_verdict IS DISTINCT FROM 'approved'));
     END IF;
     RETURN false;
   END IF;
@@ -345,10 +369,11 @@ BEGIN
     END IF;
     IF os = 'integrating' THEN
       -- Publish, refuse, or hand back. Handing back returns the row to `approved`, where it came
-      -- from, so an integrator can never make approved a row that a checker did not.
+      -- from, so an integrator can never make approved a row that a checker did not. Publishing and
+      -- refusing are done by the lane that took the row; the hand-back is the move left open above.
       RETURN o.claimed_by IS NOT NULL AND (
-        (ns = 'integrated' AND p_new.completed_at IS NOT NULL)
-        OR (ns = 'rejected' AND same_finish)
+        (ns = 'integrated' AND p_new.completed_at IS NOT NULL AND actor IS NOT DISTINCT FROM o.claimed_by)
+        OR (ns = 'rejected' AND same_finish AND actor IS NOT DISTINCT FROM o.claimed_by)
         OR (ns = 'approved' AND same_finish AND p_new.claimed_by IS NULL));
     END IF;
     RETURN false;
