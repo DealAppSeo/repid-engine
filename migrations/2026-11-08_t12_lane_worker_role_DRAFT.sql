@@ -37,6 +37,14 @@ END $$;
 -- and NOINHERIT does not stop SET ROLE, so memberships and object grants are removed here too. Each
 -- REVOKE targets a grant the role actually holds, because a blanket REVOKE fails on any object the
 -- applying role cannot administer. The retired shared role gets the same treatment.
+--
+-- The ALTER ROLE lines below do not name the superuser attribute, on purpose. From PostgreSQL 16 a
+-- login that is not a superuser is refused as soon as ALTER ROLE names it, in either direction
+-- ("Only roles with the SUPERUSER attribute may change the SUPERUSER attribute"), and the login that
+-- applies this file in production is not a superuser. An earlier draft named it on all four lines and
+-- stopped there (review finding 1, 2026-11-24; reproduced on PostgreSQL 17). So this file no longer
+-- removes superuser from a lane role that already has it: the check after the ALTER ROLE lines stops
+-- the file instead, and the owner removes it by hand. CREATE ROLE above may still say NOSUPERUSER.
 DO $$
 DECLARE
   r text;
@@ -78,13 +86,26 @@ BEGIN
     END IF;
   END LOOP;
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_lane_worker') THEN
-    ALTER ROLE t12_lane_worker NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+    ALTER ROLE t12_lane_worker NOLOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
   END IF;
 END $$;
 
-ALTER ROLE t12_lane_maker LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
-ALTER ROLE t12_lane_checker LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
-ALTER ROLE t12_lane_integrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+ALTER ROLE t12_lane_maker LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+ALTER ROLE t12_lane_checker LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+ALTER ROLE t12_lane_integrator LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+
+-- Nothing above can take superuser away, so refuse to go on if a lane role, or the retired shared
+-- role, has it or can skip row security. Every grant and policy below would be decoration.
+DO $$
+DECLARE
+  bad text;
+BEGIN
+  SELECT string_agg(rolname, ', ' ORDER BY rolname) INTO bad FROM pg_roles
+   WHERE rolname IN ('t12_lane_maker', 't12_lane_checker', 't12_lane_integrator', 't12_lane_worker') AND (rolsuper OR rolbypassrls);
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION 'lane role is a superuser or can bypass row security: %. Nothing was applied. A superuser must run ALTER ROLE ... NOSUPERUSER NOBYPASSRLS on it, then apply this file again', bad;
+  END IF;
+END $$;
 
 GRANT USAGE ON SCHEMA public TO t12_lane_maker, t12_lane_checker, t12_lane_integrator;
 
@@ -356,10 +377,18 @@ GRANT EXECUTE ON FUNCTION public.t12_belt_stage_permits(text, public.trinity_tas
 
 -- A SECURITY DEFINER function runs with its owner's rights, and every function starts out executable
 -- by PUBLIC, which includes the lane roles. PUBLIC cannot exclude a role, so for each such function
--- still open to PUBLIC, this names every role except the lane roles and then closes PUBLIC. No other
--- role gains or loses anything, and a function already closed to PUBLIC is left alone. This does
--- change the grants on functions the lanes do not own, which is why the owner reviews and applies
--- this file, and why it needs a security review.
+-- still open to PUBLIC, this names every role except the lane roles and then closes PUBLIC. A
+-- function already closed to PUBLIC is left alone.
+--
+-- What changes for other roles. A role that exists when this file runs keeps the access it had,
+-- now by name instead of through PUBLIC. A role created AFTER this file runs gets no access to
+-- these functions until someone grants it: PUBLIC used to cover every future role, and a list of
+-- names cannot. (An earlier version of this comment said no other role gains or loses anything.
+-- That was wrong for roles created later; review finding 2, 2026-11-24.) On 2026-11-24 production
+-- had 13 such functions and 17 roles. The rollback file does not reopen them to PUBLIC.
+--
+-- This changes the grants on functions the lanes do not own, which is why the owner reviews and
+-- applies this file, and why it needs a security review.
 DO $$
 DECLARE
   f regprocedure;

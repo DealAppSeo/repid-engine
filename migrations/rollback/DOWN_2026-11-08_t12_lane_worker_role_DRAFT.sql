@@ -1,13 +1,17 @@
 -- DRAFT rollback for migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql. The owner applies it;
 -- nothing runs it automatically. It removes the lane roles, their policies and the belt functions.
+-- THIS IS NOT A FULL UNDO. It does not reopen to PUBLIC the SECURITY DEFINER functions the forward
+-- file closed (13 in production on 2026-11-24). After this file runs, those functions stay closed
+-- to PUBLIC, and a role created after the forward file still cannot call them until it is granted.
 --
 -- What it does NOT undo, on purpose:
 --   - Row security stays enabled on trinity_tasks, agent_resource_claims and trinity_system_config.
 --     Production had it on before the forward file.
 --   - The PUBLIC EXECUTE closure on other SECURITY DEFINER functions is not reopened. The forward file
---     granted EXECUTE by name to every role that could reach one through PUBLIC, so no role lost
---     access; reopening PUBLIC needs the list from before it ran, which it does not record. That is a
---     security-review decision, not a rollback step.
+--     granted EXECUTE by name to every role that existed when it ran, so no role that existed then
+--     lost access; a role created later has none. Reopening PUBLIC needs the list of functions from
+--     before the forward file ran, which it does not record. That is a security-review decision, not
+--     a rollback step.
 --   - Belt rows already written to principal_grants and trinity_agent_logs stay, as history.
 BEGIN;
 

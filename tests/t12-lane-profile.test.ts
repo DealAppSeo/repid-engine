@@ -100,6 +100,84 @@ if (!PG) {
   console.warn('[t12-lane-profile] NOT_CHECKED: the role block needs T12_LANES_PG_URL (a throwaway Postgres).');
 }
 
+// Review finding 1, 2026-11-24. Every other block here applies the file as the container's superuser.
+// Production's applying login is not one: `postgres` there is NOSUPERUSER CREATEROLE CREATEDB BYPASSRLS
+// REPLICATION on PostgreSQL 17.4 (read from pg_roles that day). From PostgreSQL 16, ALTER ROLE refuses
+// a login that is not a superuser as soon as the statement names the superuser attribute, in either
+// direction, so a file that passes as a superuser can still stop on its first ALTER ROLE in production.
+// This block applies the file as a login shaped like production's. It runs first because roles are
+// shared by the whole cluster, and the block below then re-applies the file as a superuser.
+describePg('the forward file, applied by a login that is not a superuser, as production would', () => {
+  const DB = 't12_profile_nonsuper_test';
+  const APPLIER = 't12_applier_probe';
+  let root: Client;
+  let applier: Pool;
+  let preExisting: string[] = [];
+  const urlFor = (user: string) => { const u = new URL(PG!); u.pathname = `/${DB}`; u.username = user; return u.toString(); };
+
+  beforeAll(async () => {
+    root = new Client({ connectionString: PG });
+    await root.connect();
+    await root.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`);
+    await root.query(`DROP ROLE IF EXISTS ${APPLIER}`);
+    await root.query(`CREATE ROLE ${APPLIER} LOGIN NOSUPERUSER CREATEROLE CREATEDB BYPASSRLS REPLICATION`);
+    // Another suite may have left the lane roles behind, holding grants in its own database, so they
+    // cannot be dropped here. A login alters only roles it administers, and it administers the roles
+    // it creates; for a role that already exists, this grants what creating it would have.
+    preExisting = (await root.query(`SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])`, [[...LANE_ROLES, 't12_lane_worker']])).rows.map((r) => r.rolname);
+    for (const r of preExisting) await root.query(`GRANT ${r} TO ${APPLIER} WITH ADMIN OPTION`);
+    await root.query(`CREATE DATABASE ${DB} OWNER ${APPLIER}`);
+    applier = new Pool({ connectionString: urlFor(APPLIER), max: 2 });
+    await applier.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
+  });
+  afterAll(async () => {
+    await applier.end();
+    await root.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`);
+    await root.query(`DROP ROLE IF EXISTS ${APPLIER}`);
+    await root.end();
+  });
+
+  it('the instrument: the applying login matches production, and is not a superuser', async () => {
+    const { rows } = await applier.query(`SELECT current_user AS name, rolsuper, rolcreaterole, rolcreatedb, rolbypassrls, rolreplication FROM pg_roles WHERE rolname = current_user`);
+    expect(rows[0]).toEqual({ name: APPLIER, rolsuper: false, rolcreaterole: true, rolcreatedb: true, rolbypassrls: true, rolreplication: true });
+    expect(Number((await applier.query('SHOW server_version_num')).rows[0].server_version_num)).toBeGreaterThanOrEqual(160000);
+  });
+
+  it('the whole file applies, and leaves three logins that cannot go past row security', async () => {
+    // Postgres puts the reason in `detail` and the statement in `where`; the message alone names neither.
+    await applier.query(readFileSync(MIGRATION, 'utf8')).catch((e: { message: string; detail?: string; where?: string }) => {
+      throw new Error(`${e.message}${e.detail ? ` | ${e.detail}` : ''}${e.where ? ` | ${e.where.split('\n')[0]}` : ''}`);
+    });
+    const { rows } = await applier.query(
+      `SELECT rolname, rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication, rolinherit FROM pg_roles WHERE rolname = ANY($1::text[]) ORDER BY 1`, [[...LANE_ROLES]],
+    );
+    expect(rows).toEqual([...LANE_ROLES].sort().map((rolname) => ({
+      rolname, rolcanlogin: true, rolsuper: false, rolbypassrls: false, rolcreatedb: false, rolcreaterole: false, rolreplication: false, rolinherit: false,
+    })));
+    const maker = new Pool({ connectionString: urlFor('t12_lane_maker'), max: 1 });
+    try {
+      expect(await dbPrivilege(maker)).toEqual({ name: 't12_lane_maker', privileged: false });
+      await expect(maker.query('SELECT * FROM repid_agents')).rejects.toThrow(/permission denied/);
+    } finally {
+      await maker.end();
+    }
+    const policies = (await applier.query(`SELECT policyname FROM pg_policies WHERE policyname LIKE 't12_lane_%' ORDER BY 1`)).rows.map((r) => r.policyname);
+    expect(policies).toEqual(['t12_lane_checker_pool', 't12_lane_claims', 't12_lane_halt', 't12_lane_integrator_pool', 't12_lane_maker_pool']);
+  });
+
+  it('the statement that first creates a lane role is legal for that login, whether or not this cluster already had the roles', async () => {
+    // When another suite ran first, the file's own CREATE is skipped, so its text is run here by name.
+    const create = /format\('(CREATE ROLE %I [A-Z ]+)', r\)/.exec(readFileSync(MIGRATION, 'utf8'));
+    expect(create).not.toBeNull();
+    expect(create![1]).toContain('NOSUPERUSER');
+    await applier.query('DROP ROLE IF EXISTS t12_create_probe');
+    await applier.query(create![1]!.replace('%I', 't12_create_probe'));
+    await applier.query('DROP ROLE t12_create_probe');
+    // eslint-disable-next-line no-console
+    console.warn(`[t12-lane-profile] lane roles already in this cluster before the non-superuser apply: ${preExisting.join(', ') || 'none (the file created them itself)'}`);
+  });
+});
+
 describePg('the restricted database role, attacked', () => {
   const CONTROL = [{ file: 'src/thing.mjs', find: '42', replace: '41' }];
   const spec = (id: string): LaneSpec => ({
@@ -125,9 +203,10 @@ describePg('the restricted database role, attacked', () => {
     await admin.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
     // The migration must strip a same-named role that already holds more than it should, and disarm
     // the retired shared role, which could approve its own work, if an earlier draft created it.
+    // Superuser is the one thing it cannot strip (see the block above); that case has its own test.
     for (const r of [...LANE_ROLES, 't12_lane_worker']) {
       await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${r}') THEN CREATE ROLE ${r} LOGIN; END IF; END $$`);
-      await admin.query(`ALTER ROLE ${r} LOGIN SUPERUSER BYPASSRLS CREATEDB CREATEROLE REPLICATION`);
+      await admin.query(`ALTER ROLE ${r} LOGIN BYPASSRLS CREATEDB CREATEROLE REPLICATION`);
       await admin.query(`ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO ${r}`);
       await admin.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO ${r}`);
       await admin.query(`GRANT postgres TO ${r}`);
@@ -534,6 +613,25 @@ describePg('the restricted database role, attacked', () => {
         c.release();
         await admin.query('DROP TABLE t12_owned_probe');
       }
+    });
+
+    it('stops with a clear error, and applies nothing, when a lane role is a superuser', async () => {
+      const file = readFileSync(MIGRATION, 'utf8');
+      const halt = async () => (await admin.query(`SELECT count(*)::int AS n FROM pg_policies WHERE policyname = 't12_lane_halt'`)).rows[0].n;
+      await admin.query('DROP POLICY t12_lane_halt ON trinity_system_config');
+      await admin.query('ALTER ROLE t12_lane_checker SUPERUSER');
+      const c = await admin.connect();
+      try {
+        await expect(c.query(file)).rejects.toThrow(/lane role is a superuser or can bypass row security: t12_lane_checker\./);
+        await c.query('ROLLBACK');
+        // The policy the file re-creates near its end is still missing, so nothing after the check ran.
+        expect(await halt()).toBe(0);
+      } finally {
+        c.release();
+        await admin.query('ALTER ROLE t12_lane_checker NOSUPERUSER');
+        await admin.query(file);
+      }
+      expect(await halt()).toBe(1);
     });
 
     it('a refusal stops the whole file when statements run one at a time, as psql -f does', async () => {
