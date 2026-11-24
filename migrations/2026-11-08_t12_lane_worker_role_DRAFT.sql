@@ -193,10 +193,20 @@ BEGIN
     ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
     RETURNING id, expires_at, role INTO g;
     IF g.id IS NULL THEN
-      SELECT id, expires_at, role, revoked_at, not_before INTO g FROM public.principal_grants WHERE idempotency_key = idem;
+      -- A grant for this claim is already there. Report success only for one the submission check
+      -- (t12_belt_permits) will accept, so the two never disagree: before review finding 6
+      -- (2026-11-24) this looked at revocation and expiry only, and answered ok for a grant that
+      -- named another lane or another belt, which the submission check then refused with no reason.
+      SELECT id, expires_at, role, revoked_at, not_before, grantor_agent_id, grantee_agent_id INTO g
+        FROM public.principal_grants WHERE idempotency_key = idem;
       reason := CASE
+        WHEN g.id IS NULL THEN 'the belt for this claim could not be read'
         WHEN g.revoked_at IS NOT NULL THEN 'the belt for this claim was revoked'
         WHEN g.expires_at <= now() THEN 'the belt for this claim has expired'
+        WHEN g.grantor_agent_id IS DISTINCT FROM 't12-belt-issuer' THEN 'the belt for this claim was not issued by the belt issuer'
+        WHEN g.grantee_agent_id IS DISTINCT FROM p_lane THEN 'the belt for this claim names another lane'
+        WHEN g.role IS DISTINCT FROM belt THEN format('the belt for this claim is a %s belt, and the task needs %s', left(COALESCE(g.role, 'nameless'), 40), left(belt, 40))
+        WHEN g.not_before > now() THEN 'the belt for this claim is not valid yet'
       END;
     END IF;
   END IF;
