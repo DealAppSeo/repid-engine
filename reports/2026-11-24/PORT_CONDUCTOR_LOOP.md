@@ -176,7 +176,12 @@ runs them on Linux against Postgres 17 and fails on any skip.
 
 **CI on GitHub** [V: `gh pr checks 1599`]:
 
-CI_PLACEHOLDER
+On the code commit `4f18f737` (read with `gh api repos/DealAppSeo/repid-engine/commits/4f18f737/check-runs`):
+every check succeeded: `test`, `e2e`, `settle`, `boundary-maker`, `boundary-checker`, the four `maker` jobs,
+`CodeQL`, `Analyze (javascript-typescript)`, `HAL prompt-injection / jailbreak probes`, `crosscheck`, `gitleaks`,
+`resident-secrets`, `preflight`, `risk-class`, `zkp-vault`. `crosscheck-live` was skipped (it skips on every PR).
+Open code-scanning findings on the PR: 0. Strix has not reviewed it: Strix does not review drafts.
+This report was committed after that read, so the head commit differs from `4f18f737` by this file only.
 
 The first push had a type error in the new check file (`tsc` red) and was fixed in the next commit. The second
 push failed code scanning (`js/regex-injection`: the pattern validator compiled a pattern in the main context).
