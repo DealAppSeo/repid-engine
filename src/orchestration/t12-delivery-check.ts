@@ -89,8 +89,9 @@ export function deliveryReport(input: {
   const artifacts = input.artifacts.map((a) => matchLines(`artifact ${a.id}`, a.content, input.contract));
   const good = [reply, ...artifacts].filter((c) => c.state === 'delivered');
   const differences: DeliveryReport['differences'] = [];
-  const [first, ...rest] = good;
-  for (const other of first ? rest : []) {
+  const first = good[0];
+  for (const other of good.slice(1)) {
+    if (!first) break;
     for (let i = 0; i < Math.max(first.lines.length, other.lines.length); i++) {
       const a = first.lines[i] ?? null;
       const b = other.lines[i] ?? null;
@@ -104,7 +105,7 @@ export function deliveryReport(input: {
   const inArtifact = input.contract ? delivered(artifacts) : null;
   const disagree = good.length < 2 ? null : differences.length > 0;
   const verdict = !input.contract ? 'NOT_CHECKED: the task has no delivery contract, so nothing can be shown delivered'
-    : disagree ? `DISAGREE: ${good.length} copies meet the contract and differ, first at line ${differences[0].line}`
+    : disagree ? `DISAGREE: ${good.length} copies meet the contract and differ, first at line ${differences[0]?.line}`
     : inReply || inArtifact ? `DELIVERED in ${[inReply && 'the reply', inArtifact && 'an artifact'].filter(Boolean).join(' and ')}${disagree === false ? '; the copies match' : ''}`
     : inReply === false && inArtifact === false ? 'NOT_DELIVERED: neither the reply nor any artifact meets the contract'
     : 'NOT_CHECKED: a copy could not be judged, and no copy meets the contract';
