@@ -126,6 +126,10 @@ What CI gates on, read from `.github/workflows/ci.yml` (job `test`: fixture guar
 
 After the two finding 8 tests were added: `tests/t12-lane-profile.test.ts tests/t12-lane-rollback.test.ts`, same command, exit 0, `Test Suites: 2 passed` · `Tests: 137 passed, 137 total`; `npx tsc --noEmit` exit 0.
 
+**CI caught a real failure caused by this change, on the first push (`09bc4221`).** Job `e2e`: `Tests: 4 failed, 368 passed`, all four in `tests/t12-lanes.test.ts`, with "the belt for this claim names another lane" in the log four times. Diagnosis: REAL, from the finding 6 fix, not a flake. That suite (and `t12-lane-routing.test.ts`) restarts task ids at 1 before every test but kept old grants, so a new claim met a grant with the same key that an earlier test had issued to a different lane. Before the fix, checkout answered ok to that stale grant and the leak went unseen; now it refuses, which is the behaviour finding 6 asked for. In production task ids never restart, so a key cannot meet a grant from another claim. Fix: both suites now clear the grants table between tests. The function was not loosened. I reproduced the failure locally before the fix (6 failed, same message) and the message is gone after it. The remaining local failures in those two suites are timeouts, which this laptop also produces on clean main, so only CI can judge them.
+
+One more lesson from that: my local gating run had covered three suites, not the nine CI runs, because the other suites are timing-flaky here. That left the failure for CI to find. It did, which is what the gate is for, but the local run was not the full picture and I should have said so more plainly at the time.
+
 CI results are in the pull request, read from GitHub after pushing; see the PR's checks for the current state.
 
 ## Not verified
