@@ -1,0 +1,97 @@
+{
+  "note": "Rehearsal inputs for scripts/t12/rehearse.ts. Written for the rehearsal; shaped like rows read on 2026-11-24, not copied from production.",
+  "now": "2026-11-24T12:00:00Z",
+  "contract": {
+    "pattern": "SUPPORTED",
+    "min_lines": 9
+  },
+  "maker": {
+    "id": 900001,
+    "status": "done",
+    "claimed_by": "trinity-maker-a",
+    "expires_at": null,
+    "result": "Audit complete. The nine lines are saved as a document artifact.",
+    "model": "openai/gpt-oss-120b"
+  },
+  "artifacts": [
+    {
+      "id": 800001,
+      "content": "1 SUPPORTED F1\n2 SUPPORTED F9\n3 SUPPORTED F9\n4 SUPPORTED F5\n5 SUPPORTED F2\n6 SUPPORTED F2\n7 NOT SUPPORTED NONE\n8 NOT SUPPORTED NONE\n9 NOT SUPPORTED NONE"
+    }
+  ],
+  "breaker": {
+    "id": 900002,
+    "status": "done",
+    "claimed_by": "trinity-breaker-b",
+    "expires_at": null,
+    "result": "1 | OK\n2 | OK\n3 | OK\n4 | OK\n5 | OK\n6 | OK\n7 | OK\n8 | OK\n9 | OK",
+    "model": "nvidia/nemotron-3-ultra-550b:free",
+    "verdict": "pass"
+  },
+  "breaker_same_family": {
+    "id": 900003,
+    "status": "done",
+    "claimed_by": "trinity-breaker-c",
+    "expires_at": null,
+    "result": "all OK",
+    "model": "gpt-oss-20b",
+    "verdict": "pass"
+  },
+  "scoreEvents": [
+    {
+      "id": 1,
+      "delta": 0,
+      "is_shadow": true
+    },
+    {
+      "id": 2,
+      "delta": 0,
+      "is_shadow": true
+    }
+  ],
+  "blocker_board": {
+    "frozen_lanes": [
+      "outreach"
+    ],
+    "limit": 1,
+    "events": [],
+    "cards": [
+      {
+        "id": "S1",
+        "horizon": "immediate",
+        "owner": "Sean",
+        "state": "open",
+        "lane": "founder"
+      },
+      {
+        "id": "M1",
+        "horizon": "immediate",
+        "owner": "T12",
+        "state": "blocked",
+        "lane": "audit",
+        "blocked_on": "the text to audit is not fetched yet"
+      },
+      {
+        "id": "N1",
+        "horizon": "near",
+        "owner": "T12",
+        "state": "open",
+        "lane": "evidence"
+      },
+      {
+        "id": "L1",
+        "horizon": "long",
+        "owner": "T12",
+        "state": "open",
+        "lane": "design"
+      }
+    ]
+  },
+  "repair_rival": {
+    "id": "K4",
+    "horizon": "immediate",
+    "owner": "T12",
+    "state": "open",
+    "lane": "peer-audit"
+  }
+}

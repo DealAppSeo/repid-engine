@@ -776,6 +776,45 @@ export interface ReplenishReport {
   frozen: string[];
 }
 
+export interface PoolRow {
+  id: string | null;
+  status: string;
+  claim_count: number;
+}
+
+/**
+ * Which specs a top-up would insert, given the pool as it stands. Pure: replenish() runs it inside
+ * its transaction, and a dry run (t12-rehearsal.ts) runs it on a snapshot with no database at all.
+ */
+export function planReplenish(specs: readonly LaneSpec[], pool: readonly PoolRow[], target: number, opts: { frozenWorkLanes?: readonly string[] } = {}): { insert: LaneSpec[]; report: ReplenishReport } {
+  const seen = new Set(pool.map((r) => r.id));
+  let eligible = pool.filter((r) => r.id && r.status === 'pending' && r.claim_count < MAX_TASK_CLAIMS).length;
+  const invalid: ReplenishReport['invalid'] = [];
+  const valid = new Map<string, LaneSpec>();
+  for (const spec of specs) {
+    const problems = validateSpec(spec);
+    if (problems.length) invalid.push({ id: String(spec?.id), problems });
+    else if (!valid.has(spec.id)) valid.set(spec.id, spec);
+  }
+  const order = orderFeed([...valid.values()].map((spec) => feedItem(spec.id, spec)), { frozen: opts.frozenWorkLanes });
+  const frozen = order.skipped.filter((k) => k.reason.includes('is frozen')).map((k) => k.id);
+  const insert: LaneSpec[] = [];
+  for (const pick of order.picks) {
+    const spec = valid.get(pick.id)!;
+    if (seen.has(spec.id) || eligible >= target) continue;
+    seen.add(spec.id);
+    insert.push(spec);
+    eligible++;
+  }
+  return {
+    insert,
+    report: {
+      inserted: insert.map((s) => s.id), invalid, eligible, target, frozen,
+      underflow: eligible < target ? `READY_UNDERFLOW: ${eligible}/${target} eligible, ${invalid.length} specs refused` : null,
+    },
+  };
+}
+
 /**
  * Top the pool up to `target` from vetted specs, deduped by spec id across every state. Specs are
  * taken immediate, near, long, in file order inside a horizon; a frozen work lane is skipped.
@@ -787,22 +826,9 @@ export async function replenish(db: TxDb, specs: readonly LaneSpec[], target: nu
       `SELECT status, claim_count, metadata #>> '{t12,spec,id}' AS id, now()::text AS db_now FROM trinity_tasks WHERE assigned_to = $1`,
       [LANE_POOL],
     );
-    const seen = new Set(all.map((r: any) => r.id));
-    let eligible = all.filter((r: any) => r.id && r.status === 'pending' && r.claim_count < MAX_TASK_CLAIMS).length;
     const { rows: nowRow } = await c.query(`SELECT now()::text AS db_now`);
-    const inserted: string[] = [];
-    const invalid: ReplenishReport['invalid'] = [];
-    const valid = new Map<string, LaneSpec>();
-    for (const spec of specs) {
-      const problems = validateSpec(spec);
-      if (problems.length) invalid.push({ id: String(spec?.id), problems });
-      else if (!valid.has(spec.id)) valid.set(spec.id, spec);
-    }
-    const order = orderFeed([...valid.values()].map((spec) => feedItem(spec.id, spec)), { frozen: opts.frozenWorkLanes });
-    const frozen = order.skipped.filter((k) => k.reason.includes('is frozen')).map((k) => k.id);
-    for (const pick of order.picks) {
-      const spec = valid.get(pick.id)!;
-      if (seen.has(spec.id) || eligible >= target) continue;
+    const plan = planReplenish(specs, all as PoolRow[], target, opts);
+    for (const spec of plan.insert) {
       const state: LaneState = {
         spec, stage: 'ready', epoch: 0, attempts: 0, notChecked: 0,
         receipts: appendReceipt([], { at: nowRow[0].db_now, actor: 'replenish', origin: 'autonomous', event: 'enqueued', from: 'none', to: 'ready', epoch: 0, reason: 'vetted spec', evidence: null }),
@@ -812,14 +838,8 @@ export async function replenish(db: TxDb, specs: readonly LaneSpec[], target: nu
          VALUES ($1, $2, 'code', 'building', 'pending', $3, $4, 't12-lane-replenish', jsonb_build_object('t12', $5::jsonb))`,
         [spec.title, spec.prompt, LANE_POOL, spec.priority ?? 50, JSON.stringify(state)],
       );
-      seen.add(spec.id);
-      inserted.push(spec.id);
-      eligible++;
     }
-    return {
-      inserted, invalid, eligible, target, frozen,
-      underflow: eligible < target ? `READY_UNDERFLOW: ${eligible}/${target} eligible, ${invalid.length} specs refused` : null,
-    };
+    return plan.report;
   });
 }
 

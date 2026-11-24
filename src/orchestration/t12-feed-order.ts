@@ -11,11 +11,16 @@
  * Rules, in this order:
  *  1. Work in a frozen work lane is not offered, failed or new. (The prototype let a failed card
  *     through a freeze; here a freeze holds.)
- *  2. Work whose last attempt failed comes back as a fix before anything new, oldest failure first.
- *  3. Then new work by horizon: immediate, near, long. Input order inside a horizon, so the
- *     caller's own order (priority, age, file order) still decides ties.
+ *  2. Horizons are scanned in order on every call: immediate, near, long.
+ *  3. Inside a horizon, work whose last attempt failed comes back first as a fix, oldest failure
+ *     first; then new work in input order, so the caller's own order (priority, age, file order)
+ *     still decides ties. (The prototype put every failed card ahead of all horizons. The owner's
+ *     rule, 2026-11-24, is failed first within each horizon: a failed long-term card does not
+ *     jump an immediate one.)
  *  4. No id twice. Everything not picked is in `skipped` with a reason.
  */
+
+import vm from 'node:vm';
 
 export const HORIZONS = ['immediate', 'near', 'long'] as const;
 export type Horizon = (typeof HORIZONS)[number];
@@ -50,7 +55,7 @@ export function orderFeed(items: readonly FeedItem[], opts: { frozen?: readonly 
 
   const skipped: FeedOrder['skipped'] = [];
   const seen = new Set<string>();
-  const fixes: Array<FeedPick & { t: number }> = [];
+  const fixes: Record<Horizon, Array<FeedPick & { t: number }>> = { immediate: [], near: [], long: [] };
   const fresh: Record<Horizon, FeedPick[]> = { immediate: [], near: [], long: [] };
 
   for (const it of items) {
@@ -61,20 +66,19 @@ export function orderFeed(items: readonly FeedItem[], opts: { frozen?: readonly 
     seen.add(it.id);
     if (it.workLane !== undefined && frozen.has(it.workLane)) skipped.push({ id: it.id, reason: `work lane ${it.workLane} is frozen` });
     else if (it.blocked) skipped.push({ id: it.id, reason: it.blocked });
-    else if (it.failedAt) {
-      const t = Date.parse(it.failedAt);
-      // A fix queue ordered on an unreadable time would be a guess.
-      if (Number.isNaN(t)) throw new Error(`orderFeed: ${it.id} has an unreadable failure time: ${it.failedAt}`);
-      fixes.push({ id: it.id, kind: 'fix', reason: `last attempt failed at ${it.failedAt}`, t });
-    } else {
+    else {
       const h = it.horizon ?? 'near';
       if (!HORIZONS.includes(h)) throw new Error(`orderFeed: ${it.id} has horizon ${String(h)}; use ${HORIZONS.join(', ')}`);
-      fresh[h].push({ id: it.id, kind: 'new', reason: `eligible, horizon ${h}` });
+      if (it.failedAt) {
+        const t = Date.parse(it.failedAt);
+        // A fix queue ordered on an unreadable time would be a guess.
+        if (Number.isNaN(t)) throw new Error(`orderFeed: ${it.id} has an unreadable failure time: ${it.failedAt}`);
+        fixes[h].push({ id: it.id, kind: 'fix', reason: `last attempt failed at ${it.failedAt}, horizon ${h}`, t });
+      } else fresh[h].push({ id: it.id, kind: 'new', reason: `eligible, horizon ${h}` });
     }
   }
 
-  fixes.sort((a, b) => a.t - b.t);
-  const queue: FeedPick[] = [...fixes.map(({ t: _t, ...p }) => p), ...HORIZONS.flatMap((h) => fresh[h])];
+  const queue: FeedPick[] = HORIZONS.flatMap((h) => [...fixes[h].sort((a, b) => a.t - b.t).map(({ t: _t, ...p }) => p), ...fresh[h]]);
   const picks = queue.slice(0, limit);
   for (const q of queue.slice(picks.length)) skipped.push({ id: q.id, reason: `${q.reason}; not picked, limit of ${limit} reached` });
   return { picks, skipped };
@@ -143,8 +147,10 @@ export function specMeta(context: unknown): { meta: SpecMeta; problems: string[]
       if (!value) problems.push('meta delivery_contract.pattern is empty');
       else if (value.length > MAX_PATTERN_CHARS) problems.push(`meta delivery_contract.pattern is longer than ${MAX_PATTERN_CHARS} characters`);
       else {
+        // Compiled where it is later run (t12-delivery-check.ts): in a separate context under a time
+        // limit, never in this one. The pattern is data from a spec or a task row.
         try {
-          new RegExp(value);
+          vm.runInNewContext('new RegExp(pattern); true', { pattern: value }, { timeout: 250 });
           pattern = value;
         } catch {
           problems.push('meta delivery_contract.pattern is not a valid regular expression');

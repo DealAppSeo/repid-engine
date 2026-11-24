@@ -1,66 +1,43 @@
 /**
  * The feed order, against the snapshots the conductor prototype was scored on (2026-11-24):
  * trial CT-1, trial CT-2, and the board of working-loop cycle 1 at three points in its life.
- * The keys were written before the prototype ran; they are not derived from this code.
+ * The picks were keyed before the prototype ran. One thing differs from those keys on purpose:
+ * the prototype put every failed card ahead of all horizons; the rule here is failed first within
+ * each horizon, so an immediate card now goes ahead of a failed card that is not immediate. The
+ * same cards are picked in CT-1 and CT-2; only their order changes, and each test says so.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { orderFeed, specMeta, type FeedItem, type Horizon } from '../src/orchestration/t12-feed-order';
+import { itemsFromBoard, type Board } from '../src/orchestration/t12-rehearsal';
 import { validateSpec, type LaneSpec } from '../src/orchestration/t12-lane-store';
 
-interface Card { id: string; horizon: Horizon; owner: string; state: string; lane: string; blocked_on?: string }
-interface Event { card: string; at: string; result: 'failed' | 'passed' | 'dispatched' }
-interface Snapshot { cards: Card[]; events: Event[]; frozen_lanes: string[]; limit: number }
+type Snapshot = Board;
 
 const load = (name: string): Snapshot => JSON.parse(readFileSync(join(__dirname, 'fixtures/t12-conductor', name), 'utf8'));
-
-/**
- * A board snapshot as feed items. This is the part the database does for the real feeder: a row's
- * state already says whether its last attempt failed and whether it is out with a worker.
- */
-function fromSnapshot(s: Snapshot): FeedItem[] {
-  const latest = new Map<string, Event>();
-  const dispatched = new Set<string>();
-  for (const e of s.events) {
-    const prev = latest.get(e.card);
-    if (!prev || Date.parse(e.at) >= Date.parse(prev.at)) latest.set(e.card, e);
-    if (e.result === 'dispatched') dispatched.add(e.card);
-  }
-  const failedAt = (id: string) => (latest.get(id)?.result === 'failed' ? latest.get(id)!.at : null);
-  const blocked = (c: Card): string | null => {
-    if (failedAt(c.id)) return null;
-    if (c.owner !== 'T12') return `owner is ${c.owner}, not T12`;
-    if (c.state !== 'open') return `state is ${c.state}`;
-    if (dispatched.has(c.id)) return 'already dispatched';
-    return null;
-  };
-  const onBoard = new Set(s.cards.map((c) => c.id));
-  return [
-    ...s.cards.map((c) => ({ id: c.id, horizon: c.horizon, workLane: c.lane, failedAt: failedAt(c.id), blocked: blocked(c) })),
-    ...[...latest.values()].filter((e) => !onBoard.has(e.card)).map((e) => ({
-      id: e.card, failedAt: failedAt(e.card), blocked: e.result === 'failed' ? null : `latest event is ${e.result}, nothing to fix`,
-    })),
-  ];
-}
+const fromSnapshot = itemsFromBoard;
 
 const run = (s: Snapshot) => orderFeed(fromSnapshot(s), { frozen: s.frozen_lanes, limit: s.limit });
 const picked = (s: Snapshot) => run(s).picks.map((p) => [p.id, p.kind]);
 const why = (s: Snapshot, id: string) => run(s).skipped.find((k) => k.id === id)?.reason;
 
 describe('feed order on the conductor trial snapshots', () => {
-  it('CT-1: the I0 fix, then I2, then N2', () => {
+  // Prototype key: I0, I2, N2. I0 is a finished card no longer on the board, so it has no horizon and ranks as near.
+  it('CT-1: I2 (immediate), then the I0 fix, then N2', () => {
     const s = load('ct1.json');
-    expect(picked(s)).toEqual([['I0', 'fix'], ['I2', 'new'], ['N2', 'new']]);
+    expect(picked(s)).toEqual([['I2', 'new'], ['I0', 'fix'], ['N2', 'new']]);
     // Every card not picked is accounted for. (The prototype listed them in board order; here the ones cut by the limit come last.)
     expect(run(s).skipped.map((k) => k.id).sort()).toEqual(['I1', 'I3', 'I4', 'L1', 'L2', 'N1', 'N3', 'N4']);
     expect(why(s, 'N4')).toBe('already dispatched');
+    expect(why(s, 'I1')).toBe('owner is Sean, not T12');
     expect(why(s, 'N1')).toBe('work lane outreach is frozen');
     expect(why(s, 'L1')).toContain('limit of 3 reached');
   });
 
-  it('CT-2: the Z7 fix, the Z9 fix, then A2; oldest failure first although the events are out of order', () => {
+  // Prototype key: Z7, Z9, A2.
+  it('CT-2: A2 (immediate), then the Z7 fix, then the Z9 fix; oldest failure first although the events are out of order', () => {
     const s = load('ct2.json');
-    expect(picked(s)).toEqual([['Z7', 'fix'], ['Z9', 'fix'], ['A2', 'new']]);
+    expect(picked(s)).toEqual([['A2', 'new'], ['Z7', 'fix'], ['Z9', 'fix']]);
     expect(why(s, 'Z8')).toBe('latest event is passed, nothing to fix');
     expect(why(s, 'A4')).toBe('work lane outreach is frozen');
   });
@@ -82,6 +59,8 @@ describe('feed order on the cycle-1 board', () => {
     expect(picked(board)).toEqual([['E6', 'new']]);
     expect(why(board, 'O1')).toBe('work lane outreach is frozen');
     expect(why(board, 'K3')).toBe('already dispatched');
+    expect(why(board, 'S1')).toBe('owner is Sean, not T12');
+    expect(why(board, 'E4')).toContain('state is blocked');
   });
 });
 
@@ -103,8 +82,17 @@ describe('feed order rules', () => {
     expect(out.picks.map((p) => p.id)).toEqual(['now', 'plain', 'later']);
   });
 
+  it('puts failed work first inside its own horizon, not ahead of a nearer horizon', () => {
+    const out = orderFeed([
+      item('long-new', { horizon: 'long' }), item('long-failed', { horizon: 'long', failedAt: '2026-11-24T09:00:00Z' }),
+      item('now-new', { horizon: 'immediate' }), item('now-failed-late', { horizon: 'immediate', failedAt: '2026-11-24T09:30:00Z' }),
+      item('now-failed-early', { horizon: 'immediate', failedAt: '2026-11-24T09:10:00Z' }), item('near-new'),
+    ]);
+    expect(out.picks.map((p) => p.id)).toEqual(['now-failed-early', 'now-failed-late', 'now-new', 'near-new', 'long-failed', 'long-new']);
+  });
+
   it('returns a failed item once, as a fix', () => {
-    const out = orderFeed([item('r1', { horizon: 'long', failedAt: '2026-11-24T09:20:00Z' }), item('r2', { horizon: 'immediate' }), item('r1')]);
+    const out = orderFeed([item('r1', { failedAt: '2026-11-24T09:20:00Z' }), item('r2'), item('r1')]);
     expect(out.picks.map((p) => [p.id, p.kind])).toEqual([['r1', 'fix'], ['r2', 'new']]);
     expect(out.skipped).toEqual([{ id: 'r1', reason: 'listed twice; the first entry stands' }]);
   });
