@@ -54,8 +54,8 @@ SELECT normalize_agent_name('trinity-t12-lanes') AS pool, normalize_agent_name('
 SELECT pg_get_constraintdef(co.oid) FROM pg_constraint co WHERE co.conrelid = 'public.trinity_tasks'::regclass AND co.contype = 'c';
 SELECT pg_get_serial_sequence('public.trinity_tasks', 'id') AS tasks_seq, pg_get_serial_sequence('public.agent_resource_claims', 'id') AS claims_seq;
 --    One row per column the forward file names on trinity_tasks, present or not. Expect present = true
---    on all 26; a false stops the forward file at its column grant. `generated` must be empty: a
---    generated column cannot be written. The last 8 are the ones the earlier list left out.
+--    on all 26; a false stops the forward file at its column grant. `generated` must read NEVER on
+--    every row (that is how Postgres reports an ordinary column): a generated column cannot be written. The last 8 are the ones the earlier list left out.
 SELECT want.col, c.column_name IS NOT NULL AS present, c.data_type, c.is_nullable, c.is_generated AS generated
   FROM unnest(ARRAY['title', 'description', 'task_type', 'task_category', 'status', 'assigned_to', 'priority', 'insert_source', 'metadata',
                     'claimed_by', 'claimed_at', 'started_at', 'expires_at', 'claim_count', 'artifact_url', 'external_artifact_url',
