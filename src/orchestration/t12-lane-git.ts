@@ -30,6 +30,7 @@ import { PublishRefused, submissionRefProblem, type Handle, type LaneSpec, type 
 import type { LaneAdapters, MakeOutcome } from './t12-lane-runner';
 import { dockerSandbox, type SandboxRunner } from './t12-sandbox';
 import { exportSubmission, importSubmission } from './t12-lane-transfer';
+import { isMetaEntry } from './t12-feed-order';
 
 export interface PrClient {
   findByBranch(repo: string, branch: string): string | null;
@@ -203,6 +204,7 @@ export function createGitAdapters(cfg: GitAdapterConfig): LaneAdapters {
     try {
       const context: Record<string, string> = {};
       for (const p of h.spec.context ?? []) {
+        if (isMetaEntry(p)) continue; // a spec field, not a file
         const f = join(dir, p);
         if (existsSync(f)) context[p] = readFileSync(f, 'utf8').slice(0, MAX_CONTEXT_CHARS);
       }

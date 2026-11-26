@@ -1,0 +1,93 @@
+{
+  "note": "Conductor trial CT-1 snapshot (2026-11-24). Key: the I0 fix, then I2, then N2.",
+  "cards": [
+    {
+      "id": "I1",
+      "horizon": "immediate",
+      "owner": "Sean",
+      "state": "open",
+      "lane": "x402"
+    },
+    {
+      "id": "I2",
+      "horizon": "immediate",
+      "owner": "T12",
+      "state": "open",
+      "lane": "audit"
+    },
+    {
+      "id": "I3",
+      "horizon": "immediate",
+      "owner": "T12",
+      "state": "blocked",
+      "lane": "delivery",
+      "blocked_on": "scout file missing"
+    },
+    {
+      "id": "I4",
+      "horizon": "immediate",
+      "owner": "T12",
+      "state": "in_progress",
+      "lane": "testing"
+    },
+    {
+      "id": "N1",
+      "horizon": "near",
+      "owner": "T12",
+      "state": "open",
+      "lane": "outreach"
+    },
+    {
+      "id": "N2",
+      "horizon": "near",
+      "owner": "T12",
+      "state": "open",
+      "lane": "audit"
+    },
+    {
+      "id": "N3",
+      "horizon": "near",
+      "owner": "Sean",
+      "state": "open",
+      "lane": "video"
+    },
+    {
+      "id": "N4",
+      "horizon": "near",
+      "owner": "T12",
+      "state": "open",
+      "lane": "calibration"
+    },
+    {
+      "id": "L1",
+      "horizon": "long",
+      "owner": "T12",
+      "state": "open",
+      "lane": "design"
+    },
+    {
+      "id": "L2",
+      "horizon": "long",
+      "owner": "T12",
+      "state": "blocked",
+      "lane": "design",
+      "blocked_on": "L1"
+    }
+  ],
+  "events": [
+    {
+      "card": "I0",
+      "at": "2026-11-24T08:00:00Z",
+      "result": "failed"
+    },
+    {
+      "card": "N4",
+      "at": "2026-11-24T08:57:00Z",
+      "result": "dispatched"
+    }
+  ],
+  "frozen_lanes": [
+    "outreach"
+  ],
+  "limit": 3
+}

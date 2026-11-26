@@ -87,7 +87,7 @@ if (require.main === module) {
   for (const id of ids) {
     const spec = specs.get(id);
     if (!spec) throw new Error(`no spec ${id}`);
-    const file = (spec.context ?? [])[0];
+    const file = (spec.context ?? []).find((p) => !String(p).startsWith('meta:')); // meta: entries are spec fields, not files
     if (!file) throw new Error(`${id} names no context file`);
     const source = execFileSync('git', ['-C', clone, 'show', `${base}:${file}`], { encoding: 'utf8' });
     writeFileSync(join(outDir, `${id}.md`), buildPacket(spec, source, file, base));

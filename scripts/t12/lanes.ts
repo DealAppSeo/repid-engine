@@ -3,7 +3,7 @@
  * Run the T12 coding lanes once, until nothing can move. Not a scheduler: nothing here re-runs itself.
  *
  *   npx ts-node scripts/t12/lanes.ts --specs <file.jsonl> --repo DealAppSeo/trustshell=<clean clone> --work-root <dir>
- *     [--role maker|checker|integrator] [--transfer-out <dir>] [--transfer-in <dir>]
+ *     [--role maker|checker|integrator] [--transfer-out <dir>] [--transfer-in <dir>] [--frozen-work-lane <topic>]...
  *
  * A role runs one stage only and holds only that stage's credentials. Separate machines hand commits over
  * with --transfer-out and --transfer-in, verified against the digest on the task row.
@@ -105,6 +105,7 @@ async function main(): Promise<void> {
     stop: () => (stopFile ? existsSync(stopFile) : false),
     log: (l) => process.stderr.write(`${l}\n`),
     dailyCap: arg('daily-cap') ? Number(arg('daily-cap')) : undefined,
+    frozenWorkLanes: allArgs('frozen-work-lane'),
   });
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   process.exit(0);

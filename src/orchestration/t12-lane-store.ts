@@ -27,6 +27,7 @@ import { createHash } from 'node:crypto';
 import { canonicalize } from '../services/receipt-signer';
 import { evaluateHandoff, type RequiredOutput } from './handoff-gate';
 import { HEARTBEAT_TTL_MS, MAX_LEASE_AGE_MS } from './write-lease';
+import { isMetaEntry, orderFeed, specMeta, type FeedItem } from './t12-feed-order';
 
 export const LANE_POOL = 'trinity-t12-lanes';
 /** Above MAX_ATTEMPTS because a crash also spends a claim: the reaper does not refund one. A blameless release does. */
@@ -219,9 +220,11 @@ export function validateSpec(s: Partial<LaneSpec> | null | undefined): string[] 
     out.push('overwrites must be a subset of its paths');
   }
   // Context is read from disk and sent to a model, so it gets the same fence as a write.
+  // A `meta:` entry is a spec field, not a file (t12-feed-order.ts); it is never read from disk.
   for (const p of Array.isArray(s.context) ? s.context : []) {
-    if (badPath(p) || PROTECTED_PATH.test(p)) out.push(`context ${String(p)} may not be read`);
+    if (!isMetaEntry(p) && (badPath(p) || PROTECTED_PATH.test(p))) out.push(`context ${String(p)} may not be read`);
   }
+  out.push(...specMeta(s.context).problems);
   if (s.context !== undefined && !Array.isArray(s.context)) out.push('context is not a list');
   if (s.belt !== undefined && s.belt !== 'engineering' && s.belt !== 'research') out.push('belt must be engineering or research');
   // A maker bases on origin/main, which does not hold a dependency until a human merges it.
@@ -241,6 +244,14 @@ export function validateSpec(s: Partial<LaneSpec> | null | undefined): string[] 
   }
   if (!['LOW', 'MEDIUM', 'HIGH'].includes(String(s.risk))) out.push('risk is not LOW, MEDIUM or HIGH');
   return out;
+}
+
+/** A spec as the feed order sees it. A ready row that has been rejected is a fix, dated by that rejection. */
+function feedItem(id: string, spec: LaneSpec, s?: LaneState): FeedItem {
+  const { meta } = specMeta(spec.context);
+  const failed = s !== undefined && s.attempts > 0 && s.lastRejection !== undefined;
+  const receipt = failed ? [...s.receipts].reverse().find((r) => r.reason === s.lastRejection) ?? s.receipts[s.receipts.length - 1] : undefined;
+  return { id, horizon: meta.horizon, workLane: meta.workLane, failedAt: receipt?.at ?? null };
 }
 
 const lockKey = (s: LaneSpec, p: string) => `${s.repo}\0${p.toLowerCase()}`;
@@ -386,7 +397,7 @@ async function fenced(
  * serve them. An empty list serves nothing. Omitted means every repo on LANE_REPOS, which only
  * in-process callers with no clones use; the CLI always passes its `--repo` list.
  */
-export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: number; origin?: ReceiptOrigin; repos?: readonly string[] } = {}): Promise<ClaimResult> {
+export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: number; origin?: ReceiptOrigin; repos?: readonly string[]; frozenWorkLanes?: readonly string[] } = {}): Promise<ClaimResult> {
   assertActor(lane);
   const cap = opts.dailyCap ?? DAILY_CLAIM_CAP;
   return db.tx(async (c): Promise<ClaimResult> => {
@@ -424,10 +435,16 @@ export async function claimMake(db: TxDb, lane: string, opts: { dailyCap?: numbe
         ORDER BY priority DESC NULLS LAST, created_at ASC LIMIT 100 FOR UPDATE SKIP LOCKED`,
       [LANE_POOL, MAX_TASK_CLAIMS, opts.repos ?? null],
     );
-    const candidates = (rows as Row[]).map((row) => ({ row, spec: stateOf(row).spec }));
-    if (candidates.length === 0) {
+    const ready = (rows as Row[]).map((row) => ({ row, spec: stateOf(row).spec }));
+    if (ready.length === 0) {
       return { kind: 'none', reason: opts.repos ? `no ready task in the repos this run can serve: ${opts.repos.join(', ') || 'none'}` : 'no ready task' };
     }
+    // Failed work first, then by horizon; the SQL order above (priority, then age) settles the rest.
+    // ponytail: only the 100 rows above are ordered; a failed row behind 100 others waits its turn.
+    const byId = new Map(ready.map((r) => [String(r.row.id), r]));
+    const order = orderFeed(ready.map((r) => feedItem(String(r.row.id), r.spec, stateOf(r.row))), { frozen: opts.frozenWorkLanes });
+    const candidates = order.picks.map((p) => byId.get(p.id)!);
+    if (candidates.length === 0) return { kind: 'none', reason: `every ready task is held back: ${order.skipped[0]?.reason ?? 'no reason recorded'}` };
 
     const { rows: held } = await c.query(
       `SELECT metadata #> '{t12,spec}' AS spec FROM trinity_tasks
@@ -755,28 +772,63 @@ export interface ReplenishReport {
   target: number;
   /** Set when the pool stays below target. Filler is never inserted to close the gap. */
   underflow: string | null;
+  /** Spec ids held back because their work lane is frozen. */
+  frozen: string[];
 }
 
-/** Top the pool up to `target` from vetted specs, deduped by spec id across every state. */
-export async function replenish(db: TxDb, specs: readonly LaneSpec[], target: number): Promise<ReplenishReport> {
+export interface PoolRow {
+  id: string | null;
+  status: string;
+  claim_count: number;
+}
+
+/**
+ * Which specs a top-up would insert, given the pool as it stands. Pure: replenish() runs it inside
+ * its transaction, and a dry run (t12-rehearsal.ts) runs it on a snapshot with no database at all.
+ */
+export function planReplenish(specs: readonly LaneSpec[], pool: readonly PoolRow[], target: number, opts: { frozenWorkLanes?: readonly string[] } = {}): { insert: LaneSpec[]; report: ReplenishReport } {
+  const seen = new Set(pool.map((r) => r.id));
+  let eligible = pool.filter((r) => r.id && r.status === 'pending' && r.claim_count < MAX_TASK_CLAIMS).length;
+  const invalid: ReplenishReport['invalid'] = [];
+  const valid = new Map<string, LaneSpec>();
+  for (const spec of specs) {
+    const problems = validateSpec(spec);
+    if (problems.length) invalid.push({ id: String(spec?.id), problems });
+    else if (!valid.has(spec.id)) valid.set(spec.id, spec);
+  }
+  const order = orderFeed([...valid.values()].map((spec) => feedItem(spec.id, spec)), { frozen: opts.frozenWorkLanes });
+  const frozen = order.skipped.filter((k) => k.reason.includes('is frozen')).map((k) => k.id);
+  const insert: LaneSpec[] = [];
+  for (const pick of order.picks) {
+    const spec = valid.get(pick.id)!;
+    if (seen.has(spec.id) || eligible >= target) continue;
+    seen.add(spec.id);
+    insert.push(spec);
+    eligible++;
+  }
+  return {
+    insert,
+    report: {
+      inserted: insert.map((s) => s.id), invalid, eligible, target, frozen,
+      underflow: eligible < target ? `READY_UNDERFLOW: ${eligible}/${target} eligible, ${invalid.length} specs refused` : null,
+    },
+  };
+}
+
+/**
+ * Top the pool up to `target` from vetted specs, deduped by spec id across every state. Specs are
+ * taken immediate, near, long, in file order inside a horizon; a frozen work lane is skipped.
+ */
+export async function replenish(db: TxDb, specs: readonly LaneSpec[], target: number, opts: { frozenWorkLanes?: readonly string[] } = {}): Promise<ReplenishReport> {
   return db.tx(async (c) => {
     await c.query(`SELECT pg_advisory_xact_lock(hashtext('t12-lanes'))`);
     const { rows: all } = await c.query(
       `SELECT status, claim_count, metadata #>> '{t12,spec,id}' AS id, now()::text AS db_now FROM trinity_tasks WHERE assigned_to = $1`,
       [LANE_POOL],
     );
-    const seen = new Set(all.map((r: any) => r.id));
-    let eligible = all.filter((r: any) => r.id && r.status === 'pending' && r.claim_count < MAX_TASK_CLAIMS).length;
     const { rows: nowRow } = await c.query(`SELECT now()::text AS db_now`);
-    const inserted: string[] = [];
-    const invalid: ReplenishReport['invalid'] = [];
-    for (const spec of specs) {
-      const problems = validateSpec(spec);
-      if (problems.length) {
-        invalid.push({ id: String(spec?.id), problems });
-        continue;
-      }
-      if (seen.has(spec.id) || eligible >= target) continue;
+    const plan = planReplenish(specs, all as PoolRow[], target, opts);
+    for (const spec of plan.insert) {
       const state: LaneState = {
         spec, stage: 'ready', epoch: 0, attempts: 0, notChecked: 0,
         receipts: appendReceipt([], { at: nowRow[0].db_now, actor: 'replenish', origin: 'autonomous', event: 'enqueued', from: 'none', to: 'ready', epoch: 0, reason: 'vetted spec', evidence: null }),
@@ -786,14 +838,8 @@ export async function replenish(db: TxDb, specs: readonly LaneSpec[], target: nu
          VALUES ($1, $2, 'code', 'building', 'pending', $3, $4, 't12-lane-replenish', jsonb_build_object('t12', $5::jsonb))`,
         [spec.title, spec.prompt, LANE_POOL, spec.priority ?? 50, JSON.stringify(state)],
       );
-      seen.add(spec.id);
-      inserted.push(spec.id);
-      eligible++;
     }
-    return {
-      inserted, invalid, eligible, target,
-      underflow: eligible < target ? `READY_UNDERFLOW: ${eligible}/${target} eligible, ${invalid.length} specs refused` : null,
-    };
+    return plan.report;
   });
 }
 
