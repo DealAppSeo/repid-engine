@@ -14,7 +14,8 @@ import { T12_ROUTES } from '../src/orchestration/t12-attempt';
 import { dbPrivilege, privilegedEnvPresent, reachableDefiners } from '../src/orchestration/t12-lane-profile';
 import { runLanes, type LaneAdapters } from '../src/orchestration/t12-lane-runner';
 import {
-  LANE_POOL, checkoutBelt, claimMake, claimStage, coolProvider, coolingProviders, pgHaltClient, poolDb, readLaneState, recordIntegration, recordVerdict, recoverStages, releaseMake, replenish, submit,
+  LANE_POOL, checkoutBelt, claimMake, claimStage, coolProvider, coolingProviders, pgHaltClient, poolDb, readLaneState, recordIntegration, recordVerdict, recoverStages, refuseIntegration, releaseMake, replenish, submit,
+  waitForCapacity,
   type Handle, type LaneSpec,
 } from '../src/orchestration/t12-lane-store';
 
@@ -93,12 +94,140 @@ describe('the real CLI refuses a privileged environment', () => {
   }, 120_000);
 });
 
+// The production check is run by hand before the owner applies the forward file, so nothing executes
+// it here. These hold it to two things a reader would otherwise have to take on trust.
+describe('the read-only production check for the role file', () => {
+  const audit = readFileSync(join(ROOT, 'ops/t12/audit/role-migration-prod-compat.sql'), 'utf8');
+  const sql = audit.replace(/--[^\n]*/g, '');
+  const forward = readFileSync(MIGRATION, 'utf8');
+
+  it('writes nothing: one READ ONLY transaction, rolled back, and no statement that changes anything', () => {
+    const statements = sql.split(';').map((s) => s.trim()).filter(Boolean);
+    expect(statements[0]).toBe('BEGIN READ ONLY');
+    expect(statements[statements.length - 1]).toBe('ROLLBACK');
+    const middle = statements.slice(1, -1);
+    expect(middle.length).toBeGreaterThan(10);
+    for (const s of middle) expect(s).toMatch(/^SELECT\b/);
+    expect(sql).not.toMatch(/\b(INSERT|UPDATE|DELETE|TRUNCATE|CREATE|ALTER|DROP|GRANT|REVOKE|COPY|DO|CALL|SET|COMMIT|nextval|setval|pg_terminate_backend|dblink)\b/i);
+  });
+
+  it('asks about every column the forward file grants or reads, so a missing one cannot go unseen', () => {
+    const lists = [...forward.matchAll(/GRANT (?:INSERT|UPDATE) \(([^)]+)\)\s+ON public\.trinity_tasks/g)].map((m) => m[1]!.split(',').map((c) => c.trim()));
+    expect(lists).toHaveLength(2);
+    const granted = [...new Set(lists.flat())];
+    expect(granted.length).toBeGreaterThan(20);
+    expect(granted).toEqual(expect.arrayContaining(['verifier_verdict', 'verifier_evidence', 'final_verdict', 'verification_method', 'stuck_reason', 'verified_at', 'verify_count', 'completed_at']));
+    const grantsInsert = /INSERT INTO public\.principal_grants \(([^)]+)\)/.exec(forward)![1]!.split(',').map((c) => c.trim());
+    const logInsert = /INSERT INTO public\.trinity_agent_logs \(([^)]+)\)/.exec(forward)![1]!.split(',').map((c) => c.trim());
+    for (const c of [...granted, 'assigned_to', ...grantsInsert, 'id', 'revoked_at', 'not_before', ...logInsert, 'created_at']) expect([c, sql.includes(`'${c}'`)]).toEqual([c, true]);
+  });
+
+  // Review finding 8, settled 2026-11-24 from the production trigger bodies. trg_auto_lineage runs
+  // before every insert and, for a row with a parent, updates the PARENT row's spawn counters. A lane
+  // cannot write those, so a lane row that named a parent would fail to insert. The only thing keeping
+  // lane inserts working is that no lane can set a parent, or the counters, in the first place.
+  it('grants no lane the parent column or the spawn counters', () => {
+    const lists = [...forward.matchAll(/GRANT (?:INSERT|UPDATE) \(([^)]+)\)\s+ON public\.trinity_tasks/g)].map((m) => m[1]!.split(',').map((c) => c.trim()));
+    expect(lists).toHaveLength(2);
+    for (const c of ['parent_task_id', 'generation', 'spawned_count', 'last_spawned_at']) expect([c, lists.flat().includes(c)]).toEqual([c, false]);
+    // A grant on the whole table would hand out every column, these four included.
+    expect(forward).not.toMatch(/GRANT\s+(?:ALL|[A-Z, ]*\b(?:INSERT|UPDATE)\b)(?!\s*\()[A-Z, ]*\s+ON\s+(?:TABLE\s+)?public\.trinity_tasks/);
+    expect('GRANT INSERT, UPDATE ON public.trinity_tasks TO x').toMatch(/GRANT\s+(?:ALL|[A-Z, ]*\b(?:INSERT|UPDATE)\b)(?!\s*\()[A-Z, ]*\s+ON\s+(?:TABLE\s+)?public\.trinity_tasks/);
+  });
+
+  it('asks whether the applying login is a superuser, and fingerprints each trigger function', () => {
+    expect(sql).toMatch(/rolsuper/);
+    expect(sql).toMatch(/md5\(p\.prosrc\)/);
+    expect(sql).toMatch(/indisunique/);
+  });
+});
+
 const PG = process.env.T12_LANES_PG_URL;
 const describePg = PG ? describe : describe.skip;
 if (!PG) {
   // eslint-disable-next-line no-console
   console.warn('[t12-lane-profile] NOT_CHECKED: the role block needs T12_LANES_PG_URL (a throwaway Postgres).');
 }
+
+// Review finding 1, 2026-11-24. Every other block here applies the file as the container's superuser.
+// Production's applying login is not one: `postgres` there is NOSUPERUSER CREATEROLE CREATEDB BYPASSRLS
+// REPLICATION on PostgreSQL 17.4 (read from pg_roles that day). From PostgreSQL 16, ALTER ROLE refuses
+// a login that is not a superuser as soon as the statement names the superuser attribute, in either
+// direction, so a file that passes as a superuser can still stop on its first ALTER ROLE in production.
+// This block applies the file as a login shaped like production's. It runs first because roles are
+// shared by the whole cluster, and the block below then re-applies the file as a superuser.
+describePg('the forward file, applied by a login that is not a superuser, as production would', () => {
+  const DB = 't12_profile_nonsuper_test';
+  const APPLIER = 't12_applier_probe';
+  let root: Client;
+  let applier: Pool;
+  let preExisting: string[] = [];
+  const urlFor = (user: string) => { const u = new URL(PG!); u.pathname = `/${DB}`; u.username = user; return u.toString(); };
+
+  beforeAll(async () => {
+    root = new Client({ connectionString: PG });
+    await root.connect();
+    await root.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`);
+    await root.query(`DROP ROLE IF EXISTS ${APPLIER}`);
+    await root.query(`CREATE ROLE ${APPLIER} LOGIN NOSUPERUSER CREATEROLE CREATEDB BYPASSRLS REPLICATION`);
+    // Another suite may have left the lane roles behind, holding grants in its own database, so they
+    // cannot be dropped here. A login alters only roles it administers, and it administers the roles
+    // it creates; for a role that already exists, this grants what creating it would have.
+    preExisting = (await root.query(`SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])`, [[...LANE_ROLES, 't12_lane_worker']])).rows.map((r) => r.rolname);
+    for (const r of preExisting) await root.query(`GRANT ${r} TO ${APPLIER} WITH ADMIN OPTION`);
+    await root.query(`CREATE DATABASE ${DB} OWNER ${APPLIER}`);
+    applier = new Pool({ connectionString: urlFor(APPLIER), max: 2 });
+    await applier.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
+  }, 60_000);
+  afterAll(async () => {
+    await applier.end();
+    await root.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`);
+    await root.query(`DROP ROLE IF EXISTS ${APPLIER}`);
+    await root.end();
+  });
+
+  it('the instrument: the applying login matches production, and is not a superuser', async () => {
+    const { rows } = await applier.query(`SELECT current_user AS name, rolsuper, rolcreaterole, rolcreatedb, rolbypassrls, rolreplication FROM pg_roles WHERE rolname = current_user`);
+    expect(rows[0]).toEqual({ name: APPLIER, rolsuper: false, rolcreaterole: true, rolcreatedb: true, rolbypassrls: true, rolreplication: true });
+    expect(Number((await applier.query('SHOW server_version_num')).rows[0].server_version_num)).toBeGreaterThanOrEqual(160000);
+  });
+
+  it('the whole file applies, and leaves three logins that cannot go past row security', async () => {
+    // Postgres puts the reason in `detail` and the statement in `where`; the message alone names neither.
+    await applier.query(readFileSync(MIGRATION, 'utf8')).catch((e: { message: string; detail?: string; where?: string }) => {
+      throw new Error(`${e.message}${e.detail ? ` | ${e.detail}` : ''}${e.where ? ` | ${e.where.split('\n')[0]}` : ''}`);
+    });
+    const { rows } = await applier.query(
+      `SELECT rolname, rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication, rolinherit FROM pg_roles WHERE rolname = ANY($1::text[]) ORDER BY 1`, [[...LANE_ROLES]],
+    );
+    expect(rows).toEqual([...LANE_ROLES].sort().map((rolname) => ({
+      rolname, rolcanlogin: true, rolsuper: false, rolbypassrls: false, rolcreatedb: false, rolcreaterole: false, rolreplication: false, rolinherit: false,
+    })));
+    const maker = new Pool({ connectionString: urlFor('t12_lane_maker'), max: 1 });
+    try {
+      expect(await dbPrivilege(maker)).toEqual({ name: 't12_lane_maker', privileged: false });
+      await expect(maker.query('SELECT * FROM repid_agents')).rejects.toThrow(/permission denied/);
+      // And it can do its first job: put a row in the pool, through the name trigger.
+      expect((await maker.query(`INSERT INTO trinity_tasks (description, status, assigned_to) VALUES ('applied as production would', 'pending', $1)`, [LANE_POOL])).rowCount).toBe(1);
+    } finally {
+      await maker.end();
+    }
+    const policies = (await applier.query(`SELECT policyname FROM pg_policies WHERE policyname LIKE 't12_lane_%' ORDER BY 1`)).rows.map((r) => r.policyname);
+    expect(policies).toEqual(['t12_lane_checker_pool', 't12_lane_claims', 't12_lane_halt', 't12_lane_integrator_pool', 't12_lane_maker_pool']);
+  });
+
+  it('the statement that first creates a lane role is legal for that login, whether or not this cluster already had the roles', async () => {
+    // When another suite ran first, the file's own CREATE is skipped, so its text is run here by name.
+    const create = /format\('(CREATE ROLE %I [A-Z ]+)', r\)/.exec(readFileSync(MIGRATION, 'utf8'));
+    expect(create).not.toBeNull();
+    expect(create![1]).toContain('NOSUPERUSER');
+    await applier.query('DROP ROLE IF EXISTS t12_create_probe');
+    await applier.query(create![1]!.replace('%I', 't12_create_probe'));
+    await applier.query('DROP ROLE t12_create_probe');
+    // eslint-disable-next-line no-console
+    console.warn(`[t12-lane-profile] lane roles already in this cluster before the non-superuser apply: ${preExisting.join(', ') || 'none (the file created them itself)'}`);
+  });
+});
 
 describePg('the restricted database role, attacked', () => {
   const CONTROL = [{ file: 'src/thing.mjs', find: '42', replace: '41' }];
@@ -125,9 +254,10 @@ describePg('the restricted database role, attacked', () => {
     await admin.query(readFileSync(join(__dirname, 'fixtures/t12-lanes-schema.sql'), 'utf8'));
     // The migration must strip a same-named role that already holds more than it should, and disarm
     // the retired shared role, which could approve its own work, if an earlier draft created it.
+    // Superuser is the one thing it cannot strip (see the block above); that case has its own test.
     for (const r of [...LANE_ROLES, 't12_lane_worker']) {
       await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${r}') THEN CREATE ROLE ${r} LOGIN; END IF; END $$`);
-      await admin.query(`ALTER ROLE ${r} LOGIN SUPERUSER BYPASSRLS CREATEDB CREATEROLE REPLICATION`);
+      await admin.query(`ALTER ROLE ${r} LOGIN BYPASSRLS CREATEDB CREATEROLE REPLICATION`);
       await admin.query(`ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO ${r}`);
       await admin.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO ${r}`);
       await admin.query(`GRANT postgres TO ${r}`);
@@ -147,7 +277,9 @@ describePg('the restricted database role, attacked', () => {
     checker = new Pool({ connectionString: as('t12_lane_checker'), max: 4 });
     integrator = new Pool({ connectionString: as('t12_lane_integrator'), max: 4 });
     await admin.query(`INSERT INTO trinity_tasks (description, status, assigned_to) VALUES ('someone else''s task', 'pending', 'trinity-orch')`);
-  });
+    // Creating a database right after the block above dropped one has passed jest's default 5 seconds
+    // on a slow machine (seen once locally, 2026-11-24). This is setup, not something being timed.
+  }, 60_000);
   afterAll(async () => { await worker.end(); await checker.end(); await integrator.end(); await admin.end(); });
 
   it('the instrument can tell the difference: owner is privileged, no lane role is', async () => {
@@ -173,6 +305,30 @@ describePg('the restricted database role, attacked', () => {
     expect(['submitted', 'check_approved', 'integrated'].map((e) => done.receipts.find((r) => r.event === e)!.actor)).toEqual(['trinity-lane-1', 'trinity-lane-2', 'trinity-lane-3']);
     await coolProvider(worker, 'groq', 60, 'rate_limited');
     expect((await coolingProviders(worker)).has('groq')).toBe(true);
+  });
+
+  // Review finding 8, settled 2026-11-24. trg_normalize_agent_names runs on every lane write and calls
+  // normalize_agent_name. That helper does not run with its owner's rights and everyone may call it,
+  // so the block that closes definer functions to PUBLIC must go on leaving it alone. If it ever
+  // closed it, every lane write would fail at the trigger.
+  it('the maker can still insert a pool row, because the forward file leaves the name helper open', async () => {
+    const helper = (await admin.query(
+      `SELECT p.prosecdef, has_function_privilege('t12_lane_maker', p.oid, 'EXECUTE') AS maker_may,
+              (p.proacl IS NULL OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')) AS open_to_public
+         FROM pg_proc p WHERE p.oid = 'public.normalize_agent_name(text)'::regprocedure`,
+    )).rows[0];
+    expect(helper).toEqual({ prosecdef: false, maker_may: true, open_to_public: true });
+    const insert = () => worker.query(`INSERT INTO trinity_tasks (description, status, assigned_to) VALUES ('a pool row', 'pending', $1) RETURNING id, assigned_to`, [LANE_POOL]);
+    const made = await insert();
+    expect(made.rows[0].assigned_to).toBe(LANE_POOL);
+    // Control: with the helper closed, the same insert fails at the trigger, so the pass above means something.
+    await admin.query('REVOKE EXECUTE ON FUNCTION public.normalize_agent_name(text) FROM PUBLIC');
+    try {
+      await expect(insert()).rejects.toThrow(/permission denied for function normalize_agent_name/);
+    } finally {
+      await admin.query('GRANT EXECUTE ON FUNCTION public.normalize_agent_name(text) TO PUBLIC');
+    }
+    await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [made.rows[0].id]);
   });
 
   it('cannot see or touch a task outside the lane pool', async () => {
@@ -282,6 +438,32 @@ describePg('the restricted database role, attacked', () => {
       await admin.query(`UPDATE trinity_tasks SET status = 'cancelled' WHERE id = $1`, [h.taskId]);
     });
 
+    // Review finding 6, 2026-11-24. Checkout used to look only at revocation and expiry when it found a
+    // grant already there, so it answered ok for a grant the submission check then refused. It failed
+    // closed, but the refusal came later and without a reason.
+    it('checkout does not report success for an existing grant that names another lane or another belt', async () => {
+      const h = await claimed();
+      const first = await checkoutBelt(db(), h);
+      // Control: asking again for an untouched grant is still a success, and the same grant.
+      expect(await checkoutBelt(db(), h)).toEqual(first);
+      expect(first).toMatchObject({ ok: true, belt: 'engineering' });
+
+      await admin.query(`UPDATE principal_grants SET grantee_agent_id = 'trinity-lane-2' WHERE idempotency_key = $1`, [key(h)]);
+      expect(await checkoutBelt(db(), h)).toEqual({ ok: false, reason: 'the belt for this claim names another lane' });
+      await admin.query(`UPDATE principal_grants SET grantee_agent_id = 'trinity-lane-1', role = 'research' WHERE idempotency_key = $1`, [key(h)]);
+      expect(await checkoutBelt(db(), h)).toEqual({ ok: false, reason: 'the belt for this claim is a research belt, and the task needs engineering' });
+      await admin.query(`UPDATE principal_grants SET role = 'engineering', grantor_agent_id = 'someone-else' WHERE idempotency_key = $1`, [key(h)]);
+      expect(await checkoutBelt(db(), h)).toEqual({ ok: false, reason: 'the belt for this claim was not issued by the belt issuer' });
+      await admin.query(`UPDATE principal_grants SET grantor_agent_id = 't12-belt-issuer', not_before = now() + interval '10 minutes' WHERE idempotency_key = $1`, [key(h)]);
+      expect(await checkoutBelt(db(), h)).toEqual({ ok: false, reason: 'the belt for this claim is not valid yet' });
+      expect(await denials(h)).toEqual(expect.arrayContaining(['the belt for this claim names another lane', 'the belt for this claim is a research belt, and the task needs engineering']));
+
+      // Restored, it is a success again, and the submission it covers lands.
+      await admin.query(`UPDATE principal_grants SET not_before = now() - interval '1 minute' WHERE idempotency_key = $1`, [key(h)]);
+      expect(await checkoutBelt(db(), h)).toMatchObject({ ok: true, belt: 'engineering' });
+      expect(await submit(db(), h, work(h))).toEqual({ ok: true });
+    });
+
     it('a belt from an earlier claim does not carry over to a later one', async () => {
       const h = await claimed();
       await checkoutBelt(db(), h);
@@ -353,7 +535,7 @@ describePg('the restricted database role, attacked', () => {
       }
     };
 
-    it('cannot call a definer function that was open to PUBLIC, and no other role loses or gains', async () => {
+    it('cannot call a definer function that was open to PUBLIC, and no role that existed then loses or gains', async () => {
       await expect(worker.query('SELECT public.t12_probe_open()')).rejects.toThrow(/permission denied/);
       await expect(worker.query('SELECT public.t12_probe_closed()')).rejects.toThrow(/permission denied/);
       expect((await asRole('anon', 'SELECT public.t12_probe_open() AS x')).rows[0].x).toBe(1);
@@ -361,6 +543,22 @@ describePg('the restricted database role, attacked', () => {
       expect((await asRole('t12_public_only', 'SELECT public.t12_probe_open() AS x')).rows[0].x).toBe(1);
       await expect(asRole('t12_public_only', 'SELECT public.t12_probe_closed()')).rejects.toThrow(/permission denied/);
       expect(await reachableDefiners(worker)).toEqual([]);
+    });
+
+    // Review finding 2: this is the cost the file's comment used to deny. PUBLIC covered every future
+    // role; the list of names the file writes cannot. The title above used to say "no other role".
+    it('a role created after the file ran cannot call a function it closed, until someone grants it', async () => {
+      await admin.query('DROP ROLE IF EXISTS t12_later_probe');
+      await admin.query('CREATE ROLE t12_later_probe NOLOGIN');
+      try {
+        await admin.query('GRANT USAGE ON SCHEMA public TO t12_later_probe');
+        await expect(asRole('t12_later_probe', 'SELECT public.t12_probe_open()')).rejects.toThrow(/permission denied/);
+        await admin.query('GRANT EXECUTE ON FUNCTION public.t12_probe_open() TO t12_later_probe');
+        expect((await asRole('t12_later_probe', 'SELECT public.t12_probe_open() AS x')).rows[0].x).toBe(1);
+      } finally {
+        await admin.query('DROP OWNED BY t12_later_probe');
+        await admin.query('DROP ROLE t12_later_probe');
+      }
     });
 
     it('a definer function added later is seen, and the real CLI refuses to start', async () => {
@@ -534,6 +732,25 @@ describePg('the restricted database role, attacked', () => {
         c.release();
         await admin.query('DROP TABLE t12_owned_probe');
       }
+    });
+
+    it('stops with a clear error, and applies nothing, when a lane role is a superuser', async () => {
+      const file = readFileSync(MIGRATION, 'utf8');
+      const halt = async () => (await admin.query(`SELECT count(*)::int AS n FROM pg_policies WHERE policyname = 't12_lane_halt'`)).rows[0].n;
+      await admin.query('DROP POLICY t12_lane_halt ON trinity_system_config');
+      await admin.query('ALTER ROLE t12_lane_checker SUPERUSER');
+      const c = await admin.connect();
+      try {
+        await expect(c.query(file)).rejects.toThrow(/lane role is a superuser or can bypass row security: t12_lane_checker\./);
+        await c.query('ROLLBACK');
+        // The policy the file re-creates near its end is still missing, so nothing after the check ran.
+        expect(await halt()).toBe(0);
+      } finally {
+        c.release();
+        await admin.query('ALTER ROLE t12_lane_checker NOSUPERUSER');
+        await admin.query(file);
+      }
+      expect(await halt()).toBe(1);
     });
 
     it('a refusal stops the whole file when statements run one at a time, as psql -f does', async () => {
@@ -747,6 +964,113 @@ describePg('the restricted database role, attacked', () => {
       expect(await recoverStages(asIntegrator(), 0, ['integrating'])).toBe(1);
       expect((await stateOf(h.taskId)).stage).toBe('approved');
       await retire(h.taskId);
+    });
+
+    // Review finding 5, 2026-11-24. Before this, a role could end a claim it did not hold: a maker
+    // could release or reject a row another lane was making, and a checker or integrator could finish
+    // a row another lane had taken. Now the row's current holder must be the lane the new row names.
+    // A row that ends a claim has no holder left to name, so the lane it names is the actor of its
+    // newest receipt, which is what every store call writes.
+    //
+    // WHAT THIS DOES NOT DO. That name is text the caller writes, and all lanes of a stage share one
+    // database login (finding 4). The control in each test below lands by writing the holder's name.
+    // So this stops code acting on a claim it does not hold, by a wrong or stale handle; it does not
+    // stop someone who holds the login and copies the holder's name.
+    describe('ending a claim needs the lane that holds it', () => {
+      /** The write a store call makes to end a claim, with the status, stage and receipt lane chosen by the caller. */
+      const endClaim = (p: Pool, id: number, status: string, stage: string, actor: string, extra = '') => p.query(
+        `UPDATE trinity_tasks SET status = $2, claimed_by = NULL, claimed_at = NULL${extra},
+                metadata = jsonb_set(jsonb_set(metadata, '{t12,stage}', to_jsonb($3::text)), '{t12,receipts}',
+                                     (metadata #> '{t12,receipts}') || jsonb_build_object('actor', $4::text, 'event', 'probe'))
+          WHERE id = $1`, [id, status, stage, actor],
+      );
+      const holderOf = async (id: number) => (await readLaneState(admin, id)).claimed_by;
+
+      it('a maker cannot release, reject, take over or re-stage a task another lane is making', async () => {
+        const h = await claimedBy('trinity-lane-1');
+        expect(await code(endClaim(worker, h.taskId, 'pending', 'ready', 'trinity-lane-2'))).toBe('42501');
+        expect(await code(endClaim(worker, h.taskId, 'cancelled', 'rejected', 'trinity-lane-2'))).toBe('42501');
+        expect(await code(endClaim(worker, h.taskId, 'not_checked', 'not_checked', 'trinity-lane-2'))).toBe('42501');
+        expect(await code(worker.query(`UPDATE trinity_tasks SET claimed_by = 'trinity-lane-2' WHERE id = $1`, [h.taskId]))).toBe('42501');
+        // Leaving the stage while keeping the claim on the row is not a release either.
+        expect(await code(worker.query(`UPDATE trinity_tasks SET metadata = jsonb_set(metadata, '{t12,stage}', '"ready"') WHERE id = $1`, [h.taskId]))).toBe('42501');
+        expect([(await stateOf(h.taskId)).stage, await holderOf(h.taskId)]).toEqual(['making', 'trinity-lane-1']);
+        // Control: the same write naming the holder lands, so the refusals above are this rule and nothing else.
+        expect(await code(endClaim(worker, h.taskId, 'pending', 'ready', 'trinity-lane-1'))).toBe('written');
+        await retire(h.taskId);
+      });
+
+      it('a checker cannot finish a check another lane holds', async () => {
+        const h = await submitted();
+        expect((await claimStage(asChecker(), 'awaiting_check', 'trinity-lane-2'))?.taskId).toBe(h.taskId);
+        expect(await code(endClaim(checker, h.taskId, 'pending_validation', 'approved', 'trinity-lane-4', `, verifier_verdict = 'approved', final_verdict = 'unverified'`))).toBe('42501');
+        expect(await code(endClaim(checker, h.taskId, 'cancelled', 'rejected', 'trinity-lane-4', `, verifier_verdict = 'rejected'`))).toBe('42501');
+        expect(await code(endClaim(checker, h.taskId, 'pending', 'ready', 'trinity-lane-4'))).toBe('42501');
+        expect(await code(endClaim(checker, h.taskId, 'not_checked', 'not_checked', 'trinity-lane-4'))).toBe('42501');
+        expect([(await stateOf(h.taskId)).stage, await holderOf(h.taskId)]).toEqual(['checking', 'trinity-lane-2']);
+        expect(await code(endClaim(checker, h.taskId, 'pending_validation', 'approved', 'trinity-lane-2', `, verifier_verdict = 'approved', final_verdict = 'unverified'`))).toBe('written');
+        await retire(h.taskId);
+      });
+
+      it('an integrator cannot publish or refuse work another lane took to publish', async () => {
+        const h = await approvedBy('trinity-lane-2');
+        expect((await claimStage(asIntegrator(), 'approved', 'trinity-lane-3'))?.taskId).toBe(h.taskId);
+        expect(await code(endClaim(integrator, h.taskId, 'pending_validation', 'integrated', 'trinity-lane-5', ', completed_at = now()'))).toBe('42501');
+        expect(await code(endClaim(integrator, h.taskId, 'cancelled', 'rejected', 'trinity-lane-5', `, final_verdict = 'rejected'`))).toBe('42501');
+        expect([(await stateOf(h.taskId)).stage, await holderOf(h.taskId)]).toEqual(['integrating', 'trinity-lane-3']);
+        expect(await code(endClaim(integrator, h.taskId, 'pending_validation', 'integrated', 'trinity-lane-3', ', completed_at = now()'))).toBe('written');
+        await retire(h.taskId);
+      });
+
+      it('the honest path still passes: every way the store ends a claim it holds', async () => {
+        const released = await claimedBy('trinity-lane-1');
+        expect(await releaseMake(asMaker(), released, 'host down', true)).toEqual({ ok: true });
+        expect((await stateOf(released.taskId)).stage).toBe('ready');
+        await retire(released.taskId);
+
+        const failed = await claimedBy('trinity-lane-1');
+        expect(await releaseMake(asMaker(), failed, 'the model wrote nothing usable', false)).toEqual({ ok: true });
+        expect((await stateOf(failed.taskId)).stage).toBe('ready');
+        await retire(failed.taskId);
+
+        const waiting = await claimedBy('trinity-lane-1');
+        expect(await waitForCapacity(asMaker(), waiting, new Date(Date.now() + 60_000).toISOString(), 'every free route is cooling')).toEqual({ ok: true });
+        expect((await stateOf(waiting.taskId)).stage).toBe('waiting_for_capacity');
+        await retire(waiting.taskId);
+
+        const rejected = await submitted();
+        const r = (await claimStage(asChecker(), 'awaiting_check', 'trinity-lane-2'))!;
+        expect(r.taskId).toBe(rejected.taskId);
+        expect(await recordVerdict(asChecker(), r, { outcome: 'rejected', reason: 'the control did not fail' })).toEqual({ ok: true });
+        expect((await stateOf(rejected.taskId)).stage).toBe('ready');
+        await retire(rejected.taskId);
+
+        const unclear = await submitted();
+        const u = (await claimStage(asChecker(), 'awaiting_check', 'trinity-lane-2'))!;
+        expect(u.taskId).toBe(unclear.taskId);
+        expect(await recordVerdict(asChecker(), u, { outcome: 'not_checked', reason: 'no local clone' })).toEqual({ ok: true });
+        expect((await stateOf(unclear.taskId)).stage).toBe('awaiting_check');
+        await retire(unclear.taskId);
+
+        const refused = await approvedBy('trinity-lane-2');
+        const i = (await claimStage(asIntegrator(), 'approved', 'trinity-lane-3'))!;
+        expect(i.taskId).toBe(refused.taskId);
+        expect(await refuseIntegration(asIntegrator(), i, 'the branch no longer exists')).toEqual({ ok: true });
+        expect((await stateOf(refused.taskId)).stage).toBe('rejected');
+      });
+
+      // OPEN, and deliberately left as it was. recoverStages hands a claim back when its holder has
+      // gone silent, so the lane doing it is never the holder, and honest code cannot meet the rule
+      // above. Postgres therefore still accepts a hand-back (checking to awaiting_check, integrating
+      // to approved) from any lane of that role, with no check on the holder or on how old the claim
+      // is. Closing this is a design decision (for example an age test on claimed_at), not made here.
+      it('OPEN: a hand-back by a lane that does not hold the claim is still accepted, because recovery relies on it', async () => {
+        const h = await submitted();
+        expect((await claimStage(asChecker(), 'awaiting_check', 'trinity-lane-2'))?.taskId).toBe(h.taskId);
+        expect(await code(endClaim(checker, h.taskId, 'pending_validation', 'awaiting_check', 'trinity-lane-4'))).toBe('written');
+        expect([(await stateOf(h.taskId)).stage, await holderOf(h.taskId)]).toEqual(['awaiting_check', null]);
+        await retire(h.taskId);
+      });
     });
 
     it('the retired shared role cannot log in and holds nothing on the pool', async () => {

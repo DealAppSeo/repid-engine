@@ -383,7 +383,11 @@ describePg('durable lanes on real Postgres', () => {
     await pool.query(readFileSync(join(__dirname, '../migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8'));
   });
   afterAll(async () => pool.end());
-  beforeEach(async () => pool.query('TRUNCATE trinity_tasks RESTART IDENTITY; TRUNCATE agent_resource_claims RESTART IDENTITY'));
+  // The grants go too. Task ids restart at 1 for every test, so a belt key (task and claim number)
+  // repeats, and a grant left by an earlier test can name a different lane. Checkout refuses such a
+  // grant since review finding 6 (2026-11-24); before that it answered ok, which hid the leak. In
+  // production task ids never restart, so a key never meets a grant from another claim.
+  beforeEach(async () => pool.query('TRUNCATE trinity_tasks RESTART IDENTITY; TRUNCATE agent_resource_claims RESTART IDENTITY; DELETE FROM principal_grants'));
 
   const seed = (...specs: LaneSpec[]) => replenish(db, specs, specs.length);
   const row = async (id: number) => (await pool.query('SELECT * FROM trinity_tasks WHERE id = $1', [id])).rows[0];

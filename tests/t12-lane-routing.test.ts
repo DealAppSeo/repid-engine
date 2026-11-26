@@ -123,7 +123,9 @@ describePg('routing on real Postgres', () => {
     await pool.query(readFileSync(join(__dirname, '../migrations/2026-11-08_t12_lane_worker_role_DRAFT.sql'), 'utf8'));
   });
   afterAll(async () => pool.end());
-  beforeEach(async () => pool.query('TRUNCATE trinity_tasks RESTART IDENTITY; TRUNCATE agent_resource_claims RESTART IDENTITY'));
+  // The grants go too: task ids restart for every test, so a belt key repeats, and checkout refuses a
+  // grant an earlier test left for another lane (review finding 6, 2026-11-24). See t12-lanes.test.ts.
+  beforeEach(async () => pool.query('TRUNCATE trinity_tasks RESTART IDENTITY; TRUNCATE agent_resource_claims RESTART IDENTITY; DELETE FROM principal_grants'));
 
   const claimOne = async (lane: string, id: string): Promise<Handle> => {
     await replenish(db, [spec(id)], 50);

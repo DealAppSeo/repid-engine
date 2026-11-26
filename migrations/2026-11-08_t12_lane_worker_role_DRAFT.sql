@@ -37,6 +37,14 @@ END $$;
 -- and NOINHERIT does not stop SET ROLE, so memberships and object grants are removed here too. Each
 -- REVOKE targets a grant the role actually holds, because a blanket REVOKE fails on any object the
 -- applying role cannot administer. The retired shared role gets the same treatment.
+--
+-- The ALTER ROLE lines below do not name the superuser attribute, on purpose. From PostgreSQL 16 a
+-- login that is not a superuser is refused as soon as ALTER ROLE names it, in either direction
+-- ("Only roles with the SUPERUSER attribute may change the SUPERUSER attribute"), and the login that
+-- applies this file in production is not a superuser. An earlier draft named it on all four lines and
+-- stopped there (review finding 1, 2026-11-24; reproduced on PostgreSQL 17). So this file no longer
+-- removes superuser from a lane role that already has it: the check after the ALTER ROLE lines stops
+-- the file instead, and the owner removes it by hand. CREATE ROLE above may still say NOSUPERUSER.
 DO $$
 DECLARE
   r text;
@@ -78,13 +86,26 @@ BEGIN
     END IF;
   END LOOP;
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 't12_lane_worker') THEN
-    ALTER ROLE t12_lane_worker NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+    ALTER ROLE t12_lane_worker NOLOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
   END IF;
 END $$;
 
-ALTER ROLE t12_lane_maker LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
-ALTER ROLE t12_lane_checker LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
-ALTER ROLE t12_lane_integrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+ALTER ROLE t12_lane_maker LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+ALTER ROLE t12_lane_checker LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+ALTER ROLE t12_lane_integrator LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+
+-- Nothing above can take superuser away, so refuse to go on if a lane role, or the retired shared
+-- role, has it or can skip row security. Every grant and policy below would be decoration.
+DO $$
+DECLARE
+  bad text;
+BEGIN
+  SELECT string_agg(rolname, ', ' ORDER BY rolname) INTO bad FROM pg_roles
+   WHERE rolname IN ('t12_lane_maker', 't12_lane_checker', 't12_lane_integrator', 't12_lane_worker') AND (rolsuper OR rolbypassrls);
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION 'lane role is a superuser or can bypass row security: %. Nothing was applied. A superuser must run ALTER ROLE ... NOSUPERUSER NOBYPASSRLS on it, then apply this file again', bad;
+  END IF;
+END $$;
 
 GRANT USAGE ON SCHEMA public TO t12_lane_maker, t12_lane_checker, t12_lane_integrator;
 
@@ -172,10 +193,20 @@ BEGIN
     ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
     RETURNING id, expires_at, role INTO g;
     IF g.id IS NULL THEN
-      SELECT id, expires_at, role, revoked_at, not_before INTO g FROM public.principal_grants WHERE idempotency_key = idem;
+      -- A grant for this claim is already there. Report success only for one the submission check
+      -- (t12_belt_permits) will accept, so the two never disagree: before review finding 6
+      -- (2026-11-24) this looked at revocation and expiry only, and answered ok for a grant that
+      -- named another lane or another belt, which the submission check then refused with no reason.
+      SELECT id, expires_at, role, revoked_at, not_before, grantor_agent_id, grantee_agent_id INTO g
+        FROM public.principal_grants WHERE idempotency_key = idem;
       reason := CASE
+        WHEN g.id IS NULL THEN 'the belt for this claim could not be read'
         WHEN g.revoked_at IS NOT NULL THEN 'the belt for this claim was revoked'
         WHEN g.expires_at <= now() THEN 'the belt for this claim has expired'
+        WHEN g.grantor_agent_id IS DISTINCT FROM 't12-belt-issuer' THEN 'the belt for this claim was not issued by the belt issuer'
+        WHEN g.grantee_agent_id IS DISTINCT FROM p_lane THEN 'the belt for this claim names another lane'
+        WHEN g.role IS DISTINCT FROM belt THEN format('the belt for this claim is a %s belt, and the task needs %s', left(COALESCE(g.role, 'nameless'), 40), left(belt, 40))
+        WHEN g.not_before > now() THEN 'the belt for this claim is not valid yet'
       END;
     END IF;
   END IF;
@@ -253,6 +284,9 @@ DECLARE
   os text;
   ns text := p_new.metadata #>> '{t12,stage}';
   producer text;
+  -- The lane the new row names. A write that ends a claim clears claimed_by, so the lane is the actor
+  -- of the newest receipt, which every store call appends. It is text the caller writes (see below).
+  actor text := p_new.metadata #>> '{t12,receipts,-1,actor}';
   same_work boolean;
   same_verdict boolean;
   same_finish boolean;
@@ -288,7 +322,24 @@ BEGIN
     RETURN false;
   END IF;
 
+  -- ENDING A CLAIM (review finding 5, 2026-11-24). Before this, a maker could release or reject a row
+  -- another lane was making, and a checker or integrator could finish a row another lane had taken.
+  -- Now the row's current holder must be the lane the new row names, in the maker branch and wherever
+  -- a checker or integrator finishes.
+  --   WHAT IT STOPS: code ending a claim it does not hold, through a wrong or stale handle.
+  --   WHAT IT DOES NOT: the name is caller-written text and every lane of a stage shares one login, so
+  --   a caller holding that login can copy the holder's name. The boundary is still the database role.
+  --   LEFT OPEN ON PURPOSE: handing a claim back (checking to awaiting_check, integrating to approved).
+  --   recoverStages does that for a holder that went silent, so the lane doing it is never the holder
+  --   and honest code cannot meet this rule there. Those two moves are as they were.
   IF p_role = 'maker' THEN
+    -- A row some lane holds: that lane may keep it as it is, or end the claim under its own name.
+    -- Nobody takes it over, and nobody moves it out of its stage while leaving the claim in place.
+    IF o.claimed_by IS NOT NULL
+       AND NOT (p_new.claimed_by IS NOT DISTINCT FROM o.claimed_by AND ns IS NOT DISTINCT FROM os)
+       AND NOT (p_new.claimed_by IS NULL AND actor IS NOT DISTINCT FROM o.claimed_by) THEN
+      RETURN false;
+    END IF;
     -- Claim, heartbeat, release, wait, give up, or submit under a belt. Nothing past awaiting_check.
     RETURN same_verdict AND same_finish AND os IN ('ready', 'making', 'waiting_for_capacity') AND (
       (same_work AND ns IN ('ready', 'making', 'waiting_for_capacity', 'rejected', 'not_checked'))
@@ -307,9 +358,13 @@ BEGIN
     END IF;
     IF os = 'checking' THEN
       -- Record a verdict, or hand the check back. The lane holding the check is never the producer.
-      RETURN o.claimed_by IS NOT NULL AND o.claimed_by IS DISTINCT FROM producer AND p_new.claimed_by IS NULL AND (
-        ns = 'approved'
-        OR (ns IN ('ready', 'rejected', 'awaiting_check', 'not_checked') AND p_new.verifier_verdict IS DISTINCT FROM 'approved'));
+      -- A verdict is recorded by the lane that holds the check; the hand-back to awaiting_check is the
+      -- move left open above.
+      RETURN o.claimed_by IS NOT NULL AND o.claimed_by IS DISTINCT FROM producer AND p_new.claimed_by IS NULL
+        AND (ns = 'awaiting_check' OR actor IS NOT DISTINCT FROM o.claimed_by)
+        AND (
+          ns = 'approved'
+          OR (ns IN ('ready', 'rejected', 'awaiting_check', 'not_checked') AND p_new.verifier_verdict IS DISTINCT FROM 'approved'));
     END IF;
     RETURN false;
   END IF;
@@ -324,10 +379,11 @@ BEGIN
     END IF;
     IF os = 'integrating' THEN
       -- Publish, refuse, or hand back. Handing back returns the row to `approved`, where it came
-      -- from, so an integrator can never make approved a row that a checker did not.
+      -- from, so an integrator can never make approved a row that a checker did not. Publishing and
+      -- refusing are done by the lane that took the row; the hand-back is the move left open above.
       RETURN o.claimed_by IS NOT NULL AND (
-        (ns = 'integrated' AND p_new.completed_at IS NOT NULL)
-        OR (ns = 'rejected' AND same_finish)
+        (ns = 'integrated' AND p_new.completed_at IS NOT NULL AND actor IS NOT DISTINCT FROM o.claimed_by)
+        OR (ns = 'rejected' AND same_finish AND actor IS NOT DISTINCT FROM o.claimed_by)
         OR (ns = 'approved' AND same_finish AND p_new.claimed_by IS NULL));
     END IF;
     RETURN false;
@@ -356,10 +412,18 @@ GRANT EXECUTE ON FUNCTION public.t12_belt_stage_permits(text, public.trinity_tas
 
 -- A SECURITY DEFINER function runs with its owner's rights, and every function starts out executable
 -- by PUBLIC, which includes the lane roles. PUBLIC cannot exclude a role, so for each such function
--- still open to PUBLIC, this names every role except the lane roles and then closes PUBLIC. No other
--- role gains or loses anything, and a function already closed to PUBLIC is left alone. This does
--- change the grants on functions the lanes do not own, which is why the owner reviews and applies
--- this file, and why it needs a security review.
+-- still open to PUBLIC, this names every role except the lane roles and then closes PUBLIC. A
+-- function already closed to PUBLIC is left alone.
+--
+-- What changes for other roles. A role that exists when this file runs keeps the access it had,
+-- now by name instead of through PUBLIC. A role created AFTER this file runs gets no access to
+-- these functions until someone grants it: PUBLIC used to cover every future role, and a list of
+-- names cannot. (An earlier version of this comment said no other role gains or loses anything.
+-- That was wrong for roles created later; review finding 2, 2026-11-24.) On 2026-11-24 production
+-- had 13 such functions and 17 roles. The rollback file does not reopen them to PUBLIC.
+--
+-- This changes the grants on functions the lanes do not own, which is why the owner reviews and
+-- applies this file, and why it needs a security review.
 DO $$
 DECLARE
   f regprocedure;
