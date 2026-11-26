@@ -47,3 +47,10 @@ HAL gate off" after #1542 had replaced it; a third's summary listed revocation a
 open questions, where ACTA scopes it out. **Apply:** before adopting another model's ordered
 list or summary, check each step against live state (gh, DB, the source itself) and mark what
 is already done, replaced or misquoted.
+
+## Green is not coverage (§1, §2, §5) · 2026-11-26
+A subagent sorting 16 PR descriptions passed 16/16 mechanical checks and had not read three
+diffs in full; we knew only because the brief asked what it skipped. A review loop exited 0
+every 30 min for 14 days with five reviewers configured and posted no PASS: only counting
+verdicts by reviewer showed it. One reviewer marked every answer all-OK while another asked
+for changes on the same four PRs.

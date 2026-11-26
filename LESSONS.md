@@ -12,11 +12,11 @@ dispatcher appends by trigger. New lessons replace or generalise old ones.
 
 ## 1. A claim needs the capability that produces it
 *Proof:* T12 with one tool → 18/18 reports, zero real measurements; GA with no shell → a review citing line numbers for a file it never opened. [lessons/dispatch.md]
-**Apply:** refuse the dispatch or supply the evidence, and say what you could not check. **"I could not measure this" is a SUCCESS** — else a guess that scores better wins. Every failure returns a REASON; `''` reads as "nothing there" and the model fills it.
+**Apply:** refuse the dispatch or supply the evidence; say what you could not check, read in full, or skipped. **"I could not measure this" is a SUCCESS** — else a guess that scores better wins. Every failure returns a REASON; `''` reads as "nothing there" and the model fills it.
 
 ## 2. Verify the thing itself end to end — a proxy, or one wired end, is worse than nothing
 A half-wired mechanism turns a known gap into false coverage — you stop looking.
-*Proof:* `gemini -p` worked in a shell so "headless auth works" was recorded, but the dispatcher's `spawnSync` had none → ENOENT; `canAssign()` built + tested with zero callers; a daemon logged COMPLETE while its DB update silently failed, losing 7 handoffs. [lessons/dispatch.md]
+*Proof:* `canAssign()` built + tested with zero callers; a daemon logged COMPLETE while its DB update silently failed, losing 7 handoffs; a review loop exited 0 for 14 days and posted no PASS. [lessons/dispatch.md]
 **Apply:** call what you will call, how you will call it; name the caller AND the consumer, or say it is inert. Exit 0 covers the last command, not your intent. Check the write's error. Installed ≠ runnable; committed ≠ deployed.
 
 ## 3. Evidence outranks the label
@@ -30,7 +30,7 @@ A half-wired mechanism turns a known gap into false coverage — you stop lookin
 ## 5. An instrument that cannot return the other answer has measured nothing
 **An ABSENCE — NULL, 0 rows, no match, "not set" — is not evidence until the instrument is shown capable of a PRESENCE.** Tests, greps, queries, views, controls: one defect.
 *Proof:* a suite reported "11 passed" in both its on and off runs; `v_fleet_truth_realwork` NULLs a 7-day LEFT JOIN over a 2-row table — read as "12 agents never worked". They had. [lessons/dispatch.md]
-**Apply:** break the property, watch it go red, revert; a skip reports as skipped. Read the view (`pg_get_viewdef`) and the query window before believing a NULL. Encode checks so time breaks them. **A fence is an instrument** — probe it with what it should refuse: `grok --allow 'Bash(node:*)'` was asked to `rm`, and did.
+**Apply:** break the property, watch it go red, revert; a skip reports as skipped. Read the view (`pg_get_viewdef`) and the query window before believing a NULL. Encode checks so time breaks them. **A fence is an instrument** — probe it with what it should refuse: `grok --allow 'Bash(node:*)'` was asked to `rm`, and did. A checker that only says yes is unmeasured.
 
 ## 6. A red check is a status, not a verdict
 *Proof:* `Cannot find module 'pg'` was a worktree with no `npm install`; ~150 "failures" were Windows-only paths, all green on CI. [lessons/schema.md]
