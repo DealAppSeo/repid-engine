@@ -34,6 +34,11 @@ updates:
       - dependency-name: "ioredis"                # 5.11.0 -> 6.0.0 [#1294]
         update-types:
           - version-update:semver-major
+      # solc is held at the version that produced src/services/erc6492-bytecode.ts. A bump changes the
+      # compiled validator bytecode (0.8.38 -> 0.8.39 failed tests/erc6492-bytecode.test.ts in #1597), and
+      # that bytecode checks x402 payment signatures. Bump it only in a deliberate PR that regenerates the
+      # bytecode. Security advisories still raise their own PRs.
+      - dependency-name: "solc"
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
